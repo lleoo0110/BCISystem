@@ -116,6 +116,30 @@ classdef GUIControllerManager < handle
         function showError(~, title, message)
             errordlg(message, title);
         end
+        
+        function closeAllWindows(obj)
+            try
+                % まずコールバックを無効化
+                if ~isempty(obj.mainFigure) && isvalid(obj.mainFigure)
+                    set(obj.mainFigure, 'CloseRequestFcn', []);
+                    set(findobj(obj.mainFigure, 'Type', 'uicontrol'), 'Callback', []);
+                end
+
+                % タイマーの停止
+                if ~isempty(obj.updateTimer) && isvalid(obj.updateTimer)
+                    stop(obj.updateTimer);
+                    delete(obj.updateTimer);
+                end
+
+                % メインウィンドウを閉じる
+                if ~isempty(obj.mainFigure) && isvalid(obj.mainFigure)
+                    delete(obj.mainFigure);
+                end
+
+            catch ME
+                warning(ME.identifier, '%s', ME.message);
+            end
+        end
     end
     
     methods (Access = private)
@@ -192,12 +216,12 @@ classdef GUIControllerManager < handle
             obj.paramPanel = uipanel(obj.mainFigure, ...
                 'Title', 'Display Control', ...
                 'Position', [0.02 0.02 0.96 0.26]);
-
+            
             % 左側：表示制御チェックボックスの作成
             displayNames = {'Raw Data', 'Processed Data', 'Spectrum', 'ERSP'};
             displayFields = {'rawData', 'processedData', 'spectrum', 'ersp'};
             obj.displayControls = struct();
-
+            
             % チェックボックスの配置（位置を下に調整）
             for i = 1:length(displayNames)
                 obj.displayControls.(displayFields{i}) = uicontrol(obj.paramPanel, ...
@@ -207,7 +231,7 @@ classdef GUIControllerManager < handle
                     'Position', [20 170-i*30 150 25], ...
                     'Callback', @(src,~) obj.displayControlChanged(displayFields{i}, src.Value));
             end
-
+            
             % 中央：基本設定
             obj.displayControls.autoScale = uicontrol(obj.paramPanel, ...
                 'Style', 'checkbox', ...
@@ -215,20 +239,20 @@ classdef GUIControllerManager < handle
                 'Value', obj.params.gui.display.visualization.scale.auto, ...
                 'Position', [200 140 150 25], ...
                 'Callback', @(src,~) obj.autoScaleChanged(src.Value));
-
+            
             obj.displayControls.showBands = uicontrol(obj.paramPanel, ...
                 'Style', 'checkbox', ...
                 'String', 'Show Frequency Bands', ...
                 'Value', obj.params.gui.display.visualization.showBands, ...
                 'Position', [200 110 150 25], ...
                 'Callback', @(src,~) obj.showBandsChanged(src.Value));
-
+            
             % 右側：詳細パラメータ設定
             paramNames = {'Time Window (s)', 'Freq Range (Hz)', 'Raw Scale (μV)', ...
-                         'Power Scale (μV²/Hz)', 'ERSP Time (s)', 'ERSP Freq (Hz)'};
+                'Power Scale (μV²/Hz)', 'ERSP Time (s)', 'ERSP Freq (Hz)'};
             paramFields = {'timeWindow', 'freqRange', 'rawScale', ...
-                          'powerScale', 'erspTime', 'erspFreq'};
-                      
+                'powerScale', 'erspTime', 'erspFreq'};
+            
             defaultValues = {...
                 obj.params.gui.display.visualization.scale.displaySeconds, ...  % Time Window
                 obj.params.gui.display.visualization.scale.freq, ...               % Freq Range
@@ -236,8 +260,8 @@ classdef GUIControllerManager < handle
                 obj.params.gui.display.visualization.scale.power, ...             % Power Scale
                 obj.params.gui.display.visualization.ersp.time, ...              % ERSP Time
                 obj.params.gui.display.visualization.ersp.freqRange ...          % ERSP Freq
-            };
-
+                };
+            
             % 入力フィールドの作成部分を修正
             for i = 1:length(paramNames)
                 % ラベル
@@ -245,7 +269,7 @@ classdef GUIControllerManager < handle
                     'Style', 'text', ...
                     'String', paramNames{i}, ...
                     'Position', [380 165-i*25 120 20]);
-
+                
                 if strcmp(paramFields{i}, 'timeWindow')
                     % 時間窓は1つの入力フィールドのみ
                     obj.displayControls.timeWindow = uicontrol(obj.paramPanel, ...
@@ -260,7 +284,7 @@ classdef GUIControllerManager < handle
                         'String', num2str(defaultValues{i}(1)), ...
                         'Position', [510 165-i*25 50 20], ...
                         'Callback', @(src,~) obj.parameterValueChanged(paramFields{i}, 'min', str2double(src.String)));
-
+                    
                     obj.displayControls.([paramFields{i} 'Max']) = uicontrol(obj.paramPanel, ...
                         'Style', 'edit', ...
                         'String', num2str(defaultValues{i}(2)), ...
@@ -268,19 +292,19 @@ classdef GUIControllerManager < handle
                         'Callback', @(src,~) obj.parameterValueChanged(paramFields{i}, 'max', str2double(src.String)));
                 end
             end
-
+            
             % カラーマップ設定
             uicontrol(obj.paramPanel, ...
                 'Style', 'text', ...
                 'String', 'Colormap', ...
                 'Position', [650 150 80 20]);
-
+            
             obj.displayControls.colormapType = uicontrol(obj.paramPanel, ...
                 'Style', 'popupmenu', ...
                 'String', {'jet', 'parula', 'hot', 'cool'}, ...
                 'Position', [650 120 80 25], ...
                 'Callback', @(src,~) obj.colormapTypeChanged(src.String{src.Value}));
-
+            
             obj.displayControls.colormapReverse = uicontrol(obj.paramPanel, ...
                 'Style', 'checkbox', ...
                 'String', 'Reverse', ...
@@ -328,16 +352,16 @@ classdef GUIControllerManager < handle
             try
                 % 時間窓の制限（0.1秒から30秒）
                 value = max(0.1, min(30, value));
-
+                
                 % 値を更新
                 obj.params.gui.display.visualization.scale.displaySeconds = value;
-
+                
                 % 入力フィールドを更新
                 set(obj.displayControls.timeWindow, 'String', num2str(value));
-
+                
                 % 表示を更新
                 obj.updateDisplay();
-
+                
             catch ME
                 % エラーメッセージを表示
                 errordlg(['Invalid input: ' ME.message], 'Parameter Error');
@@ -360,25 +384,25 @@ classdef GUIControllerManager < handle
                             value = max(value, 0.1);  % 最小0.1秒
                             value = max(value, obj.params.gui.display.visualization.scale.displaySeconds);  % 最小値以上
                         end
-
+                        
                     case {'freqRange', 'erspFreq'}
                         % 周波数の制限（例：0-500Hz）
                         value = max(0, value);  % 負の周波数を防止
                         value = min(500, value);  % 最大周波数を制限
-
+                        
                     case 'rawScale'
                         % スケールの制限（例：±1000μV）
-                        value = max(-1000, min(1000, value));
-
+                        value = max(-1000, min(5000, value));
+                        
                     case 'powerScale'
                         % パワーの制限（常に正の値）
                         value = max(0.000001, value);  % 最小値を制限
-
+                        
                     case 'erspTime'
                         % ERSP時間の制限
                         value = max(-10, min(10, value));  % 例：±10秒に制限
                 end
-
+                
                 % 検証済みの値を適用
                 switch field
                     case 'timeWindow'
@@ -400,17 +424,17 @@ classdef GUIControllerManager < handle
                     case 'erspFreq'
                         obj.params.gui.display.visualization.ersp.freqRange(strcmp(type, 'max')+1) = value;
                 end
-
+                
                 % 入力フィールドを更新された値で更新
                 if strcmp(type, 'min')
                     set(obj.displayControls.([field 'Min']), 'String', num2str(value));
                 else
                     set(obj.displayControls.([field 'Max']), 'String', num2str(value));
                 end
-
+                
                 % 表示を更新
                 obj.updateDisplay();
-
+                
             catch ME
                 % エラーメッセージを表示
                 errordlg(['Invalid input: ' ME.message], 'Parameter Error');
@@ -675,7 +699,7 @@ classdef GUIControllerManager < handle
                 obj.updateDisplay();
             end
         end
-
+        
         function colormapReverseChanged(obj, value)
             % カラーマップの反転設定を処理
             obj.params.gui.display.visualization.ersp.colormap.reverse = value;
@@ -755,12 +779,12 @@ classdef GUIControllerManager < handle
                     'value', labelValue, ...
                     'time', uint64(currentTime * 1000), ...
                     'sample', []);
-
+                
                 % トリガー値に対応するテキストを取得
                 mappings = obj.params.udp.receive.triggers.mappings;
                 fields = fieldnames(mappings);
                 triggerText = '';
-
+                
                 % マッピングから対応するテキストを検索
                 for i = 1:length(fields)
                     if mappings.(fields{i}).value == labelValue
@@ -768,10 +792,10 @@ classdef GUIControllerManager < handle
                         break;
                     end
                 end
-
+                
                 % デバッグ用の出力（UDPManagerと同じスタイル）
                 fprintf('Label button pressed: %s (value: %d)\n', triggerText, labelValue);
-
+                
                 % コールバック実行
                 obj.callbacks.onLabel(trigger);
             end

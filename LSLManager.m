@@ -9,7 +9,7 @@ classdef LSLManager < handle
     end
     
     methods
-        function obj = LSLManager(params)            
+        function obj = LSLManager(params)
             obj.params = params;
             try
                 obj.inlet = [];
@@ -28,7 +28,7 @@ classdef LSLManager < handle
                 return;
             end
         end
-                
+        
         function delete(obj)
             % デストラクタ - リソースの解放
             if ~isempty(obj.inlet) && ~isstruct(obj.inlet)  % LSLインレットの場合のみ
@@ -41,7 +41,7 @@ classdef LSLManager < handle
                 [data, timestamp] = obj.inlet.getData();
             else
                 [chunk, timestamps] = obj.inlet.pull_chunk();
-
+                
                 if ~isempty(chunk)
                     % チャンネル選択が必要な場合
                     if ~isempty(obj.params.device.channelNum)
@@ -65,46 +65,49 @@ classdef LSLManager < handle
             simulator.sampleRate = obj.params.device.sampleRate;
             simulator.channelCount = obj.params.device.channelCount;
             simulator.lastTimestamp = 0;
-            % 関数ハンドルを修正
-            simulator.getData = @() generateSimulatedData(obj, simulator);  % thisを適切にバインド
-
+            
+            % チャンクサイズ
+            simulator.chunkSize = round(simulator.sampleRate/12);
+            % チャンク間のインターバル
+            simulator.interval = round(1/6);
+            
+            simulator.getData = @() generateSimulatedData(obj, simulator);
+            
             fprintf('シミュレーションモードで初期化しました\n');
-            obj.displaySimulatorInfo();  % 情報表示は1回のみ
+            obj.displaySimulatorInfo();
         end
         
         function [data, timestamp] = generateSimulatedData(obj, simulator)
-            fs = obj.params.device.sampleRate;
+            % 固定チャンクサイズでデータを生成
+            numSamples = simulator.chunkSize;
+            
+            % 時間軸の生成（1チャンク分）
+            t = simulator.lastTimestamp + (1:numSamples)/simulator.sampleRate;
+            simulator.lastTimestamp = t(end);
+            
+            % 信号生成
             alpha = obj.params.lsl.simulate.signal.alpha.freq;
             alphaAmplitude = obj.params.lsl.simulate.signal.alpha.amplitude;
             beta = obj.params.lsl.simulate.signal.beta.freq;
             betaAmplitude = obj.params.lsl.simulate.signal.beta.amplitude;
-
-            numSamples = round(fs * 0.08);
-
-            t = simulator.lastTimestamp + (1:numSamples)/simulator.sampleRate;
-            simulator.lastTimestamp = t(end);
-
+            
             baseSignal = alphaAmplitude * sin(2*pi*alpha*t) + ...
-                         betaAmplitude * sin(2*pi*beta*t);
-
+                betaAmplitude * sin(2*pi*beta*t);
+            
+            % 各チャンネルのデータ生成
             data = zeros(simulator.channelCount, numSamples);
             for ch = 1:simulator.channelCount
                 data(ch,:) = baseSignal + 2*randn(1, numSamples);
             end
-
+            
             timestamp = t(end);
-            pause(0.004);
+            
+            % チャンク間のインターバルを確保
+            pause(simulator.interval);
         end
         
         function [inlet, lib] = initializeLSL(obj)
             % LSLの初期化
-            lslPath = obj.params.lsl.stream.libraryPath;
-            if ~exist(lslPath, 'dir')
-                error('LSLフォルダが見つかりません: %s', lslPath);
-            end
-            addpath(genpath(lslPath));
-            
-            % ライブラリの初期化
             try
                 lib = lsl_loadlib(env_translatepath('dependencies:/liblsl-Matlab/bin'));
             catch
