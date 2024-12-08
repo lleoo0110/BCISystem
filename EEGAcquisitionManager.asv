@@ -221,8 +221,18 @@ classdef EEGAcquisitionManager < handle
                     [data] = obj.lslManager.getData();
                     if ~isempty(data)
                         obj.rawData = [obj.rawData, data];
+
+                        % オンライン処理の更新
+                        if obj.isOnlineMode
+                            obj.updateDataBuffer(data);
                         
-                        obj.updateDataBuffer(data);
+                        % GUI処理の更新
+                        if obj.params.gui.display.visualization.enable.rawData || ...
+                            obj.params.gui.display.visualization.enable.processedData || ...
+                            obj.params.gui.display.visualization.enable.spectrum || ...
+                            obj.params.gui.display.visualization.enable.ersp
+                            obj.processGUI();
+                        end
                         
                         % トリガー処理（Pause中は停止）
                         if ~obj.isPaused
@@ -321,6 +331,10 @@ classdef EEGAcquisitionManager < handle
                 
                 % ラベル情報を保存
                 obj.labels = [obj.labels; trigger];
+                
+                % GUI更新
+                updateInfo = struct('label', trigger);
+                obj.guiController.updateResults(updateInfo);
             end
         end
         
@@ -656,6 +670,8 @@ classdef EEGAcquisitionManager < handle
                     loadedData = obj.dataManager.loadDataset(fullpath);
                     
                     fprintf('Successfully loaded data from: %s\n', fullpath);
+                    fprintf('Raw data size: [%s], Labels: %d\n', ...
+                        num2str(size(obj.rawData)), length(obj.labels));
                 end
             catch ME
                 error('Failed to load data: %s', ME.message);
@@ -840,7 +856,7 @@ classdef EEGAcquisitionManager < handle
                 % 後に構造体で送信できるようにして計算した結果を全て送る（今は手動で選択）
                 udpData = faaValue;
                 obj.udpManager.sendTrigger(udpData);
-                fprintf('UDP sent: faaValue=%f \n', udpData);
+                fprintf('UDP sent: udpData=%f \n', udpData);
                 
             catch ME
                 warning(ME.identifier, 'Error in processOnline: %s\n', ME.message);
@@ -854,6 +870,8 @@ classdef EEGAcquisitionManager < handle
         
         function processGUI(obj)
             try          
+                fprintf('Process GUI \n');
+
                 % 15秒分のデータに対してフィルタリング処理
                 preprocessedBuffer = obj.signalProcessor.preprocess(obj.dataBuffer);
 
@@ -895,7 +913,8 @@ classdef EEGAcquisitionManager < handle
             % バッファが処理準備完了かチェック
             ready = size(obj.dataBuffer, 2) >= obj.bufferSize;
         end
-
+        
+        
         function updateParameter(obj, paramName, value)
             % パラメータの動的更新
             try

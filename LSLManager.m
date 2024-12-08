@@ -67,9 +67,10 @@ classdef LSLManager < handle
             simulator.lastTimestamp = 0;
             
             % チャンクサイズ
-            simulator.chunkSize = round(simulator.sampleRate/12);
+            % simulator.chunkSize = round(simulator.sampleRate/24);
+            simulator.chunkSize = 1;
             % チャンク間のインターバル
-            simulator.interval = round(1/6);
+            % simulator.interval = round(1/6);
             
             simulator.getData = @() generateSimulatedData(obj, simulator);
             
@@ -103,7 +104,7 @@ classdef LSLManager < handle
             timestamp = t(end);
             
             % チャンク間のインターバルを確保
-            pause(simulator.interval);
+            % pause(simulator.interval);
         end
         
         function [inlet, lib] = initializeLSL(obj)

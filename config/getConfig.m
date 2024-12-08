@@ -63,11 +63,11 @@ function params = getConfig(deviceType, varargin)
             'signal', struct(...      % シミュレーション信号の設定
                 'alpha', struct(...   % アルファ波（8-13Hz）のシミュレーション設定
                     'freq', 10, ...   % 中心周波数：8-13の間で設定（Hz）
-                    'amplitude', 10 ... % 振幅：大きいほど信号が強くなる（推奨：5-20）
+                    'amplitude', 20 ... % 振幅：大きいほど信号が強くなる（推奨：5-20）
                 ), ...
                 'beta', struct(...      % ベータ波（13-30Hz）のシミュレーション設定
                     'freq', 20, ...     % 中心周波数：13-30の間で設定（Hz）
-                    'amplitude', 5 ...   % 振幅：大きいほど信号が強くなる（推奨：3-15）
+                    'amplitude', 10 ...   % 振幅：大きいほど信号が強くなる（推奨：3-15）
                 ) ...
             ) ...
         ) ...
@@ -77,7 +77,8 @@ function params = getConfig(deviceType, varargin)
     % トリガーのマッピング設定（ラベルと数値の対応付け）
     trigger_mappings = {
         '安静', 1;        % 第1列：ラベル文字列，第2列：対応する数値
-        'つるつる', 2;       % 必要に応じて行を追加可能
+        '炎魔法', 2;       % 必要に応じて行を追加可能
+        '雷魔法', 3; 
     };
 
     % マッピング構造体の動的生成（通常は変更不要）
@@ -119,7 +120,7 @@ function params = getConfig(deviceType, varargin)
             'analysis', 2.0, ...      % 解析窓の長さ（秒）：ERDは2.0秒，MIは1.0秒程度
             'stimulus', 5.0, ...      % 刺激提示時間（秒）：実験プロトコルに合わせて設定
             'bufferSize', 15, ...     % データバッファのサイズ（秒）：メモリ使用量に影響
-            'updateBuffer', 1, ...    % バッファの更新間隔（秒）：小さいほど処理負荷増
+            'updateBuffer', 0.5, ...    % バッファの更新間隔（秒）：小さいほど処理負荷増
             'step', [], ...           % 解析窓のシフト幅：自動計算（変更不要）
             'updateInterval', [] ...  % 更新間隔：自動計算（変更不要）
         ), ...
@@ -211,7 +212,7 @@ function params = getConfig(deviceType, varargin)
             'enable', true ...       % FAA特徴量の有効/無効
         ), ...
         'erd', struct(...            % 事象関連脱同期の設定
-            'enable', false ...      % ERD特徴量の有効/無効
+            'enable', true ...      % ERD特徴量の有効/無効
         ), ...
         'csp', struct(...            % 共通空間パターンの設定
             'enable', false, ...     % CSP特徴量の有効/無効
@@ -225,7 +226,7 @@ function params = getConfig(deviceType, varargin)
     classifier_params = struct(...
         'svm', struct(...            % SVMの設定
             'enable', true, ...     % SVM分類器の有効/無効
-            'type', 'svm', ...       % 分類器タイプ：'svm'固定
+            'type', 'ecoc', ...       % 分類器タイプ：'svm' or ecoc
             'kernel', 'rbf', ...     % カーネル関数：'rbf','linear','polynomial'等
             'optimize', true, ...    % ハイパーパラメータ最適化：trueを推奨
             'probability', true, ... % 確率推定の有効/無効：trueを推奨

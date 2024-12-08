@@ -79,14 +79,6 @@ classdef SignalProcessor < handle
                 processingInfo = obj.processingInfo;
 
             catch ME
-                % エラー情報の詳細を記録
-                errorInfo = struct(...
-                    'message', ME.message, ...
-                    'identifier', ME.identifier, ...
-                    'stack', ME.stack, ...
-                    'time', datetime('now'));
-                obj.processingInfo.lastError = errorInfo;
-
                 % エラーを再スロー
                 error('Signal processing failed: %s', ME.message);
             end

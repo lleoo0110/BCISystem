@@ -53,6 +53,9 @@ classdef GUIControllerManager < handle
 
             % GUIの初期化
             obj.initializeGUI();
+            
+            % 少し待機して，GUIが完全に初期化されるのを待つ
+            pause(0.);
 
             % プロットの初期化を明示的に行う
             obj.initializePlots();
@@ -60,6 +63,9 @@ classdef GUIControllerManager < handle
             % その他の初期化
             obj.setupTimers();
             obj.initializeDisplayProcessing();
+
+            % 初期化確認のデバッグ出力
+            fprintf('GUI initialization completed. Plot handles status:\n');
         end
         
         function delete(obj)
@@ -281,6 +287,8 @@ classdef GUIControllerManager < handle
         
         function createVisualizationPanel(obj)
             try
+                fprintf('Creating visualization panel...\n');
+
                 obj.visualPanel = uipanel(obj.mainFigure, ...
                     'Title', 'Visualization', ...
                     'Position', [0.02 0.3 0.96 0.48]);
@@ -288,7 +296,8 @@ classdef GUIControllerManager < handle
                 if ~isvalid(obj.visualPanel)
                     error('Failed to create visualization panel');
                 end
-                
+
+                fprintf('Visualization panel created successfully\n');
             catch ME
                 fprintf('Error in createVisualizationPanel: %s\n', ME.message);
                 rethrow(ME);
@@ -554,17 +563,22 @@ classdef GUIControllerManager < handle
         end
         
         function initializePlots(obj)
-            % plotHandlesの初期化確認
-            if ~isfield(obj, 'plotHandles') || ~isstruct(obj.plotHandles)
-                obj.plotHandles = struct();
-            end
-
             try
+                % メインフィギュアが存在することを確認
+                if ~isfield(obj, 'mainFigure') || ~isvalid(obj.mainFigure)
+                    error('Main figure is not properly initialized');
+                end
+
+                % visualPanelが存在することを確認
+                if ~isfield(obj, 'visualPanel') || ~isvalid(obj.visualPanel)
+                    error('Visual panel is not properly initialized');
+                end
+
+                % plotHandlesを初期化
+                obj.plotHandles = struct();
+
                 % Raw Data Plot
                 obj.plotHandles.rawData = subplot(2, 2, 1, 'Parent', obj.visualPanel);
-                if ~ishandle(obj.plotHandles.rawData)
-                    error('Failed to create raw data plot handle');
-                end
                 title(obj.plotHandles.rawData, 'Raw EEG');
                 xlabel(obj.plotHandles.rawData, 'Time (s)');
                 ylabel(obj.plotHandles.rawData, 'Amplitude (μV)');
@@ -572,9 +586,6 @@ classdef GUIControllerManager < handle
 
                 % Processed Signal Plot
                 obj.plotHandles.processed = subplot(2, 2, 2, 'Parent', obj.visualPanel);
-                if ~ishandle(obj.plotHandles.processed)
-                    error('Failed to create processed signal plot handle');
-                end
                 title(obj.plotHandles.processed, 'Processed Signal');
                 xlabel(obj.plotHandles.processed, 'Time (s)');
                 ylabel(obj.plotHandles.processed, 'Amplitude (μV)');
@@ -582,9 +593,6 @@ classdef GUIControllerManager < handle
 
                 % Power Spectrum Plot
                 obj.plotHandles.spectrum = subplot(2, 2, 3, 'Parent', obj.visualPanel);
-                if ~ishandle(obj.plotHandles.spectrum)
-                    error('Failed to create spectrum plot handle');
-                end
                 title(obj.plotHandles.spectrum, 'Power Spectrum');
                 xlabel(obj.plotHandles.spectrum, 'Frequency (Hz)');
                 ylabel(obj.plotHandles.spectrum, 'Power (μV²/Hz)');
@@ -592,17 +600,22 @@ classdef GUIControllerManager < handle
 
                 % ERSP Plot
                 obj.plotHandles.ersp = subplot(2, 2, 4, 'Parent', obj.visualPanel);
-                if ~ishandle(obj.plotHandles.ersp)
-                    error('Failed to create ERSP plot handle');
-                end
                 title(obj.plotHandles.ersp, 'ERSP');
                 xlabel(obj.plotHandles.ersp, 'Time (s)');
                 ylabel(obj.plotHandles.ersp, 'Frequency (Hz)');
                 colorbar(obj.plotHandles.ersp);
                 grid(obj.plotHandles.ersp, 'on');
-                
+
+                % プロットハンドルの検証
+                if ~ishandle(obj.plotHandles.rawData) || ~ishandle(obj.plotHandles.processed) || ...
+                   ~ishandle(obj.plotHandles.spectrum) || ~ishandle(obj.plotHandles.ersp)
+                    error('Failed to create one or more plot handles');
+                end
+
+                fprintf('Plot handles successfully initialized\n');
+
             catch ME
-                fprintf('Error in plot initialization: %s\n', ME.message);
+                fprintf('Error in initializePlots: %s\n', ME.message);
                 fprintf('Error stack:\n');
                 for i = 1:length(ME.stack)
                     fprintf('File: %s, Line: %d, Function: %s\n', ...
@@ -633,64 +646,64 @@ classdef GUIControllerManager < handle
         
         function updateRawDataPlot(obj, data)
             try
-                % データの検証
-                if isempty(data)
-                    return;
+                % プロットハンドルの詳細な検証
+                if ~isfield(obj, 'plotHandles') || ~isstruct(obj.plotHandles)
+                    warning('plotHandles not properly initialized. Reinitializing plots...');
+                    obj.initializePlots();
+                    if ~isfield(obj, 'plotHandles') || ~isstruct(obj.plotHandles)
+                        error('Failed to initialize plotHandles');
+                    end
                 end
 
-                % 表示用データの準備
-                displaySeconds = obj.params.gui.display.visualization.scale.displaySeconds;
-                windowSize = round(displaySeconds * obj.params.device.sampleRate);
-                displayData = data(:, end-windowSize+1:end);
-
-                % 時間軸の生成
-                timeAxis = (0:size(displayData,2)-1) / obj.params.device.sampleRate;
-
-                % プロットハンドルの検証
-                if ~ishandle(obj.plotHandles.rawData)
-                    warning('Raw data plot handle is invalid');
-                    return;
+                if ~isfield(obj.plotHandles, 'rawData') || ~ishandle(obj.plotHandles.rawData)
+                    warning('Raw data plot handle invalid. Reinitializing...');
+                    obj.initializePlots();
+                    if ~ishandle(obj.plotHandles.rawData)
+                        error('Failed to create raw data plot handle');
+                    end
                 end
 
-                % 現在のaxesを選択
-                axes(obj.plotHandles.rawData);
+                % データの検証と表示
+                if ~isempty(data) && obj.params.gui.display.visualization.enable.rawData
+                    displaySeconds = obj.params.gui.display.visualization.scale.displaySeconds;
+                    windowSize = round(displaySeconds * obj.params.device.sampleRate);
 
-                % 既存のプロットをクリア
-                cla(obj.plotHandles.rawData, 'reset');
+                    % データのサイズ調整
+                    if size(data, 2) > windowSize
+                        displayData = data(:, end-windowSize+1:end);
+                    else
+                        displayData = data;
+                    end
 
-                % データのプロット
-                hold(obj.plotHandles.rawData, 'on');
-                plot(obj.plotHandles.rawData, timeAxis, displayData(1,:), 'LineWidth', 1);
-                hold(obj.plotHandles.rawData, 'off');
+                    % 時間軸の生成
+                    timeAxis = (0:size(displayData,2)-1) / obj.params.device.sampleRate;
 
-                % 軸の設定
-                xlabel(obj.plotHandles.rawData, 'Time (s)');
-                ylabel(obj.plotHandles.rawData, 'Amplitude (μV)');
+                    % プロットの更新
+                    axes(obj.plotHandles.rawData);
+                    cla(obj.plotHandles.rawData);
+                    plot(obj.plotHandles.rawData, timeAxis, displayData(1,:), 'LineWidth', 1);
 
-                if obj.params.gui.display.visualization.scale.auto
-                    axis(obj.plotHandles.rawData, 'auto');
-                else
-                    ylim(obj.plotHandles.rawData, obj.params.gui.display.visualization.scale.raw);
+                    % 軸の設定
+                    if obj.params.gui.display.visualization.scale.auto
+                        axis(obj.plotHandles.rawData, 'auto');
+                    else
+                        ylim(obj.plotHandles.rawData, obj.params.gui.display.visualization.scale.raw);
+                    end
+
+                    xlim(obj.plotHandles.rawData, [0 displaySeconds]);
+                    grid(obj.plotHandles.rawData, 'on');
+                    title(obj.plotHandles.rawData, sprintf('Raw EEG (Channel 1) - Window: %ds', displaySeconds));
+
+                    % 即時更新
+                    drawnow limitrate;
                 end
-
-                xlim(obj.plotHandles.rawData, [0 displaySeconds]);
-                grid(obj.plotHandles.rawData, 'on');
-                title(obj.plotHandles.rawData, sprintf('Raw EEG (Channel 1) - Window: %ds', displaySeconds));
-
-                % 即時更新
-                drawnow limitrate;
-
             catch ME
                 fprintf('Error in updateRawDataPlot: %s\n', ME.message);
-                fprintf('Data details:\n');
-                if exist('data', 'var')
-                    fprintf('Data size: [%s]\n', mat2str(size(data)));
+                fprintf('Error stack:\n');
+                for i = 1:length(ME.stack)
+                    fprintf('File: %s, Line: %d, Function: %s\n', ...
+                        ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
                 end
-                if exist('displayData', 'var')
-                    fprintf('Display data size: [%s]\n', mat2str(size(displayData)));
-                end
-                fprintf('Stack trace:\n');
-                disp(getReport(ME, 'extended'));
             end
         end
         
