@@ -57,8 +57,8 @@ classdef PowerFeatureExtractor < handle
                 end
                 
                 % 標準化処理
-                if obj.params.feature.standardize
-                    features = obj.standardizeFeatures(features);
+                if obj.params.feature.power.normalize
+                    features = obj.normalizeFeatures(features);
                 end
                 
             catch ME
@@ -420,7 +420,7 @@ classdef PowerFeatureExtractor < handle
             fprintf('\n');
         end
         
-        function features = standardizeFeatures(~, features)
+        function features = normalizeFeatures(~, features)
             % 特徴量の標準化
             features = (features - mean(features)) ./ std(features);
         end

@@ -4,14 +4,14 @@ classdef SignalProcessor < handle
         rawData            % 生データ
         preprocessedData   % 前処理済みデータ
         epochs             % エポック分割されたデータ
-        labels        % トリガー情報 (value, time, sampleを含むstruct配列)
+        labels             % トリガー情報 (value, time, sampleを含むstruct配列)
         epochLabels        % エポック化後のラベル情報
         filterDesigner     % フィルタ設計器
         notchFilterDesigner % ノッチフィルタ設計器
         normalizer         % 正規化器
-        processingInfo     % 処理情報（フィルタ情報を含む）
+        processingInfo     % 処理情報
         processedData      % 処理済みデータ
-        processedLabel    % 処理済みラベル
+        processedLabel     % 処理済みラベル
     end
     
     methods (Access = public)
@@ -20,66 +20,66 @@ classdef SignalProcessor < handle
             obj.filterDesigner = FIRFilterDesigner(params);
             obj.notchFilterDesigner = NotchFilterDesigner(params);
             obj.normalizer = EEGNormalizer(params);
-            obj.processingInfo = struct();
+            obj.initializeProcessingInfo();
         end
         
         function [processedData, processedLabel, processingInfo] = process(obj, eegData, labels)
             try
-                % 入力データの検証
+                % 処理情報の初期化
+                obj.initializeProcessingInfo();
+                
+                % データの検証
                 if isempty(eegData)
                     error('SIGNALPROCESSOR:EMPTYDATA', 'Input EEG data is empty');
                 end
-
+                
+                % 入力データ情報の記録
+                obj.updateInputDataInfo(eegData, labels);
+                
                 % データの設定と前処理
                 obj.rawData = eegData;
-                obj.preprocess(eegData);  % フィルタリング
-
+                obj.preprocess(eegData);
+                    
+                % 正規化処理
+                if obj.params.signal.normalize.enabled
+                    switch obj.params.signal.normalize.type
+                        case 'epoch'
+                            obj.normalizePerEpoch();
+                        case 'all'
+                            [obj.preprocessedData, normParams] = obj.normalizer.normalize(obj.preprocessedData);
+                            obj.processingInfo.normalize = struct(...
+                                'type', 'all', ...
+                                'method', obj.params.signal.normalize.method, ...
+                                'normParams', normParams);
+                    end
+                end
+                
                 if ~isempty(labels)
-                    % トリガー情報が指定されている場合のみエポック分割を実行
-                    obj.labels = labels;  % トリガー情報を保存
-                    obj.epoching(labels);  % エポック分割
-
-                    % データ拡張（エポック単位）
-                    if isfield(obj.params.signal, 'augmentation') && ...
-                       isfield(obj.params.signal.augmentation, 'enabled') && ...
-                       obj.params.signal.augmentation.enabled
+                    % トリガー情報が指定されている場合のエポック処理
+                    obj.labels = labels;
+                    obj.epoching(labels);
+                    
+                    % データ拡張処理
+                    if obj.params.signal.augmentation.enabled
                         obj.augmentData(obj.epochs);
                     end
-
-                    % 正規化処理
-                    if isfield(obj.params.signal, 'normalize') && ...
-                       isfield(obj.params.signal.normalize, 'enabled') && ...
-                       obj.params.signal.normalize.enabled
-                        if obj.params.signal.normalize.perEpoch
-                            obj.normalizePerEpoch();  % エポックごとの正規化
-                        else
-                            obj.normalizeAllData();   % 全データの正規化
-                        end
-                    end
-
-                    obj.organizeData();  % エポック化されたデータの整理
+                    
+                    obj.organizeData();
                 else
                     % オンライン処理またはトリガーなしの場合
                     obj.processedData = obj.preprocessedData;
                     obj.processedLabel = [];  % 明示的に空を設定
                 end
 
-                % 処理情報の記録
-                obj.processingInfo.processedTime = datetime('now');
-                obj.processingInfo.dataSize = size(obj.processedData);
-                if ~isempty(labels)
-                    obj.processingInfo.numTrials = size(labels, 1);
-                else
-                    obj.processingInfo.numTrials = 0;
-                end
+                % 処理情報の最終更新
+                obj.updateFinalProcessingInfo();
                 
-                 % 処理結果の設定
+                % 結果の設定
                 processedData = obj.processedData;
                 processedLabel = obj.processedLabel;
                 processingInfo = obj.processingInfo;
-
+                
             catch ME
-                % エラーを再スロー
                 error('Signal processing failed: %s', ME.message);
             end
         end
@@ -87,160 +87,173 @@ classdef SignalProcessor < handle
         function preprocessedData = preprocess(obj, data)
             try
                 tmpData = data;
-                obj.processingInfo = struct();
-                obj.processingInfo.processingOrder = {};
-
-                % ノッチフィルタの適用
+                
+                % ノッチフィルタ処理
                 if obj.params.signal.filter.notch.enabled
                     [tmpData, notchInfo] = obj.notchFilterDesigner.designAndApplyFilter(tmpData);
-                    obj.processingInfo.notch = notchInfo;
-                    obj.processingInfo.processingOrder{end+1} = 'notch';
+                    obj.processingInfo.filter.notch = notchInfo;
+                    obj.processingInfo.processingOrder{end+1} = 'notch_filter';
                 end
-
-                % FIRフィルタの適用
+                
+                % FIRフィルタ処理
                 if obj.params.signal.filter.fir.enabled
                     [tmpData, firInfo] = obj.filterDesigner.designAndApplyFilter(tmpData);
-                    obj.processingInfo.fir = firInfo;
-                    obj.processingInfo.processingOrder{end+1} = 'fir';
+                    obj.processingInfo.filter.fir = firInfo;
+                    obj.processingInfo.processingOrder{end+1} = 'fir_filter';
                 end
                 
                 obj.preprocessedData = tmpData;
                 preprocessedData = obj.preprocessedData;
+                
+                % フィルタ処理情報の更新
+                obj.updateFilteringInfo();
+                
             catch ME
-                error('SIGNALPROCESSOR:PREPROCESS', ...
-                    'Preprocessing failed: %s', ME.message);
+                error('SIGNALPROCESSOR:PREPROCESS', 'Preprocessing failed: %s', ME.message);
             end
         end
-
+        
+        function normalizedData = normalizeOnline(obj, data, normParams)
+            % オンライン処理用の正規化関数
+            try
+                if obj.params.signal.normalize.enabled && ~isempty(data) && ~isempty(normParams)
+                    % 正規化パラメータを使用してデータを正規化
+                    switch obj.params.signal.normalize.method
+                        case 'zscore'
+                            normalizedData = (data - normParams.mean) ./ normParams.std;
+                        case 'minmax'
+                            normalizedData = (data - normParams.min) ./ (normParams.max - normParams.min);
+                        case 'robust'
+                            normalizedData = (data - normParams.median) ./ normParams.mad;
+                        otherwise
+                            error('SIGNALPROCESSOR:NORMALIZE', '未知の正規化方法: %s', obj.params.signal.normalize.method);
+                    end
+                    
+                    % 処理情報の更新
+                    obj.processingInfo.normalize.appliedParams = normParams;
+                    obj.processingInfo.normalize.method = obj.params.signal.normalize.method;
+                    obj.processingInfo.processingOrder{end+1} = 'normalize_online';
+                else
+                    normalizedData = data;
+                    if obj.params.signal.normalize.enabled
+                        warning('正規化パラメータが指定されていません．正規化をスキップします．');
+                    end
+                end
+            catch ME
+                error('SIGNALPROCESSOR:NORMALIZE', '正規化処理に失敗しました: %s', ME.message);
+            end
+        end
+        
         function visualizeProcessing(obj)
             if isempty(obj.processedData)
                 error('No processed data available for visualization');
             end
-
+            
             % 生データと処理済みデータの比較プロット
             figure('Name', 'Signal Processing Results');
-
+            
             subplot(2,1,1);
             plot(obj.rawData(1,:));
             title('Raw EEG Data (Channel 1)');
             xlabel('Samples');
             ylabel('Amplitude');
             grid on;
-
+            
             subplot(2,1,2);
             plot(obj.preprocessedData(1,:));
             title('Preprocessed EEG Data (Channel 1)');
             xlabel('Samples');
             ylabel('Amplitude');
             grid on;
-
+            
             % フィルタ特性の可視化
-            if isfield(obj.processingInfo, 'fir')
-                obj.filterDesigner.visualizeFilter(obj.processingInfo.fir.filter);
+            if isfield(obj.processingInfo.filter, 'fir')
+                obj.filterDesigner.visualizeFilter(obj.processingInfo.filter.fir.filter);
             end
-
+            
             % ノッチフィルタの特性表示
-            if isfield(obj.processingInfo, 'notch')
+            if isfield(obj.processingInfo.filter, 'notch')
                 figure('Name', 'Notch Filter Response');
-                for i = 1:length(obj.processingInfo.notch.notchFilters)
-                    notchInfo = obj.processingInfo.notch.notchFilters{i};
-                    subplot(length(obj.processingInfo.notch.notchFilters), 1, i);
+                notchInfo = obj.processingInfo.filter.notch;
+                if isfield(notchInfo, 'response')
                     plot(notchInfo.response.frequency, notchInfo.response.magnitude);
-                    title(sprintf('Notch Filter at %d Hz', notchInfo.frequency));
+                    title('Notch Filter Response');
                     xlabel('Frequency (Hz)');
                     ylabel('Magnitude (dB)');
-                    grid on;
-                end
-            end
-
-            % 正規化情報の表示
-            if isfield(obj.processingInfo, 'normalize')
-                figure('Name', 'Normalization Parameters');
-                if isfield(obj.processingInfo.normalize, 'perEpoch')
-                    % エポックごとの正規化の場合
-                    lastEpoch = obj.processingInfo.normalize.perEpoch{end};
-                    subplot(2,1,1);
-                    bar(lastEpoch.mean);
-                    title('Channel Means (Last Epoch)');
-                    xlabel('Channel');
-                    ylabel('Mean Value');
-                    grid on;
-
-                    subplot(2,1,2);
-                    bar(lastEpoch.std);
-                    title('Channel Standard Deviations (Last Epoch)');
-                    xlabel('Channel');
-                    ylabel('Std Value');
-                    grid on;
-                else
-                    % 全データの正規化の場合
-                    subplot(2,1,1);
-                    bar(obj.processingInfo.normalize.normParams.mean);
-                    title('Channel Means (All Data)');
-                    xlabel('Channel');
-                    ylabel('Mean Value');
-                    grid on;
-
-                    subplot(2,1,2);
-                    bar(obj.processingInfo.normalize.normParams.std);
-                    title('Channel Standard Deviations (All Data)');
-                    xlabel('Channel');
-                    ylabel('Std Value');
                     grid on;
                 end
             end
         end
         
         function dataInfo = getProcessingInfo(obj)
-            dataInfo = struct();
-            if ~isempty(obj.processedData)
-                if iscell(obj.processedData)
-                    dataInfo.numTrials = length(obj.processedData);
-                    dataInfo.epochLength = size(obj.processedData{1}, 2);
-                    dataInfo.numChannels = size(obj.processedData{1}, 1);
-                else
-                    dataInfo.numTrials = size(obj.processedData, 3);
-                    dataInfo.epochLength = size(obj.processedData, 2);
-                    dataInfo.numChannels = size(obj.processedData, 1);
-                end
-                if ~isempty(obj.labels)
-                    dataInfo.uniqueLabels = unique([obj.labels.value]);
-                end
-                dataInfo.samplingRate = obj.params.device.sampleRate;
-                dataInfo.totalDuration = dataInfo.epochLength / dataInfo.samplingRate;
-                dataInfo.processingInfo = obj.processingInfo;
-            else
-                error('SIGNALPROCESSOR:NODATA', 'No processed data available');
-            end
+            dataInfo = obj.processingInfo;
         end
     end
     
-    methods (Access = private)        
+    methods (Access = private)
+        function initializeProcessingInfo(obj)
+            % 処理情報の初期化
+            obj.processingInfo = struct(...
+                'startTime', datetime('now'), ...
+                'deviceInfo', struct(...
+                    'name', obj.params.device.name, ...
+                    'sampleRate', obj.params.device.sampleRate, ...
+                    'channelCount', obj.params.device.channelCount, ...
+                    'channels', {obj.params.device.channels}), ...
+                'filter', struct(), ...
+                'normalize', struct(), ...
+                'epoching', struct(), ...
+                'augmentation', struct(), ...
+                'processingOrder', {{}}, ...
+                'version', '1.0');
+        end
+        
+        function updateInputDataInfo(obj, eegData, labels)
+            % 入力データ情報の記録
+            obj.processingInfo.inputData = struct(...
+                'size', size(eegData), ...
+                'duration', size(eegData, 2) / obj.params.device.sampleRate, ...
+                'numChannels', size(eegData, 1));
+            
+            if ~isempty(labels)
+                obj.processingInfo.inputData.numLabels = length(labels);
+                obj.processingInfo.inputData.uniqueLabels = unique([labels.value]);
+            end
+        end
+        
+        function updateFilteringInfo(obj)
+            % フィルタ処理情報の更新
+            obj.processingInfo.filter.parameters = struct(...
+                'notch', obj.params.signal.filter.notch, ...
+                'fir', obj.params.signal.filter.fir);
+        end
+        
         function epoching(obj, labels)
             if isempty(labels)
                 obj.epochs = {};
                 obj.epochLabels = [];
                 return;
             end
-
+            
             nTrials = size(labels, 2);
             analysisWindow = obj.params.signal.window.analysis;
             stimulusWindow = obj.params.signal.window.stimulus;
             overlapRatio = obj.params.signal.epoch.overlap;
-
+            
             fs = obj.params.device.sampleRate;
             nChannels = size(obj.preprocessedData, 1);
             samplesPerEpoch = round(fs * analysisWindow);
-
+            
             stepSize = analysisWindow * (1 - overlapRatio);
             nSteps = floor((stimulusWindow - analysisWindow) / stepSize) + 1;
-
+            
+            % エポック化の方法を選択
             if strcmpi(obj.params.signal.epoch.storageType, 'cell')
                 obj.epochingCell(nTrials, nSteps, fs, samplesPerEpoch, stepSize, labels);
             else
                 obj.epochingArray(nTrials, nSteps, nChannels, fs, samplesPerEpoch, stepSize, labels);
             end
-
+            
             % エポック化情報の記録
             obj.processingInfo.epoching = struct(...
                 'numTrials', nTrials, ...
@@ -250,6 +263,8 @@ classdef SignalProcessor < handle
                 'samplesPerEpoch', samplesPerEpoch, ...
                 'stepSize', stepSize, ...
                 'nSteps', nSteps);
+            
+            obj.processingInfo.processingOrder{end+1} = 'epoching';
         end
         
         function epochingCell(obj, nTrials, nSteps, fs, samplesPerEpoch, stepSize, labels)
@@ -258,7 +273,6 @@ classdef SignalProcessor < handle
             
             epochIndex = 1;
             for trial = 1:nTrials
-                % トリガー情報から直接サンプル位置を使用
                 startIdx = labels(trial).sample;
                 
                 for step = 1:nSteps
@@ -285,7 +299,6 @@ classdef SignalProcessor < handle
             
             epochIndex = 1;
             for trial = 1:nTrials
-                % トリガー情報から直接サンプル位置を使用
                 startIdx = labels(trial).sample;
                 
                 for step = 1:nSteps
@@ -311,124 +324,149 @@ classdef SignalProcessor < handle
             else
                 [augData, augLabels] = obj.applyAugmentationArray(data, obj.epochLabels);
             end
+            
             obj.epochs = augData;
             obj.epochLabels = augLabels;
-           obj.processingInfo.processingOrder{end+1} = 'augmentation';
-       end
-       
-       function organizeData(obj)
-           % エポック化されたデータとラベルを処理済みデータとして設定
-           obj.processedData = obj.epochs;
-           obj.processedLabel = obj.epochLabels;
-       end
-
-       function [augmented_data, augmented_labels] = applyAugmentationCell(obj, data, labels)
-           nTrials = length(data);
-           nAug = obj.params.signal.augmentation.numAugmentations;
-           maxShiftRatio = obj.params.signal.augmentation.maxShiftRatio;
-           noiseLevel = obj.params.signal.augmentation.noiseLevel;
-
-           totalTrials = nTrials * (nAug + 1);
-           augmented_data = cell(totalTrials, 1);
-           augmented_labels = zeros(totalTrials, 1);
-
-           augmented_data(1:nTrials) = data;
-           augmented_labels(1:nTrials) = labels;
-
-           idx = nTrials + 1;
-           for i = 1:nTrials
-               orig_data = data{i};
-               [nChannels, nSamples] = size(orig_data);
-               max_shift = round(nSamples * maxShiftRatio);
-               label = labels(i);
-
-               for j = 1:nAug
-                   aug_data = zeros(nChannels, nSamples);
-
-                   for ch = 1:nChannels
-                       shift = randi([-max_shift, max_shift]);
-                       shifted_data = circshift(orig_data(ch,:), shift);
-                       noise = noiseLevel * std(orig_data(ch,:)) * randn(1, nSamples);
-                       aug_data(ch,:) = shifted_data + noise;
-                   end
-
-                   augmented_data{idx} = aug_data;
-                   augmented_labels(idx) = label;
-                   idx = idx + 1;
-               end
-           end
-       end
-
-       function [augmented_data, augmented_labels] = applyAugmentationArray(obj, data, labels)
-           [nChannels, nSamples, nTrials] = size(data);
-           nAug = obj.params.signal.augmentation.numAugmentations;
-           maxShiftRatio = obj.params.signal.augmentation.maxShiftRatio;
-           noiseLevel = obj.params.signal.augmentation.noiseLevel;
-
-           totalTrials = nTrials * (nAug + 1);
-           augmented_data = zeros(nChannels, nSamples, totalTrials);
-           augmented_labels = zeros(totalTrials, 1);
-
-           augmented_data(:, :, 1:nTrials) = data;
-           augmented_labels(1:nTrials) = labels;
-
-           max_shift = round(nSamples * maxShiftRatio);
-           idx = nTrials + 1;
-
-           for i = 1:nTrials
-               orig_data = data(:, :, i);
-               label = labels(i);
-
-               for j = 1:nAug
-                   aug_data = zeros(nChannels, nSamples);
-
-                   for ch = 1:nChannels
-                       shift = randi([-max_shift, max_shift]);
-                       shifted_data = circshift(orig_data(ch,:), shift);
-                       noise = noiseLevel * std(orig_data(ch,:)) * randn(1, nSamples);
-                       aug_data(ch,:) = shifted_data + noise;
-                   end
-
-                   augmented_data(:, :, idx) = aug_data;
-                   augmented_labels(idx) = label;
-                   idx = idx + 1;
-               end
-           end
-       end
-       
-       % エポックごとの正規化
-       function normalizePerEpoch(obj)
-           try
-               if iscell(obj.epochs)
-                   for i = 1:length(obj.epochs)
-                       [obj.epochs{i}, normParams] = obj.normalizer.normalize(obj.epochs{i});
-                       obj.processingInfo.normalize.perEpoch{i} = normParams;
-                   end
-               else
-                   for i = 1:size(obj.epochs, 3)
-                       [normalizedEpoch, normParams] = obj.normalizer.normalize(obj.epochs(:,:,i));
-                       obj.epochs(:,:,i) = normalizedEpoch;
-                       obj.processingInfo.normalize.perEpoch{i} = normParams;
-                   end
-               end
-               obj.processingInfo.processingOrder{end+1} = 'normalize_per_epoch';
-           catch ME
-               warning('SIGNALPROCESSOR:NORMALIZATION', ...
-                   'Per-epoch normalization failed: %s', ME.message);
-           end
-       end
-
-       % 全データの正規化
-       function normalizeAllData(obj)
-           try
-               [normalizedData, normParams] = obj.normalizer.normalize(obj.epochs);
-               obj.epochs = normalizedData;
-               obj.processingInfo.normalize.normParams = normParams;  % 正規化パラメータを保存
-               obj.processingInfo.processingOrder{end+1} = 'normalize_all';
-           catch ME
-               warning('SIGNALPROCESSOR:NORMALIZATION', ...
-                   'Global normalization failed: %s', ME.message);
-           end
-       end
-   end
+            
+            % データ拡張情報の記録
+            obj.processingInfo.augmentation = struct(...
+                'enabled', true, ...
+                'numAugmentations', obj.params.signal.augmentation.numAugmentations, ...
+                'maxShiftRatio', obj.params.signal.augmentation.maxShiftRatio, ...
+                'noiseLevel', obj.params.signal.augmentation.noiseLevel, ...
+                'resultSize', size(augData));
+            
+            obj.processingInfo.processingOrder{end+1} = 'augmentation';
+        end
+        
+        function [augmented_data, augmented_labels] = applyAugmentationCell(obj, data, labels)
+            nTrials = length(data);
+            nAug = obj.params.signal.augmentation.numAugmentations;
+            maxShiftRatio = obj.params.signal.augmentation.maxShiftRatio;
+            noiseLevel = obj.params.signal.augmentation.noiseLevel;
+            
+            totalTrials = nTrials * (nAug + 1);
+            augmented_data = cell(totalTrials, 1);
+            augmented_labels = zeros(totalTrials, 1);
+            
+            % オリジナルデータのコピー
+            augmented_data(1:nTrials) = data;
+            augmented_labels(1:nTrials) = labels;
+            
+            idx = nTrials + 1;
+            for i = 1:nTrials
+                orig_data = data{i};
+                [nChannels, nSamples] = size(orig_data);
+                max_shift = round(nSamples * maxShiftRatio);
+                label = labels(i);
+                
+                for j = 1:nAug
+                    aug_data = zeros(nChannels, nSamples);
+                    
+                    for ch = 1:nChannels
+                        % シフトとノイズの適用
+                        shift = randi([-max_shift, max_shift]);
+                        shifted_data = circshift(orig_data(ch,:), shift);
+                        noise = noiseLevel * std(orig_data(ch,:)) * randn(1, nSamples);
+                        aug_data(ch,:) = shifted_data + noise;
+                    end
+                    
+                    augmented_data{idx} = aug_data;
+                    augmented_labels(idx) = label;
+                    idx = idx + 1;
+                end
+            end
+        end
+        
+        function [augmented_data, augmented_labels] = applyAugmentationArray(obj, data, labels)
+            [nChannels, nSamples, nTrials] = size(data);
+            nAug = obj.params.signal.augmentation.numAugmentations;
+            maxShiftRatio = obj.params.signal.augmentation.maxShiftRatio;
+            noiseLevel = obj.params.signal.augmentation.noiseLevel;
+            
+            totalTrials = nTrials * (nAug + 1);
+            augmented_data = zeros(nChannels, nSamples, totalTrials);
+            augmented_labels = zeros(totalTrials, 1);
+            
+            % オリジナルデータのコピー
+            augmented_data(:, :, 1:nTrials) = data;
+            augmented_labels(1:nTrials) = labels;
+            
+            max_shift = round(nSamples * maxShiftRatio);
+            idx = nTrials + 1;
+            
+            for i = 1:nTrials
+                orig_data = data(:, :, i);
+                label = labels(i);
+                
+                for j = 1:nAug
+                    aug_data = zeros(nChannels, nSamples);
+                    
+                    for ch = 1:nChannels
+                        % シフトとノイズの適用
+                        shift = randi([-max_shift, max_shift]);
+                        shifted_data = circshift(orig_data(ch,:), shift);
+                        noise = noiseLevel * std(orig_data(ch,:)) * randn(1, nSamples);
+                        aug_data(ch,:) = shifted_data + noise;
+                    end
+                    
+                    augmented_data(:, :, idx) = aug_data;
+                    augmented_labels(idx) = label;
+                    idx = idx + 1;
+                end
+            end
+        end
+        
+        function normalizePerEpoch(obj)
+            try
+                if iscell(obj.epochs)
+                    for i = 1:length(obj.epochs)
+                        [obj.epochs{i}, normParams] = obj.normalizer.normalize(obj.epochs{i});
+                        obj.processingInfo.normalize.perEpoch{i} = normParams;
+                    end
+                else
+                    for i = 1:size(obj.epochs, 3)
+                        [normalizedEpoch, normParams] = obj.normalizer.normalize(obj.epochs(:,:,i));
+                        obj.epochs(:,:,i) = normalizedEpoch;
+                        obj.processingInfo.normalize.perEpoch{i} = normParams;
+                    end
+                end
+                
+                obj.processingInfo.normalize.type = 'epoch';
+                obj.processingInfo.normalize.method = obj.params.signal.normalize.method;
+                obj.processingInfo.processingOrder{end+1} = 'normalize_per_epoch';
+                
+            catch ME
+                warning('SIGNALPROCESSOR:NORMALIZATION', 'Per-epoch normalization failed: %s', ME.message);
+            end
+        end
+        
+        function organizeData(obj)
+            % エポック化されたデータとラベルを処理済みデータとして設定
+            obj.processedData = obj.epochs;
+            obj.processedLabel = obj.epochLabels;
+        end
+        
+        function updateFinalProcessingInfo(obj)
+            % 最終的な処理情報の更新
+            obj.processingInfo.endTime = datetime('now');
+            obj.processingInfo.processingDuration = seconds(obj.processingInfo.endTime - obj.processingInfo.startTime);
+            
+            if ~isempty(obj.processedData)
+                if iscell(obj.processedData)
+                    obj.processingInfo.outputData.format = 'cell';
+                    obj.processingInfo.outputData.numEpochs = length(obj.processedData);
+                    if ~isempty(obj.processedData)
+                        obj.processingInfo.outputData.epochSize = size(obj.processedData{1});
+                    end
+                else
+                    obj.processingInfo.outputData.format = 'array';
+                    obj.processingInfo.outputData.size = size(obj.processedData);
+                end
+            end
+            
+            % 信号処理パラメータの記録
+            obj.processingInfo.parameters = obj.params.signal;
+        end
+    end
 end

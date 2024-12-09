@@ -21,6 +21,7 @@ classdef EEGAcquisitionManager < handle
         cspfeatures
         svmclassifier
         results
+        normParams
         
         % 状態管理
         isRunning
@@ -131,7 +132,7 @@ classdef EEGAcquisitionManager < handle
                 pause(0.5);
 
                 % 新しいインスタンスを作成（新しいモードで初期化）
-                manager = EEGAcquisitionManager(currentParams);
+                EEGAcquisitionManager(currentParams);
             else
                 % 記録中は切り替え不可のメッセージを表示
                 warning('Cannot change mode while recording is in progress.');
@@ -197,7 +198,7 @@ classdef EEGAcquisitionManager < handle
                 
                 % システムの再初期化
                 pause(0.5);  % リソース解放のための短い待機
-                manager = EEGAcquisitionManager(currentParams);
+                EEGAcquisitionManager(currentParams);
             end
         end
         
@@ -534,28 +535,13 @@ classdef EEGAcquisitionManager < handle
                     saveData.rawData = obj.rawData;
                     saveData.labels = obj.labels;
                 end
-                
-                % メタデータの設定
-                if obj.isOnlineMode
-                    processingMode = 'online';
-                else
-                    processingMode = 'offline';
-                end
-                saveData.metadata = struct(...
-                    'samplingRate', obj.params.device.sampleRate, ...
-                    'channelCount', obj.params.device.channelCount, ...
-                    'channelLabels', {obj.params.device.channels}, ...
-                    'recordingTime', datetime('now'), ...
-                    'deviceType', obj.params.device.name, ...
-                    'processingMode', processingMode ...
-                    );
-                
+
                 if ~obj.isOnlineMode
                     % 処理済みデータがある場合は追加
                     if ~isempty(obj.processedData)
                         saveData.processedData = obj.processedData;
                         saveData.processedLabel = obj.processedLabel;
-                        saveData.metadata.processingInfo = obj.processingInfo;
+                        saveData.processingInfo = obj.processingInfo;
                     end
                     
                     % CSPデータがある場合は追加
@@ -611,26 +597,37 @@ classdef EEGAcquisitionManager < handle
         
         function initializeOnline(obj)
             try
-                if obj.params.feature.csp.enable || obj.params.feature.erd.enable
+                % オンライン処理用の学習済みCSP読み込み
+                if obj.params.feature.csp.enable && obj.params.classifier.svm.enable
+                    loadedData = DataLoading.loadDataBrowserWithPrompt('csp');
+                    obj.cspfilters = loadedData.cspFilters;
+                    obj.svmclassifier = loadedData.svmClassifier;
+                end
+                
+                % ベースラインデータ読み込み
+                if obj.params.feature.erd.enable
+                    loadedData = DataLoading.loadDataBrowserWithPrompt('baseline');
+                    baselineData = loadedData.processedData;
+                    % ベースラインパワーの計算
+                    obj.powerExtractor.calculateBaseline(baselineData);
+                end
+                
+                % 正規化処理の実行
+                if obj.params.signal.normalize.enabled
                     % データ読み込みダイアログの表示
-                    loadedData = obj.loadDataBrowser();
-                    
-                    if obj.params.feature.csp.enable
-                        obj.cspfilters = loadedData.cspFilters;
-                        obj.svmclassifier = loadedData.svmClassifier;
-                    end
-                    
-                    if obj.params.feature.erd.enable
-                        % ベースライン用の前処理済みデータを取得
-                        if isfield(loadedData, 'processedData')
-                            baselineData = loadedData.processedData;
-                            % ベースラインパワーの計算
-                            obj.powerExtractor.calculateBaseline(baselineData);
-                            fprintf('Baseline data loaded and power calculated\n');
-                        else
-                            error('No processed data found for ERD baseline calculation');
-                        end
-                    end
+                    loadedNormalizedData = DataLoading.loadDataBrowserWithPrompt('normalization');
+
+                    % 記録した正規化パラメータ情報を読み込む
+                    obj.normParams = loadedNormalizedData.processingInfo.normalize.normParams;
+
+                    % 正規化パラメータのチェック
+                    obj.validateNormalizationParams(obj.normParams);
+
+                    fprintf('正規化パラメータを初期化しました\n');
+                    fprintf('正規化方法: %s\n', obj.params.signal.normalize.method);
+
+                    % 正規化パラメータの情報を表示
+                    obj.displayNormalizationParams(obj.normParams);
                 end
                 
                 obj.labels = [];        % トリガー情報
@@ -642,25 +639,78 @@ classdef EEGAcquisitionManager < handle
             end
         end
         
-        
-        function loadedData = loadDataBrowser(obj)
-            try
-                % ファイル選択ダイアログを表示
-                [filename, pathname] = uigetfile({'*.mat', 'MAT-files (*.mat)'}, ...
-                    'Select EEG data file', obj.params.acquisition.save.path);
-                
-                if filename ~= 0  % ユーザーがファイルを選択した場合
-                    fullpath = fullfile(pathname, filename);
-                    
-                    % データの読み込み
-                    loadedData = obj.dataManager.loadDataset(fullpath);
-                    
-                    fprintf('Successfully loaded data from: %s\n', fullpath);
-                end
-            catch ME
-                error('Failed to load data: %s', ME.message);
+        function validateNormalizationParams(obj, normParams)
+            % 正規化パラメータの妥当性チェック
+            switch obj.params.signal.normalize.method
+                case 'zscore'
+                    if ~isfield(normParams, 'mean') || ~isfield(normParams, 'std')
+                        error('z-score正規化に必要なパラメータ（mean, std）が不足しています．');
+                    end
+                    if any(normParams.std == 0)
+                        error('標準偏差が0のチャンネルが存在します．');
+                    end
+
+                case 'minmax'
+                    if ~isfield(normParams, 'min') || ~isfield(normParams, 'max')
+                        error('min-max正規化に必要なパラメータ（min, max）が不足しています．');
+                    end
+                    if any(normParams.max == normParams.min)
+                        error('最大値と最小値が同じチャンネルが存在します．');
+                    end
+
+                case 'robust'
+                    if ~isfield(normParams, 'median') || ~isfield(normParams, 'mad')
+                        error('ロバスト正規化に必要なパラメータ（median, mad）が不足しています．');
+                    end
+                    if any(normParams.mad == 0)
+                        error('MADが0のチャンネルが存在します．');
+                    end
+
+                otherwise
+                    error('未知の正規化方法です: %s', obj.params.signal.normalize.method);
             end
         end
+
+        function displayNormalizationParams(obj, normParams)
+            % 正規化パラメータの情報を表示
+            fprintf('\n正規化パラメータの情報:\n');
+            fprintf('------------------------\n');
+
+            switch obj.params.signal.normalize.method
+                case 'zscore'
+                    fprintf('平均値の範囲: [%.4f, %.4f]\n', min(normParams.mean), max(normParams.mean));
+                    fprintf('標準偏差の範囲: [%.4f, %.4f]\n', min(normParams.std), max(normParams.std));
+
+                case 'minmax'
+                    fprintf('最小値の範囲: [%.4f, %.4f]\n', min(normParams.min), max(normParams.min));
+                    fprintf('最大値の範囲: [%.4f, %.4f]\n', min(normParams.max), max(normParams.max));
+
+                case 'robust'
+                    fprintf('中央値の範囲: [%.4f, %.4f]\n', min(normParams.median), max(normParams.median));
+                    fprintf('MADの範囲: [%.4f, %.4f]\n', min(normParams.mad), max(normParams.mad));
+            end
+
+            fprintf('------------------------\n');
+        end
+        
+%         function loadedData = loadDataBrowser(obj)
+%             try
+%                 % ファイル選択ダイアログを表示
+%                 [filename, pathname] = uigetfile({'*.mat', 'MAT-files (*.mat)'}, ...
+%                     'Select EEG data file', obj.params.acquisition.save.path);
+%                 
+%                 if filename ~= 0  % ユーザーがファイルを選択した場合
+%                     fullpath = fullfile(pathname, filename);
+%                     
+%                     % データの読み込み
+%                     loadedData = obj.dataManager.loadDataset(fullpath);
+%                     
+%                     fprintf('Successfully loaded data from: %s\n', fullpath);
+%                 end
+%             catch ME
+%                 error('Failed to load data: %s', ME.message);
+%             end
+%         end
         
         function initializeDataBuffers(obj)
             obj.processingWindow = round(obj.params.signal.window.analysis * obj.params.device.sampleRate);
@@ -722,6 +772,11 @@ classdef EEGAcquisitionManager < handle
                 % 前処理
                 if obj.params.signal.enable && ~isempty(obj.dataBuffer)
                     preprocessedBuffer = obj.signalProcessor.preprocess(obj.dataBuffer);
+                    
+                    % 正規化処理
+                    if obj.params.signal.normalize.enabled
+                        preprocessedBuffer = obj.signalProcessor.normalizeOnline(preprocessedBuffer, obj.normParams);
+                    end
                     
                     endIdx = size(preprocessedBuffer, 2);
                     startIdx = endIdx - obj.processingWindow + 1;
@@ -824,7 +879,8 @@ classdef EEGAcquisitionManager < handle
                     
                     % 結果の保存
                     currentTime = toc(obj.processingTimer)*1000;
-                    newPredictResult = struct('label', label, ...
+                    newPredictResult = struct(...
+                        'label', label, ...
                         'score', score, ...
                         'time', currentTime ...
                     );
@@ -838,7 +894,7 @@ classdef EEGAcquisitionManager < handle
                 
                 % UDP送信（FAA値と覚醒状態の送信）
                 % 後に構造体で送信できるようにして計算した結果を全て送る（今は手動で選択）
-                udpData = faaValue;
+                udpData = label;
                 obj.udpManager.sendTrigger(udpData);
                 fprintf('UDP sent: faaValue=%f \n', udpData);
                 

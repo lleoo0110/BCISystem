@@ -25,11 +25,11 @@ function params = getConfig(deviceType, varargin)
                 'labels', true, ...             % イベントマーカー/トリガー情報の保存
                 'processedData', true, ...      % 前処理済みデータの保存
                 'processedLabel', true, ...     % 処理済みラベル情報の保存
-                'processingInfo', true, ...     % 処理情報
                 'cspFilters', true, ...         % CSPフィルタの保存（学習後）
                 'cspFeatures', true, ...        % CSP特徴量の保存
                 'svmClassifier', true, ...       % 学習済みSVM分類器の保存
-                'results', true ...            % 解析結果の保存
+                'results', true, ...            % 解析結果の保存
+                'metadata', true ...            % 実験条件等のメタデータ保存
             ) ...
         ), ...
         'load', struct(...        % データ読み込み設定
@@ -42,11 +42,11 @@ function params = getConfig(deviceType, varargin)
                 'labels', true, ...          % イベントマーカー/トリガー情報の読み込み
                 'processedData', true, ...      % 前処理済みデータの読み込み
                 'processedLabel', true, ...     % 処理済みラベル情報の読み込み
-                'processingInfo', true, ...     % 処理情報
                 'cspFilters', true, ...         % CSPフィルタの読み込み
                 'cspFeatures', true, ...        % CSP特徴量の読み込み
                 'svmClassifier', true, ...      % 学習済みSVM分類器の読み込み
-                'results', true ...            % 解析結果の読み込み
+                'results', true, ...            % 解析結果の読み込み
+                'metadata', true ...         % メタデータの読み込み
             ) ...
         ) ...
     );
@@ -78,6 +78,7 @@ function params = getConfig(deviceType, varargin)
     trigger_mappings = {
         '安静', 1;        % 第1列：ラベル文字列，第2列：対応する数値
         '炎魔法', 2;       % 必要に応じて行を追加可能
+        '雷魔法', 3; 
     };
 
     % マッピング構造体の動的生成（通常は変更不要）
