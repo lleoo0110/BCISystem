@@ -36,13 +36,8 @@ classdef PowerFeatureExtractor < handle
                 obj.emotionThreshold = params.feature.emotion.thresholds.centerRegion;
                 obj.faaThreshold = params.feature.emotion.thresholds.faa;
 
-                % ラベル設定 - セル配列の入れ子構造を解消
-                if iscell(params.feature.emotion.labels.states) && ...
-                   iscell(params.feature.emotion.labels.states{1})
-                    obj.emotionLabels = params.feature.emotion.labels.states{1};
-                else
-                    obj.emotionLabels = params.feature.emotion.labels.states;
-                end
+                % ラベル設定
+                obj.emotionLabels = params.feature.emotion.labels.states;
                 obj.neutralLabel = params.feature.emotion.labels.neutral;
 
                 % 座標変換設定
@@ -166,18 +161,12 @@ classdef PowerFeatureExtractor < handle
                 else
                     angles = linspace(-pi, pi, length(obj.emotionLabels));
                     angleIdx = find(angle >= angles, 1, 'last');
-                    if isempty(angleIdx) || angleIdx > length(obj.emotionLabels)
+                    if angleIdx > length(obj.emotionLabels)-1
                         angleIdx = 1;
                     end
                     emotionState = obj.emotionLabels{angleIdx};
                     fprintf('Angle index: %d, Selected emotion: %s\n', angleIdx, emotionState);
                 end
-
-                % デバッグ出力の追加
-                fprintf('Available emotion labels: ');
-                fprintf('%s, ', obj.emotionLabels{:});
-                fprintf('\n');
-                fprintf('Current emotion state: %s\n', emotionState);
 
                 coordinates = struct('valence', valence, ...
                                   'arousal', arousal, ...

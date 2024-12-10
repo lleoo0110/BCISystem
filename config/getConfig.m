@@ -13,7 +13,7 @@ function params = getConfig(deviceType, varargin)
     
     %% === 保存&読み込みパラメータ ===
     acquisition_params = struct(...
-        'mode', 'offline', ...       % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
+        'mode', 'online', ...       % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
         'save', struct(...
             'enable', true, ...     % データ保存の有効/無効
             'name', 'test', ...     % 保存時のファイル名プレフィックス
@@ -209,11 +209,32 @@ function params = getConfig(deviceType, varargin)
         'faa', struct(...            % 前頭部アルファ非対称性の設定
             'enable', true ...       % FAA特徴量の有効/無効
         ), ...
+        'emotion', struct(...
+            'enable', true, ...              % 感情分類の有効/無効
+            'channels', struct(...           % 使用するチャンネル設定
+                'left', [1, 3], ...          % 左前頭葉チャンネル
+                'right', [14, 12] ...        % 右前頭葉チャンネル
+            ), ...
+            'thresholds', struct(...         % 閾値設定
+                'abRatio', 1.0, ...          % α/β比の閾値
+                'centerRegion', 0.3, ...     % 中心領域の判定閾値
+                'faa', 0.5 ...               % FAA判定の閾値
+            ), ...
+            'labels', struct(...
+                'states', {{'興奮', '喜び', '快適', 'リラックス', ...
+                           '眠気', '憂鬱', '不快', '緊張', '安静'}}, ... % セル配列として定義
+                'neutral', '安静' ...
+            ), ...
+            'coordinates', struct(...        % 座標変換設定
+                'normalizeMethod', 'tanh', ...% 正規化方法
+                'scaling', 1.0 ...           % スケーリング係数
+            ) ...
+        ), ...
         'erd', struct(...            % 事象関連脱同期の設定
-            'enable', true ...      % ERD特徴量の有効/無効
+            'enable', false ...      % ERD特徴量の有効/無効
         ), ...
         'csp', struct(...            % 共通空間パターンの設定
-            'enable', true, ...     % CSP特徴量の有効/無効
+            'enable', false, ...     % CSP特徴量の有効/無効
             'storageType', 'array', ... % データ保存形式：'array'または'cell'
             'patterns', 7, ...       % 使用するパターン数：全チャンネル数以下
             'regularization', 0.05 ... % 正則化パラメータ：0.01-0.1程度
@@ -278,7 +299,7 @@ function params = getConfig(deviceType, varargin)
                 ), ...
                 'showBands', true, ...     % 周波数帯域の表示：true/false
                 'ersp', struct(...         % ERSP表示の詳細設定
-                    'scale', [-3 3], ...   % ERSPの表示範囲（dB）
+                    'scale', [-10 10], ...   % ERSPの表示範囲（dB）
                     'time', [-1 2], ...    % 時間範囲（秒）：刺激前後
                     'baseline', [-0.5 0], ... % ベースライン期間（秒）
                     'freqRange', [1 50], ... % 周波数範囲（Hz）
