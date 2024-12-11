@@ -16,7 +16,7 @@ setupPaths(currentDir);
 
 
 %%  指定のパラメータで実行
-params = getConfig('epocx');
+params = getConfig('epocx', 'preset', 'magic_online');
 manager = EEGAcquisitionManager(params);
 
 

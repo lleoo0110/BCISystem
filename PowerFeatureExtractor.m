@@ -137,32 +137,21 @@ classdef PowerFeatureExtractor < handle
         
         function [emotionState, coordinates] = classifyEmotion(obj, data)
             try
-                % データサイズの確認
-                [nCh, nSamples] = size(data);
-                fprintf('Input data size: %d channels x %d samples\n', nCh, nSamples);
-
                 % FAA値と覚醒度を計算
                 [faaValue, ~] = obj.calculateFAA(data);
                 [abRatio, ~] = obj.calculateABRatio(data);
 
-                fprintf('FAA value: %.4f, AB ratio: %.4f\n', faaValue, abRatio);
-
                 % 座標変換
                 valence = tanh(faaValue * obj.scalingFactor);
                 arousal = -tanh((abRatio - 1) * obj.scalingFactor);
-
-                fprintf('Valence: %.4f, Arousal: %.4f\n', valence, arousal);
-
+                
                 % 極座標への変換
                 radius = sqrt(valence^2 + arousal^2);
                 angle = atan2(arousal, valence);
 
-                fprintf('Radius: %.4f, Angle: %.4f rad\n', radius, angle);
-
                 % 感情状態の分類
                 if radius < obj.emotionThreshold
                     emotionState = obj.neutralLabel;
-                    fprintf('Center region detected - Neutral state\n');
                 else
                     angles = linspace(-pi, pi, length(obj.emotionLabels));
                     angleIdx = find(angle >= angles, 1, 'last');
@@ -170,14 +159,7 @@ classdef PowerFeatureExtractor < handle
                         angleIdx = 1;
                     end
                     emotionState = obj.emotionLabels{angleIdx};
-                    fprintf('Angle index: %d, Selected emotion: %s\n', angleIdx, emotionState);
                 end
-
-                % デバッグ出力の追加
-                fprintf('Available emotion labels: ');
-                fprintf('%s, ', obj.emotionLabels{:});
-                fprintf('\n');
-                fprintf('Current emotion state: %s\n', emotionState);
 
                 coordinates = struct('valence', valence, ...
                                   'arousal', arousal, ...

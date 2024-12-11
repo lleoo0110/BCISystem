@@ -1,5 +1,5 @@
 
-function preset = magic_online_preset()
+function preset = template_preset()
     % トリガーマッピングの設定
     trigger_mappings = {
         '安静', 1;         % クラス1：安静状態（基準状態）
@@ -18,7 +18,7 @@ function preset = magic_online_preset()
 
     preset = struct(...
         'acquisition', struct(...
-            'mode', 'online', ...      % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
+            'mode', 'offline', ...      % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
             'save', struct(...
                 'enable', true, ...     % データ保存の有効/無効：通常はtrue
                 'name', 'test', ...     % 保存時のファイル名プレフィックス：実験内容を反映した名前を推奨
@@ -59,9 +59,9 @@ function preset = magic_online_preset()
             'enable', true, ...           % 信号処理の有効/無効：通常はtrue
             'window', struct(...          % 解析窓の設定
                 'analysis', 2.0, ...      % 解析窓の長さ（秒）：ERDは2.0秒，MIは1.0秒程度
-                'stimulus', 8.0, ...      % 刺激提示時間（秒）：実験プロトコルに合わせて設定
+                'stimulus', 5.0, ...      % 刺激提示時間（秒）：実験プロトコルに合わせて設定
                 'bufferSize', 15, ...     % データバッファのサイズ（秒）：10-20秒程度．大きいとメモリ使用量増
-                'updateBuffer', 1, ...  % バッファの更新間隔（秒）：0.1-1.0秒．小さいほど処理負荷増
+                'updateBuffer', 0.5, ...  % バッファの更新間隔（秒）：0.1-1.0秒．小さいほど処理負荷増
                 'step', [], ...           % 解析窓のシフト幅：自動計算（変更不要）
                 'updateInterval', [] ...  % 更新間隔：自動計算（変更不要）
             ), ...
@@ -71,8 +71,8 @@ function preset = magic_online_preset()
                 'baseline', [] ...        % ベースライン期間：自動設定（変更不要）
             ), ...
             'augmentation', struct(...    % データ拡張の設定
-                'enabled', true, ...     % データ拡張の有効/無効：データ量が少ない場合はtrue
-                'numAugmentations', 2, ... % 1エポックあたりの拡張数：2-8程度
+                'enabled', false, ...     % データ拡張の有効/無効：データ量が少ない場合はtrue
+                'numAugmentations', 4, ... % 1エポックあたりの拡張数：2-8程度
                 'maxShiftRatio', 0.1, ... % 最大シフト率：0-0.5の値．0.1-0.2程度を推奨
                 'noiseLevel', 0.05 ...    % ノイズレベル：0-0.2の値．0.05-0.1程度を推奨
             ), ...
@@ -111,13 +111,64 @@ function preset = magic_online_preset()
         ), ...
         'feature', struct(...
             'power', struct(...           % パワー値計算の設定
-                'enable', false ...       % パワー値計算の有効/無効：特徴量として使用する場合true
+                'enable', true, ...       % パワー値計算の有効/無効：特徴量として使用する場合true
+                'method', 'welch', ...    % パワー計算方法：'welch'（推奨），'fft'，'filter'，'wavelet'，'hilbert'
+                'normalize', true, ...    % パワー値の正規化：z-score正規化を推奨
+                'fft', struct(...         % FFT解析設定
+                    'windowType', 'hamming', ... % 窓関数：'hamming'（推奨），'hann'，'blackman'等
+                    'nfft', 512 ...       % FFTポイント数：2のべき乗（512または1024推奨）
+                ), ...
+                'welch', struct(...       % Welch法設定（推奨）
+                    'windowType', 'hamming', ... % 窓関数：'hamming'（推奨），'hann'，'blackman'等
+                    'windowLength', 256, ... % 窓長：2のべき乗（128-512程度）
+                    'overlap', 0.5, ...   % オーバーラップ率：0.5-0.75推奨
+                    'nfft', 512, ...      % FFTポイント数：windowLength以上の2のべき乗
+                    'freqResolution', 0.5, ... % 周波数分解能（Hz）：0.1-1.0程度
+                    'segmentNum', 8 ...    % セグメント数：4-16程度
+                ), ...
+                'filter', struct(...      % フィルタリング設定
+                    'type', 'butter', ... % フィルタタイプ：'butter'，'cheby1'，'ellip'
+                    'order', 4 ...        % フィルタ次数：4-8程度．高いほど急峻
+                ), ...
+                'wavelet', struct(...     % ウェーブレット解析設定
+                    'type', 'morl', ...   % ウェーブレットタイプ：'morl'，'mexh'，'haar'等
+                    'scaleNum', 128 ...   % スケール数：64-256程度
+                ), ...
+                'hilbert', struct(...     % ヒルベルト変換設定
+                    'filterOrder', 4 ...  % フィルタ次数：4-8程度
+                ), ...
+                'bands', struct(...       % 周波数帯域の設定
+                    'names', {{'delta', 'theta', 'alpha', 'beta', 'gamma'}}, ... % 解析する帯域名
+                    'delta', [0.5 4], ... % デルタ波帯域（Hz）：0.5-4Hz
+                    'theta', [4 8], ...   % シータ波帯域（Hz）：4-8Hz
+                    'alpha', [8 13], ...  % アルファ波帯域（Hz）：8-13Hz
+                    'beta',  [13 30], ... % ベータ波帯域（Hz）：13-30Hz
+                    'gamma', [30 45] ...  % ガンマ波帯域（Hz）：30-45Hz
+                ) ...
             ), ...
             'faa', struct(...            % 前頭部アルファ非対称性の設定
-                'enable', false ...       % FAA特徴量の有効/無効：感情分析時はtrue
+                'enable', true ...       % FAA特徴量の有効/無効：感情分析時はtrue
             ), ...
             'emotion', struct(...        % 感情分析の設定
-                'enable', false ...              % 感情分類の有効/無効
+                'enable', true, ...              % 感情分類の有効/無効
+                'channels', struct(...           % 使用するチャンネル設定
+                    'left', [1, 3], ...         % 左前頭葉チャンネル：電極配置に応じて設定
+                    'right', [14, 12] ...       % 右前頭葉チャンネル：電極配置に応じて設定
+                ), ...
+                'thresholds', struct(...        % 閾値設定
+                    'abRatio', 1.0, ...         % α/β比の閾値：0.5-2.0程度
+                    'centerRegion', 0.3, ...    % 中心領域の判定閾値：0.2-0.4程度
+                    'faa', 0.5 ...              % FAA判定の閾値：0.3-0.7程度
+                ), ...
+                'labels', struct(...
+                    'states', {{'興奮', '喜び', '快適', 'リラックス', ...
+                               '眠気', '憂鬱', '不快', '緊張', '安静'}}, ... % 感情状態のラベル
+                    'neutral', '安静' ...       % 中立状態のラベル
+                ), ...
+                'coordinates', struct(...       % 座標変換設定
+                    'normalizeMethod', 'tanh', ... % 正規化方法：'tanh'，'sigmoid'等
+                    'scaling', 1.0 ...          % スケーリング係数：0.5-2.0程度
+                ) ...
             ), ...
             'erd', struct(...            % 事象関連脱同期の設定
                 'enable', false ...      % ERD特徴量の有効/無効：運動想起時はtrue
@@ -125,7 +176,7 @@ function preset = magic_online_preset()
             'csp', struct(...            % 共通空間パターンの設定
                 'enable', true, ...      % CSP特徴量の有効/無効：分類時はtrue
                 'storageType', 'array', ... % データ保存形式：'array'または'cell'
-                'patterns', 4, ...       % 使用するパターン数：チャンネル数の半分程度
+                'patterns', 7, ...       % 使用するパターン数：チャンネル数の半分程度
                 'regularization', 0.05 ... % 正則化パラメータ：0.01-0.1程度
             ) ...
         ), ...
@@ -173,7 +224,7 @@ function preset = magic_online_preset()
         'gui', struct(...
             'display', struct(...
                 'visualization', struct(...
-                    'refreshRate', 0.5, ...     % 表示更新レート（秒）：0.1-0.5程度
+                    'refreshRate', 0.2, ...     % 表示更新レート（秒）：0.1-0.5程度
                     'enable', struct(...        % 表示項目の有効/無効設定
                         'rawData', true, ...    % 生データの表示：信号確認用
                         'processedData', true, ... % 処理済みデータ：処理結果確認用
@@ -182,8 +233,8 @@ function preset = magic_online_preset()
                     ), ...
                     'scale', struct(...        % 表示スケールの設定
                         'auto', true, ...      % 自動スケーリング：通常はtrue
-                        'raw', [4300 4450], ... % 生データの表示範囲（μV）
-                        'processed', [-20 20], ... % 処理済みデータの表示範囲（μV）
+                        'raw', [4300 4400], ... % 生データの表示範囲（μV）
+                        'processed', [-50 50], ... % 処理済みデータの表示範囲（μV）
                         'freq', [0 50], ...    % 周波数表示範囲（Hz）
                         'power', [0.01 100], ... % パワー表示範囲（μV²/Hz）
                         'displaySeconds', 5 ... % 時系列データの表示時間幅（秒）
@@ -191,7 +242,7 @@ function preset = magic_online_preset()
                     'showBands', true, ...     % 周波数帯域の表示：帯域の可視化
                     'ersp', struct(...         % ERSP表示の詳細設定
                         'scale', [-10 10], ...   % ERSPの表示範囲（dB）
-                        'time', [0 5], ...    % 時間範囲（秒）：刺激前後
+                        'time', [-1 2], ...    % 時間範囲（秒）：刺激前後
                         'baseline', [-0.5 0], ... % ベースライン期間（秒）
                         'freqRange', [1 50], ... % 周波数範囲（Hz）
                         'numFreqs', 50, ...    % 周波数分割数：30-100程度

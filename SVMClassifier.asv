@@ -42,9 +42,15 @@ classdef SVMClassifier < handle
 
                 % 評価が有効な場合は最適閾値を探索
                 if obj.params.classifier.evaluation.enable
-                    bestThreshold = obj.findOptimalThreshold(features, labels);
+                    thresholds = 0.1:0.05:0.9;  
+                    bestThreshold = obj.findOptimalThreshold(features, labels, thresholds);
                     obj.performance.optimalThreshold = bestThreshold;  % performanceに保存
                     fprintf('Optimal threshold found: %.3f\n', bestThreshold);
+
+                    % GUI更新用のコールバック
+                    if isfield(obj.callbacks, 'onOptimalThresholdFound')
+                        obj.callbacks.onOptimalThresholdFound(bestThreshold);
+                    end
                 end
 
                 % 結果の格納
@@ -61,7 +67,7 @@ classdef SVMClassifier < handle
             end
         end
         
-        function [label, score] = predictOnline(obj, features, svmclassifier, threshold)
+        function [label, score] = predictOnline(obj, features, svmclassifier)
             % オンラインモードでの予測
             if ~obj.isEnabled
                 error('SVMClassifier:Disabled', 'SVM is disabled in configuration');
@@ -69,13 +75,14 @@ classdef SVMClassifier < handle
 
             try
                 validateattributes(features, {'numeric'}, {'2d'}, 'predictOnline', 'features');
-                validateattributes(threshold, {'numeric'}, {'scalar', '>=', 0, '<=', 1}, ...
-                    'predictOnline', 'threshold');
 
                 if isempty(svmclassifier)
                     error('SVMClassifier:NoModel', 'No classifier model provided');
                 end
                 obj.svmModel = svmclassifier;
+
+                % 閾値の取得
+                threshold = obj.getThreshold();
 
                 % 予測の実行
                 if obj.params.classifier.svm.probability
@@ -91,19 +98,17 @@ classdef SVMClassifier < handle
                             label = maxIdx + 1;
                         end
                     else  % 通常のSVMの場合
-                        if scores(1) >= threshold  % 安静状態のスコア
+                        if scores(2) >= threshold  % 安静状態のスコア
                             label = 1;
                         else
                             label = 2;
                         end
                     end
-                    
-                    % scoresをそのまま出力用のscoreとして保持
-                    score = scores(1);  % 安静状態のスコア
-                    
+                    score = max(scores, [], 2);
                 else
                     % 通常の予測
-                    [label, score] = predict(obj.svmModel, features);
+                    [label, ~] = predict(obj.svmModel, features);
+                    score = [];
                 end
 
             catch ME
@@ -330,50 +335,21 @@ classdef SVMClassifier < handle
             end
         end
         
-        function bestThreshold = findOptimalThreshold(obj, features, labels)
-            % 閾値探索範囲をパラメータから取得
-            thresholds = obj.params.classifier.svm.threshold.range;
-
-            cv = cvpartition(labels, 'KFold', obj.params.classifier.evaluation.kfold);
+        function [bestThreshold, bestMetrics] = findOptimalThreshold(obj, features, labels, thresholds)
             bestAccuracy = 0;
-            bestThreshold = obj.params.classifier.svm.threshold.rest;  % デフォルト値
+            bestThreshold = 0.5;  % デフォルト値
+            bestMetrics = struct();
 
             for t = thresholds
-                accuracies = zeros(cv.NumTestSets, 1);
+                metrics = obj.evaluateThreshold(features, labels, t);
 
-                for i = 1:cv.NumTestSets
-                    trainIdx = cv.training(i);
-                    testIdx = cv.test(i);
-
-                    % 現在のモデルを使用して予測
-                    [~, scores] = predict(obj.svmModel, features(testIdx,:));
-
-                    % 閾値を適用した予測
-                    if strcmp(obj.params.classifier.svm.type, 'ecoc')
-                        predictions = (scores(:,1) >= t);  % 安静状態の判定
-                        for j = 1:length(predictions)
-                            if ~predictions(j)  % 安静状態でない場合
-                                [~, maxIdx] = max(scores(j,2:end));
-                                predictions(j) = maxIdx + 1;
-                            end
-                        end
-                    else
-                        predictions = (scores(:,2) >= t);  % 2クラスSVMの場合
-                    end
-
-                    % 精度の計算
-                    accuracies(i) = sum(predictions == (labels(testIdx) == 1)) / length(testIdx);
-                end
-
-                % 平均精度が改善された場合に更新
-                meanAccuracy = mean(accuracies);
-                if meanAccuracy > bestAccuracy
-                    bestAccuracy = meanAccuracy;
+                % 精度が改善された場合に更新
+                if metrics.accuracy > bestAccuracy
+                    bestAccuracy = metrics.accuracy;
                     bestThreshold = t;
+                    bestMetrics = metrics;
                 end
             end
-
-            fprintf('Best threshold: %.3f (Accuracy: %.2f%%)\n', bestThreshold, bestAccuracy * 100);
         end
         
         function metrics = evaluateThreshold(obj, features, labels, threshold)
@@ -433,7 +409,17 @@ classdef SVMClassifier < handle
                 predictedLabels = (scores(:,2) >= threshold) + 1;
             end
         end
-
+        
+        function threshold = getThreshold(obj)
+            % 閾値の取得（最適値か手動設定値か）
+            if obj.params.classifier.svm.useOptimalThreshold && ...
+                    ~isempty(obj.params.classifier.svm.optimalThreshold)
+                threshold = obj.params.classifier.svm.optimalThreshold;
+            else
+                threshold = obj.params.classifier.svm.restThreshold;
+            end
+        end
+        
         function displayResults(obj)
             % 結果の表示
             fprintf('\n=== Classification Results ===\n');

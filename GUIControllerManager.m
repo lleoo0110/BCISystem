@@ -378,6 +378,28 @@ classdef GUIControllerManager < handle
                 end
             end
             
+            % 安静状態の閾値調整セクション
+            uicontrol(obj.paramPanel, ...
+                'Style', 'text', ...
+                'String', 'Rest State Threshold', ...
+                'Position', [380 40 120 20]);
+
+            % 閾値入力ボックス
+            obj.displayControls.restThreshold = uicontrol(obj.paramPanel, ...
+                'Style', 'edit', ...
+                'String', num2str(obj.params.classifier.svm.threshold.rest), ...
+                'Position', [510 40 50 20], ...
+                'Callback', @(src,~) obj.restThresholdChanged(str2double(src.String)));
+
+            % 最適値使用のチェックボックス
+            obj.displayControls.useOptimalThreshold = uicontrol(obj.paramPanel, ...
+                'Style', 'checkbox', ...
+                'String', 'Use Optimal Threshold', ...
+                'Value', obj.params.classifier.svm.threshold.useOptimal, ...
+                'Position', [570 40 120 20], ...
+                'Callback', @(src,~) obj.toggleOptimalThreshold(src.Value), ...
+                'TooltipString', 'Check to use optimal threshold from cross-validation');
+            
             % カラーマップ設定
             uicontrol(obj.paramPanel, ...
                 'Style', 'text', ...
@@ -874,6 +896,49 @@ classdef GUIControllerManager < handle
         function showBandsChanged(obj, value)
             obj.params.gui.display.visualization.showBands = value;
             obj.updateDisplay();
+        end
+        
+        function restThresholdChanged(obj, value)
+            try
+                % 閾値の制限（0-1の範囲）
+                value = max(0, min(1, value));
+
+                % パラメータの更新
+                obj.params.classifier.svm.threshold.rest = value;
+
+                % 入力フィールドの更新
+                set(obj.displayControls.restThreshold, 'String', num2str(value));
+
+                % 最適値使用をオフに
+                obj.params.classifier.svm.threshold.useOptimal = false;
+                set(obj.displayControls.useOptimalThreshold, 'Value', false);
+
+                % コールバックの呼び出し
+                if isfield(obj.callbacks, 'onParamChange')
+                    obj.callbacks.onParamChange('threshold', value);
+                end
+            catch ME
+                errordlg(['Invalid threshold value: ' ME.message], 'Parameter Error');
+                set(obj.displayControls.restThreshold, 'String', ...
+                    num2str(obj.params.classifier.svm.threshold.rest));
+            end
+        end
+
+        function toggleOptimalThreshold(obj, value)
+            obj.params.classifier.svm.threshold.useOptimal = value;
+
+            if value && isfield(obj.params.classifier.svm.threshold, 'optimal') && ...
+               ~isempty(obj.params.classifier.svm.threshold.optimal)
+                % 最適値がある場合は，その値を表示
+                set(obj.displayControls.restThreshold, 'String', ...
+                    num2str(obj.params.classifier.svm.threshold.optimal));
+                set(obj.displayControls.restThreshold, 'Enable', 'off');
+            else
+                % 手動入力モードに戻す
+                set(obj.displayControls.restThreshold, 'Enable', 'on');
+                set(obj.displayControls.restThreshold, 'String', ...
+                    num2str(obj.params.classifier.svm.threshold.rest));
+            end
         end
         
         function startButtonCallback(obj, ~, ~)

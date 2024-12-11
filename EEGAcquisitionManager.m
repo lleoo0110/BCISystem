@@ -22,6 +22,7 @@ classdef EEGAcquisitionManager < handle
         svmclassifier
         results
         normParams
+        optimalThreshold
         
         % 状態管理
         isRunning
@@ -599,9 +600,22 @@ classdef EEGAcquisitionManager < handle
             try
                 % オンライン処理用の学習済みCSP読み込み
                 if obj.params.feature.csp.enable && obj.params.classifier.svm.enable
-                    loadedData = DataLoading.loadDataBrowserWithPrompt('csp');
+                    loadedData = DataLoading.loadDataBrowserWithPrompt('classifier');
                     obj.cspfilters = loadedData.cspFilters;
                     obj.svmclassifier = loadedData.svmClassifier;
+
+                    % 最適閾値情報の読み込み
+                    if obj.params.classifier.svm.threshold.useOptimal && ...
+                       isfield(loadedData, 'results') && ...
+                       isfield(loadedData.results, 'performance') && ...
+                       isfield(loadedData.results.performance, 'optimalThreshold')
+                        obj.optimalThreshold = loadedData.results.performance.optimalThreshold;
+                        fprintf('Loaded optimal threshold: %.3f\n', obj.optimalThreshold);
+                    else
+                        % デフォルトの安静状態閾値を使用
+                        obj.optimalThreshold = obj.params.classifier.svm.threshold.rest;
+                        fprintf('Using default threshold: %.3f\n', obj.optimalThreshold);
+                    end
                 end
                 
                 % ベースラインデータ読み込み
@@ -864,11 +878,6 @@ classdef EEGAcquisitionManager < handle
                     % 感情状態の分類を実行
                     [emotionState, coordinates] = obj.powerExtractor.classifyEmotion(preprocessedSegment);
 
-                    % デバッグ出力
-                    fprintf('Available emotion labels: ');
-                    disp(obj.params.feature.emotion.labels.states{1});
-                    fprintf('Current emotion state: %s\n', emotionState);
-
                     % emotionStateがセル配列の場合は文字列に変換
                     if iscell(emotionState)
                         emotionState = emotionState{1};
@@ -895,10 +904,10 @@ classdef EEGAcquisitionManager < handle
 
                     % UDPで4次元座標を送信
                     try
-                        obj.udpManager.sendTrigger(emotionCoords);
-                        fprintf('UDP sent: Emotion=%s, Coordinates=[%.0f %.0f %.0f %.0f]\n', ...
-                            emotionState, emotionCoords(1), emotionCoords(2), ...
-                            emotionCoords(3), emotionCoords(4));
+%                         obj.udpManager.sendTrigger(emotionCoords);    % UDP送信用のプログラムを下に追加
+%                         fprintf('UDP sent: Emotion=%s, Coordinates=[%.0f %.0f %.0f %.0f]\n', ...
+%                             emotionState, emotionCoords(1), emotionCoords(2), ...
+%                             emotionCoords(3), emotionCoords(4));
                     catch ME
                         warning(ME.identifier, '%s', ME.message);
                     end
@@ -912,8 +921,17 @@ classdef EEGAcquisitionManager < handle
 
                 % SVM特徴分類
                 if obj.params.classifier.svm.enable && ~isempty(currentFeatures)
+                    % 閾値の取得（優先順位：最適閾値 > 手動設定閾値 > デフォルト値）
+                    if obj.params.classifier.svm.threshold.useOptimal && ...
+                       ~isempty(obj.params.classifier.svm.threshold.optimal)
+                        threshold = obj.params.classifier.svm.threshold.optimal;
+                    else
+                        threshold = obj.params.classifier.svm.threshold.rest;
+                    end
+
+                    % 分類の実行
                     [label, score] = obj.classifier.predictOnline(...
-                        currentFeatures, obj.svmclassifier);
+                        currentFeatures, obj.svmclassifier, threshold);
 
                     % 結果の保存
                     currentTime = toc(obj.processingTimer)*1000;
@@ -932,9 +950,11 @@ classdef EEGAcquisitionManager < handle
                 
                 % UDP送信（FAA値と覚醒状態の送信）
                 % 後に構造体で送信できるようにして計算した結果を全て送る（今は手動で選択）
-                udpData = [100 0 0 0];
+                % udpData = emotionCoords;    % 感情分類
+                udpData = label;
                 obj.udpManager.sendTrigger(udpData);
-                fprintf('UDP sent: EmotionState=%f \n', udpData);   
+                fprintf('Label=%f \n', label); 
+                fprintf('Score=%f \n', score); 
 
             catch ME
                 warning(ME.identifier, 'Error in processOnline: %s\n', ME.message);
@@ -1000,7 +1020,9 @@ classdef EEGAcquisitionManager < handle
                     case 'filter range'
                         obj.params.signal.filter.fir.frequency = value;
                     case 'threshold'
-                        obj.params.classifier.svm.threshold = value;
+                        obj.params.classifier.svm.threshold.rest = value;
+                        obj.optimalThreshold = value;  % オンライン処理用の閾値も更新
+                        fprintf('Threshold updated: %.3f\n', value);
                 end
                 
                 % 必要に応じて処理パイプラインの再設定
@@ -1012,7 +1034,7 @@ classdef EEGAcquisitionManager < handle
             end
         end
         
-        function coords = getEmotionCoordinates(obj, emotionState)
+        function coords = getEmotionCoordinates(~, emotionState)
             % 感情状態を4次元座標に変換するメソッド
             % 座標は [快活性, 快不活性, 不快不活性, 不快活性] を表す
             emotionMap = containers.Map(...

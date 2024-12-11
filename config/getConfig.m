@@ -234,7 +234,7 @@ function params = getConfig(deviceType, varargin)
             'enable', false ...      % ERD特徴量の有効/無効
         ), ...
         'csp', struct(...            % 共通空間パターンの設定
-            'enable', false, ...     % CSP特徴量の有効/無効
+            'enable', true, ...     % CSP特徴量の有効/無効
             'storageType', 'array', ... % データ保存形式：'array'または'cell'
             'patterns', 7, ...       % 使用するパターン数：全チャンネル数以下
             'regularization', 0.05 ... % 正則化パラメータ：0.01-0.1程度
@@ -245,10 +245,16 @@ function params = getConfig(deviceType, varargin)
     classifier_params = struct(...
         'svm', struct(...            % SVMの設定
             'enable', true, ...     % SVM分類器の有効/無効
-            'type', 'ecoc', ...       % 分類器タイプ：'svm' or ecoc
+            'type', 'svm', ...       % 分類器タイプ：'svm' or ecoc
             'kernel', 'rbf', ...     % カーネル関数：'rbf','linear','polynomial'等
             'optimize', true, ...    % ハイパーパラメータ最適化：trueを推奨
             'probability', true, ... % 確率推定の有効/無効：trueを推奨
+            'threshold', struct(...  % 閾値関連の設定を集約
+                'rest', 0.5, ...     % デフォルトの安静状態閾値
+                'useOptimal', true, ...  % 最適閾値を使用するかどうか
+                'optimal', [], ...    % クロスバリデーションで得られる最適閾値
+                'range', [0.1:0.05:0.9] ...  % 閾値探索の範囲
+            ), ...
             'hyperparameters', struct(... % ハイパーパラメータ設定
                 'optimizer', 'gridsearch', ... % 最適化手法：'gridsearch'または'bayesian'
                 'boxConstraint', [0.1, 1, 10, 100], ... % Cパラメータの探索範囲

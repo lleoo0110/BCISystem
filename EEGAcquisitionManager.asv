@@ -22,6 +22,7 @@ classdef EEGAcquisitionManager < handle
         svmclassifier
         results
         normParams
+        optimalThreshold
         
         % 状態管理
         isRunning
@@ -63,7 +64,7 @@ classdef EEGAcquisitionManager < handle
             obj.setupTimers();
             
             % 結果保存用構造体の初期化を追加
-            obj.results = struct('predict', [], 'power', [], 'faa', [], 'erd', []);
+            obj.results = struct('predict', [], 'power', [], 'faa', [], 'erd', [], 'emotion', []);
             
             % 保存ディレクトリの作成
             if ~exist(params.acquisition.save.path, 'dir')
@@ -599,9 +600,22 @@ classdef EEGAcquisitionManager < handle
             try
                 % オンライン処理用の学習済みCSP読み込み
                 if obj.params.feature.csp.enable && obj.params.classifier.svm.enable
-                    loadedData = DataLoading.loadDataBrowserWithPrompt('csp');
+                    loadedData = DataLoading.loadDataBrowserWithPrompt('classifier');
                     obj.cspfilters = loadedData.cspFilters;
                     obj.svmclassifier = loadedData.svmClassifier;
+
+                    % 最適閾値情報の読み込み
+                    if obj.params.classifier.svm.threshold.useOptimal && ...
+                       isfield(loadedData, 'results') && ...
+                       isfield(loadedData.results, 'performance') && ...
+                       isfield(loadedData.results.performance, 'optimalThreshold')
+                        obj.optimalThreshold = loadedData.results.performance.optimalThreshold;
+                        fprintf('Loaded optimal threshold: %.3f\n', obj.optimalThreshold);
+                    else
+                        % デフォルトの安静状態閾値を使用
+                        obj.optimalThreshold = obj.params.classifier.svm.threshold.rest;
+                        fprintf('Using default threshold: %.3f\n', obj.optimalThreshold);
+                    end
                 end
                 
                 % ベースラインデータ読み込み
@@ -764,25 +778,25 @@ classdef EEGAcquisitionManager < handle
                 faaValue = [];
                 arousalState = '';
                 bandPowers = struct();  % パワー値格納用の構造体を追加
-                
+
                 % timeとsampleの記録
                 currentTime = toc(obj.processingTimer)*1000;
                 obj.currentTotalSamples = obj.totalSampleCount + size(obj.rawData, 2);
-                
+
                 % 前処理
                 if obj.params.signal.enable && ~isempty(obj.dataBuffer)
                     preprocessedBuffer = obj.signalProcessor.preprocess(obj.dataBuffer);
-                    
+
                     % 正規化処理
                     if obj.params.signal.normalize.enabled
                         preprocessedBuffer = obj.signalProcessor.normalizeOnline(preprocessedBuffer, obj.normParams);
                     end
-                    
+
                     endIdx = size(preprocessedBuffer, 2);
                     startIdx = endIdx - obj.processingWindow + 1;
                     preprocessedSegment = preprocessedBuffer(:, startIdx:endIdx);
                 end
-                
+
                 % パワー値計算
                 if obj.params.feature.power.enable && ~isempty(preprocessedSegment)
                     % パワー値の計算
@@ -790,7 +804,7 @@ classdef EEGAcquisitionManager < handle
                     if iscell(bandNames{1})
                         bandNames = bandNames{1};
                     end
-                    
+
                     % 各周波数帯のパワー値を計算
                     for i = 1:length(bandNames)
                         bandName = bandNames{i};
@@ -798,7 +812,7 @@ classdef EEGAcquisitionManager < handle
                         bandPower = obj.powerExtractor.calculatePower(preprocessedSegment, freqRange);
                         bandPowers.(bandName) = bandPower;
                     end
-                    
+
                     % パワー値の結果を保存
                     newPowerResult = struct(...
                         'bands', bandPowers, ...
@@ -810,15 +824,13 @@ classdef EEGAcquisitionManager < handle
                     else
                         obj.results.power(end+1) = newPowerResult;
                     end
-                else
-                    % fprintf('Power analysis is disabled or no data available\n');
                 end
-                
+
                 % FAA計算と保存
                 if obj.params.feature.faa.enable && ~isempty(preprocessedSegment)
                     [faaValue, arousalState] = obj.powerExtractor.calculateFAA(preprocessedSegment);
                     fprintf('FAA Value: %.4f, Arousal State: %s\n', faaValue, arousalState);
-                    
+
                     % FAA値の結果を保存
                     newFAAResult = struct(...
                         'faa', faaValue, ...
@@ -831,14 +843,12 @@ classdef EEGAcquisitionManager < handle
                     else
                         obj.results.faa(end+1) = newFAAResult;
                     end
-                else
-                    % fprintf('FAA analysis is disabled or no data available\n');
                 end
-                
+
                 % ERD計算と保存
                 if obj.params.feature.erd.enable && ~isempty(preprocessedSegment)
                     [erdValues, erdPercent] = obj.powerExtractor.calculateERD(preprocessedSegment);
-                    
+
                     % ERD値の結果表示（構造体のフィールドごとに処理）
                     bandNames = fieldnames(erdValues);
                     for i = 1:length(bandNames)
@@ -848,7 +858,7 @@ classdef EEGAcquisitionManager < handle
                             mean(erdPercent.(bandName)), ...
                             mean(erdValues.(bandName)));
                     end
-                    
+
                     % ERD値の結果を保存
                     newERDResult = struct(...
                         'values', erdValues, ...
@@ -856,54 +866,73 @@ classdef EEGAcquisitionManager < handle
                         'time', currentTime, ...
                         'sample', obj.currentTotalSamples ...
                     );
-                    
+
                     if isempty(obj.results.erd)
                         obj.results.erd = newERDResult;
                     else
                         obj.results.erd(end+1) = newERDResult;
                     end
-                else
-                    % fprintf('ERD analysis is disabled or no data available\n');
                 end
-                
-                % 感情分類
-                if obj.params.feature.power.enable && ~isempty(preprocessedSegment)
+
+                if obj.params.feature.emotion.enable && ~isempty(preprocessedSegment)
                     % 感情状態の分類を実行
                     [emotionState, coordinates] = obj.powerExtractor.classifyEmotion(preprocessedSegment);
+
+                    % デバッグ出力
+                    fprintf('Available emotion labels: ');
+                    disp(obj.params.feature.emotion.labels.states{1});
+                    fprintf('Current emotion state: %s\n', emotionState);
+
+                    % emotionStateがセル配列の場合は文字列に変換
+                    if iscell(emotionState)
+                        emotionState = emotionState{1};
+                    end
+
+                    % 感情状態を4次元座標に変換（objを使用してメソッドを呼び出し）
+                    emotionCoords = obj.getEmotionCoordinates(emotionState);
 
                     % 結果の保存用構造体を作成
                     newEmotionResult = struct(...
                         'state', emotionState, ...
                         'coordinates', coordinates, ...
+                        'emotionCoords', emotionCoords, ...  % 4次元座標を追加
                         'time', currentTime, ...
                         'sample', obj.currentTotalSamples ...
                     );
 
-                    % results構造体に感情分類結果のフィールドがない場合は作成
-                    if ~isfield(obj.results, 'emotion')
+                    % results構造体に感情分類結果を保存
+                    if isempty(obj.results.emotion)
                         obj.results.emotion = newEmotionResult;
                     else
                         obj.results.emotion(end+1) = newEmotionResult;
                     end
 
-                    % 結果の出力
-                    fprintf('Emotion Classification Result:\n');
-                    fprintf('State: %s\n', emotionState);
-                    fprintf('Valence: %.2f, Arousal: %.2f\n', ...
-                            coordinates.valence, coordinates.arousal);
+                    % UDPで4次元座標を送信
+                    try
+                        % obj.udpManager.sendTrigger(emotionCoords);    % UDP送信用のプログラムを下に追加
+                        fprintf('UDP sent: Emotion=%s, Coordinates=[%.0f %.0f %.0f %.0f]\n', ...
+                            emotionState, emotionCoords(1), emotionCoords(2), ...
+                            emotionCoords(3), emotionCoords(4));
+                    catch ME
+                        warning(ME.identifier, '%s', ME.message);
+                    end
                 end
-                
+
                 % CSP特徴抽出
                 if obj.params.feature.csp.enable && ~isempty(preprocessedSegment)
                     currentFeatures = obj.featureExtractor.extractFeatures(...
                         preprocessedSegment, obj.cspfilters);
                 end
-                
+
                 % SVM特徴分類
                 if obj.params.classifier.svm.enable && ~isempty(currentFeatures)
+                    % 閾値の取得
+                    threshold = obj.optimalThreshold;
+
+                    % 分類の実行（閾値を引数として渡す）
                     [label, score] = obj.classifier.predictOnline(...
-                        currentFeatures, obj.svmclassifier);
-                    
+                        currentFeatures, obj.svmclassifier, threshold);
+
                     % 結果の保存
                     currentTime = toc(obj.processingTimer)*1000;
                     newPredictResult = struct(...
@@ -911,7 +940,7 @@ classdef EEGAcquisitionManager < handle
                         'score', score, ...
                         'time', currentTime ...
                     );
-                    
+
                     if isempty(obj.results.predict)
                         obj.results.predict = newPredictResult;
                     else
@@ -921,10 +950,12 @@ classdef EEGAcquisitionManager < handle
                 
                 % UDP送信（FAA値と覚醒状態の送信）
                 % 後に構造体で送信できるようにして計算した結果を全て送る（今は手動で選択）
+                % udpData = emotionCoords;    % 感情分類
                 udpData = label;
                 obj.udpManager.sendTrigger(udpData);
-                fprintf('UDP sent: faaValue=%f \n', udpData);
-                
+                fprintf('threshold： \n', udpData);   
+                fprintf('UDP sent: EmotionState=%f \n', udpData);   
+
             catch ME
                 warning(ME.identifier, 'Error in processOnline: %s\n', ME.message);
                 fprintf('Error stack:\n');
@@ -1000,6 +1031,23 @@ classdef EEGAcquisitionManager < handle
                 obj.guiController.showError('Parameter Update Error', ME.message);
             end
         end
+        
+        function coords = getEmotionCoordinates(obj, emotionState)
+            % 感情状態を4次元座標に変換するメソッド
+            % 座標は [快活性, 快不活性, 不快不活性, 不快活性] を表す
+            emotionMap = containers.Map(...
+                {'安静', '興奮', '喜び', '快適', 'リラックス', '眠気', '憂鬱', '不快', '緊張'}, ...
+                {[0 0 0 0], [100 0 0 100], [100 0 0 0], [100 100 0 0], ...
+                 [0 100 0 0], [0 100 100 0], [0 0 100 0], [0 0 100 100], [0 0 0 100]});
+            
+            if emotionMap.isKey(emotionState)
+                coords = emotionMap(emotionState);
+            else
+                coords = [0 0 0 0];  % デフォルト値（安静状態）
+                warning('Emotion state "%s" not found. Using default coordinates.', emotionState);
+            end
+        end
+
         
         function displaySavedDataSummary(~, saveData)
             fprintf('\nSaved Data Summary:\n');
