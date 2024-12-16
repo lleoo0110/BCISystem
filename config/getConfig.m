@@ -13,7 +13,7 @@ function params = getConfig(deviceType, varargin)
     
     %% === 保存&読み込みパラメータ ===
     acquisition_params = struct(...
-        'mode', 'online', ...       % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
+        'mode', 'offline', ...       % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
         'save', struct(...
             'enable', true, ...     % データ保存の有効/無効
             'name', 'test', ...     % 保存時のファイル名プレフィックス
@@ -76,8 +76,8 @@ function params = getConfig(deviceType, varargin)
     %% === UDP設定パラメータ ===
     % トリガーのマッピング設定（ラベルと数値の対応付け）
     trigger_mappings = {
-        '安静', 1;        % 第1列：ラベル文字列，第2列：対応する数値
-        '炎魔法', 2;       % 必要に応じて行を追加可能
+        '安静', 1;         % クラス1：安静状態（基準状態）
+        '炎魔法', 2;       % クラス2：タスク状態，必要に応じて追加可能
     };
 
     % マッピング構造体の動的生成（通常は変更不要）
@@ -117,14 +117,15 @@ function params = getConfig(deviceType, varargin)
         'enable', true, ...           % 信号処理の有効/無効：通常はtrue
         'window', struct(...          % 解析窓の設定
             'analysis', 2.0, ...      % 解析窓の長さ（秒）：ERDは2.0秒，MIは1.0秒程度
-            'stimulus', 5.0, ...      % 刺激提示時間（秒）：実験プロトコルに合わせて設定
+            'stimulus', 5, ...      % 刺激提示時間（秒）：実験プロトコルに合わせて設定
             'bufferSize', 15, ...     % データバッファのサイズ（秒）：メモリ使用量に影響
             'updateBuffer', 0.5, ...    % バッファの更新間隔（秒）：小さいほど処理負荷増
             'step', [], ...           % 解析窓のシフト幅：自動計算（変更不要）
             'updateInterval', [] ...  % 更新間隔：自動計算（変更不要）
         ), ...
         'epoch', struct(...           % エポック分割の設定
-            'storageType', 'array', ... % データ形式：'array'または'cell'を選択
+            'storageType', 'cell', ... % データ形式：'array'または'cell'を選択
+            'method', 'time', ...         % エポック化方法：'time'または'odd-even'（注意：welch.windowLengthよりも小さいエポックはエラーが出る）
             'overlap', 0.25, ...      % オーバーラップ率：0-1の値（0.25推奨）
             'baseline', [] ...        % ベースライン期間：自動設定（変更不要）
         ), ...
@@ -137,7 +138,7 @@ function params = getConfig(deviceType, varargin)
         'normalize', struct(...       % 正規化の設定
             'enabled', true, ...      % 正規化の有効/無効：計測データ全体に対して正規化
             'type', 'all', ...        % 正規化の種類：'all'（全体）or 'epoch'（エポックごと）
-            'method', 'robust' ...    % 正規化方法：'zscore'，'minmax'，'robust'から選択
+            'method', 'zscore' ...    % 正規化方法：'zscore'，'minmax'，'robust'から選択
         ), ...
         'frequency', struct(...       % 周波数解析の設定
             'min', 1, ...             % 解析する最小周波数（Hz）：通常1Hz
@@ -245,7 +246,7 @@ function params = getConfig(deviceType, varargin)
     classifier_params = struct(...
         'svm', struct(...            % SVMの設定
             'enable', true, ...     % SVM分類器の有効/無効
-            'type', 'svm', ...       % 分類器タイプ：'svm' or ecoc
+            'type', 'ecoc', ...       % 分類器タイプ：'svm' or ecoc
             'kernel', 'rbf', ...     % カーネル関数：'rbf','linear','polynomial'等
             'optimize', true, ...    % ハイパーパラメータ最適化：trueを推奨
             'probability', true, ... % 確率推定の有効/無効：trueを推奨

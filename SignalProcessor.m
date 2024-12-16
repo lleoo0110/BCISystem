@@ -234,39 +234,179 @@ classdef SignalProcessor < handle
                 obj.epochLabels = [];
                 return;
             end
-            
-            nTrials = size(labels, 2);
-            analysisWindow = obj.params.signal.window.analysis;
-            stimulusWindow = obj.params.signal.window.stimulus;
-            overlapRatio = obj.params.signal.epoch.overlap;
-            
-            fs = obj.params.device.sampleRate;
-            nChannels = size(obj.preprocessedData, 1);
-            samplesPerEpoch = round(fs * analysisWindow);
-            
-            stepSize = analysisWindow * (1 - overlapRatio);
-            nSteps = floor((stimulusWindow - analysisWindow) / stepSize) + 1;
-            
-            % エポック化の方法を選択
-            if strcmpi(obj.params.signal.epoch.storageType, 'cell')
-                obj.epochingCell(nTrials, nSteps, fs, samplesPerEpoch, stepSize, labels);
-            else
-                obj.epochingArray(nTrials, nSteps, nChannels, fs, samplesPerEpoch, stepSize, labels);
+
+            % エポック化方法の取得
+            epochMethod = obj.params.signal.epoch.method;
+
+            switch lower(epochMethod)
+                case 'time'
+                    % 従来の時間窓ベースのエポック化
+                    obj.epochingByTime(labels);
+                case 'odd-even'
+                    % 奇数-偶数ペアによるエポック化
+                    obj.epochingByOddEven(labels);
+                otherwise
+                    error('Unknown epoching method: %s', epochMethod);
             end
-            
+
             % エポック化情報の記録
-            obj.processingInfo.epoching = struct(...
-                'numTrials', nTrials, ...
-                'analysisWindow', analysisWindow, ...
-                'stimulusWindow', stimulusWindow, ...
-                'overlapRatio', overlapRatio, ...
-                'samplesPerEpoch', samplesPerEpoch, ...
-                'stepSize', stepSize, ...
-                'nSteps', nSteps);
-            
+            obj.processingInfo.epoching.method = epochMethod;
             obj.processingInfo.processingOrder{end+1} = 'epoching';
         end
-        
+
+        function epochingByOddEven(obj, labels)
+            % ラベルの数を確認
+            nLabels = length(labels);
+            if mod(nLabels, 2) ~= 0
+                warning('Odd number of labels. Last label will be ignored.');
+                nLabels = nLabels - 1;
+            end
+
+            % ペア数の計算
+            nPairs = floor(nLabels / 2);
+
+            % エポックの保存形式に基づいて初期化
+            if strcmpi(obj.params.signal.epoch.storageType, 'cell')
+                obj.epochs = cell(nPairs, 1);
+                obj.epochLabels = zeros(nPairs, 1);
+            else
+                % サンプル数の計算（開始点から終点までの全サンプル）
+                firstStart = labels(1).sample;
+                lastEnd = labels(2).sample;
+                samplesPerEpoch = lastEnd - firstStart + 1;
+
+                obj.epochs = zeros(size(obj.preprocessedData, 1), samplesPerEpoch, nPairs);
+                obj.epochLabels = zeros(nPairs, 1);
+            end
+
+            % ペアごとにエポックを作成
+            for pair = 1:nPairs
+                % インデックスの計算
+                oddIdx = 2*pair - 1;  % 奇数インデックス
+                evenIdx = 2*pair;     % 偶数インデックス
+
+                % 開始点と終点の取得
+                startSample = labels(oddIdx).sample;
+                endSample = labels(evenIdx).sample;
+
+                % エポックデータの抽出
+                epochData = obj.preprocessedData(:, startSample:endSample);
+
+                % 保存形式に応じてデータを格納
+                if strcmpi(obj.params.signal.epoch.storageType, 'cell')
+                    obj.epochs{pair} = epochData;
+                else
+                    obj.epochs(:, :, pair) = epochData;
+                end
+
+                % ラベルの設定（奇数点のラベルを使用）
+                obj.epochLabels(pair) = labels(oddIdx).value;
+            end
+
+            % 処理情報の更新
+            obj.processingInfo.epoching.numPairs = nPairs;
+            obj.processingInfo.epoching.pairIndices = reshape(1:nLabels, 2, [])';
+        end
+
+        function epochingByTime(obj, labels)
+            % 時間窓ベースのエポック化処理
+            try
+                % パラメータの取得
+                analysisWindow = obj.params.signal.window.analysis;  % 解析窓の長さ（秒）
+                stimulusWindow = obj.params.signal.window.stimulus;  % 刺激提示時間（秒）
+                overlapRatio = obj.params.signal.epoch.overlap;      % オーバーラップ率
+                fs = obj.params.device.sampleRate;                   % サンプリングレート
+
+                % サンプル数の計算
+                samplesPerEpoch = round(fs * analysisWindow);        % エポックあたりのサンプル数
+                stepSize = round(analysisWindow * (1 - overlapRatio) * fs);  % スライド幅
+
+                % 1トリガーあたりのステップ数を計算
+                nSteps = floor((stimulusWindow - analysisWindow) / (analysisWindow * (1 - overlapRatio))) + 1;
+
+                % 総エポック数の計算
+                nTrials = length(labels);
+                totalEpochs = nTrials * nSteps;
+
+                % データとラベルの初期化
+                if strcmpi(obj.params.signal.epoch.storageType, 'cell')
+                    obj.epochs = cell(totalEpochs, 1);
+                    obj.epochLabels = zeros(totalEpochs, 1);
+
+                    % エポックの作成（セル配列形式）
+                    epochIndex = 1;
+                    for trial = 1:nTrials
+                        startSample = labels(trial).sample;
+
+                        for step = 1:nSteps
+                            % 開始・終了サンプルの計算
+                            epochStartSample = startSample + (step-1) * stepSize;
+                            epochEndSample = epochStartSample + samplesPerEpoch - 1;
+
+                            % データ範囲の確認
+                            if epochEndSample <= size(obj.preprocessedData, 2)
+                                % エポックの抽出と保存
+                                obj.epochs{epochIndex} = obj.preprocessedData(:, epochStartSample:epochEndSample);
+                                obj.epochLabels(epochIndex) = labels(trial).value;
+                                epochIndex = epochIndex + 1;
+                            end
+                        end
+                    end
+
+                    % 未使用のセルを削除
+                    if epochIndex <= totalEpochs
+                        obj.epochs = obj.epochs(1:epochIndex-1);
+                        obj.epochLabels = obj.epochLabels(1:epochIndex-1);
+                    end
+
+                else
+                    % 配列形式での初期化
+                    obj.epochs = zeros(size(obj.preprocessedData, 1), samplesPerEpoch, totalEpochs);
+                    obj.epochLabels = zeros(totalEpochs, 1);
+
+                    % エポックの作成（配列形式）
+                    epochIndex = 1;
+                    for trial = 1:nTrials
+                        startSample = labels(trial).sample;
+
+                        for step = 1:nSteps
+                            % 開始・終了サンプルの計算
+                            epochStartSample = startSample + (step-1) * stepSize;
+                            epochEndSample = epochStartSample + samplesPerEpoch - 1;
+
+                            % データ範囲の確認
+                            if epochEndSample <= size(obj.preprocessedData, 2)
+                                % エポックの抽出と保存
+                                obj.epochs(:, :, epochIndex) = obj.preprocessedData(:, epochStartSample:epochEndSample);
+                                obj.epochLabels(epochIndex) = labels(trial).value;
+                                epochIndex = epochIndex + 1;
+                            end
+                        end
+                    end
+
+                    % 未使用の配列部分を削除
+                    if epochIndex <= totalEpochs
+                        obj.epochs = obj.epochs(:, :, 1:epochIndex-1);
+                        obj.epochLabels = obj.epochLabels(1:epochIndex-1);
+                    end
+                end
+
+                % 処理情報の更新
+                obj.processingInfo.epoching = struct(...
+                    'analysisWindow', analysisWindow, ...
+                    'stimulusWindow', stimulusWindow, ...
+                    'overlapRatio', overlapRatio, ...
+                    'samplesPerEpoch', samplesPerEpoch, ...
+                    'stepSize', stepSize, ...
+                    'nSteps', nSteps, ...
+                    'totalEpochs', epochIndex - 1, ...
+                    'storageType', obj.params.signal.epoch.storageType);
+
+            catch ME
+                error('Time-based epoching failed: %s', ME.message);
+            end
+        end
+
         function epochingCell(obj, nTrials, nSteps, fs, samplesPerEpoch, stepSize, labels)
             obj.epochs = cell(nTrials * nSteps, 1);
             obj.epochLabels = zeros(nTrials * nSteps, 1);

@@ -2,6 +2,7 @@
 % params = getConfig('epocx');
 % params = getConfig('epocx', 'preset', 'magic_offline');
 % params = getConfig('epocx', 'preset', 'magic_online');
+% params = getConfig('epocx', 'preset', 'ddaExperiment');
 
 % 全初期化：clc; clear all; close all; instrreset;
 % コマンドクリア：clc
@@ -16,8 +17,8 @@ setupPaths(currentDir);
 
 
 %%  指定のパラメータで実行
-params = getConfig('epocx', 'preset', 'magic_online');
-manager = EEGAcquisitionManager(params);
+params = getConfig('epocx', 'preset', 'ddaExperiment');
+manager = EEGAcquisitionManager(params);        % データ計測
 
 
 %% パス設定補助関数

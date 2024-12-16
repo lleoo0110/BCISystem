@@ -90,8 +90,16 @@ classdef CSPFeatureExtractor < handle
             end
 
             try
-                % データの次元を確認
-                [nChannels, nSamples, nTrials] = size(data);
+                % データ形式に応じて処理を分岐
+                if iscell(data)
+                    % セル配列の場合
+                    nTrials = length(data);
+                    % 最初のデータから次元を取得
+                    [nChannels, nSamples] = size(data{1});
+                else
+                    % 3次元配列の場合
+                    [nChannels, nSamples, nTrials] = size(data);
+                end
 
                 % CSPフィルタの検証と数の取得
                 if strcmp(obj.storageType, 'array')
@@ -102,12 +110,22 @@ classdef CSPFeatureExtractor < handle
                     numPairs = length(cspfilters);
                 end
 
-                % 各試行に対して特徴抽出を実行
+                % 特徴量の初期化
                 features = zeros(nTrials, numPairs * obj.numPatterns * 2);
-                for trial = 1:nTrials
-                    % 現在の試行のデータを取得（2次元配列として）
-                    trialData = data(:, :, trial);  % [channels × samples]
-                    features(trial, :) = extractSingleTrial(obj, trialData, cspfilters, numPairs);
+
+                % データ形式に応じて特徴抽出
+                if iscell(data)
+                    % セル配列の場合
+                    for trial = 1:nTrials
+                        trialData = data{trial};
+                        features(trial, :) = extractSingleTrial(obj, trialData, cspfilters, numPairs);
+                    end
+                else
+                    % 3次元配列の場合
+                    for trial = 1:nTrials
+                        trialData = data(:, :, trial);
+                        features(trial, :) = extractSingleTrial(obj, trialData, cspfilters, numPairs);
+                    end
                 end
 
             catch ME

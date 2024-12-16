@@ -115,23 +115,23 @@ classdef EEGAcquisitionManager < handle
                 currentParams = obj.params;
                 currentParams.acquisition.mode = mode;  % 新しいモードを設定
                 obj.isOnlineMode = strcmpi(mode, 'online');  % モードフラグを更新
-
+                
                 % GUIを閉じる
                 if ~isempty(obj.guiController)
                     obj.guiController.closeAllWindows();
                 end
-
+                
                 % タイマーの停止
                 if ~isempty(obj.acquisitionTimer) && isvalid(obj.acquisitionTimer)
                     stop(obj.acquisitionTimer);
                 end
-
+                
                 % 全てのリソースを解放
                 delete(obj);
-
+                
                 % システムの再初期化前に待機
                 pause(0.5);
-
+                
                 % 新しいインスタンスを作成（新しいモードで初期化）
                 EEGAcquisitionManager(currentParams);
             else
@@ -139,7 +139,7 @@ classdef EEGAcquisitionManager < handle
                 warning('Cannot change mode while recording is in progress.');
             end
         end
-          
+        
         function start(obj)
             if ~obj.isRunning
                 obj.isRunning = true;
@@ -157,7 +157,7 @@ classdef EEGAcquisitionManager < handle
                 
                 obj.guiController.updateStatus('Recording');
                 start(obj.acquisitionTimer);
- 
+                
             end
         end
         
@@ -235,7 +235,7 @@ classdef EEGAcquisitionManager < handle
                                 obj.labels = [obj.labels; trigger];
                             end
                         end
-
+                        
                         % 一時保存の確認
                         if toc(obj.lastSaveTime) >= obj.params.acquisition.save.saveInterval
                             obj.totalSampleCount = obj.totalSampleCount + size(obj.rawData, 2);
@@ -366,43 +366,93 @@ classdef EEGAcquisitionManager < handle
         
         function executeDataProcessing(obj)
             try
+                % 時間とサンプル数の記録
+                currentTime = toc(obj.processingTimer)*1000;
+                obj.currentTotalSamples = obj.totalSampleCount + size(obj.rawData, 2);
+                
                 % 信号処理の実行
                 if obj.params.signal.enable && ~isempty(obj.rawData)
                     [obj.processedData, obj.processedLabel, obj.processingInfo] = ...
                         obj.signalProcessor.process(obj.rawData, obj.labels);
-                    % 処理済みデータが生成されたら即座に保存
-                    if ~isempty(obj.processedData)
-                        obj.mergeAndSaveData();
-                        fprintf('Processed data and previous data saved\n');
-                    end
-                end
-                
-                % 処理済みデータの確認
-                if ~isempty(obj.processedData)
-                    fprintf('Processed data size: [%s], Labels: %d\n', ...
-                        num2str(size(obj.processedData)), length(obj.processedLabel));
-                end
-                
-                % 特徴抽出（CSP）の実行
-                if obj.params.feature.csp.enable && ~isempty(obj.processedData) && ~isempty(obj.processedLabel)
-                    obj.cspfilters = obj.featureExtractor.trainCSP(obj.processedData, obj.processedLabel);
-                    obj.cspfeatures = obj.featureExtractor.extractFeatures(obj.processedData, obj.cspfilters);
                     
-                    if ~isempty(obj.cspfeatures)
-                        obj.mergeAndSaveData();
-                        fprintf('CSP Features and previous data saved\n');
+                    % パワー値の計算と保存
+                    if obj.params.feature.power.enable && ~isempty(obj.processedData)
+                        allPowers = obj.powerExtractor.calculatePowerForAllBands(obj.processedData);
+                        
+                        % 時間情報とサンプル数を追加
+                        for i = 1:length(allPowers)
+                            allPowers{i}.time = currentTime;
+                            allPowers{i}.sample = obj.currentTotalSamples;
+                        end
+                        
+                        obj.results.power = allPowers;
                     end
-                end
-                
-                % 分類器の学習
-                if obj.params.classifier.svm.enable && ~isempty(obj.cspfeatures)
-                    obj.results = obj.classifier.trainOffline(obj.cspfeatures, obj.processedLabel);
-                    obj.svmclassifier = obj.results.classifier;
                     
-                    if ~isempty(obj.svmclassifier)
-                        obj.mergeAndSaveData();
-                        fprintf('Classifier training completed and data saved\n');
+                    % FAA計算と保存
+                    if obj.params.feature.faa.enable && ~isempty(obj.processedData)
+                        faaResults = obj.powerExtractor.calculateFAA(obj.processedData);
+                        
+                        % 時間情報とサンプル数を追加
+                        for i = 1:length(faaResults)
+                            faaResults{i}.time = currentTime;
+                            faaResults{i}.sample = obj.currentTotalSamples;
+                        end
+                        
+                        obj.results.faa = faaResults;
                     end
+                    
+                    % ERD計算と保存
+                    if obj.params.feature.erd.enable && ~isempty(obj.processedData)
+                        erdResults = obj.powerExtractor.calculateERD(obj.processedData);
+                        
+                        % 時間情報とサンプル数を追加
+                        for i = 1:length(erdResults)
+                            erdResults{i}.time = currentTime;
+                            erdResults{i}.sample = obj.currentTotalSamples;
+                        end
+                        
+                        obj.results.erd = erdResults;
+                    end
+                    
+                    % 感情状態の分類と保存
+                    if obj.params.feature.emotion.enable && ~isempty(obj.processedData)
+                        emotionResults = obj.powerExtractor.classifyEmotion(obj.processedData);
+                        
+                        % 時間情報とサンプル数を追加
+                        for i = 1:length(emotionResults)
+                            emotionResults{i}.time = currentTime;
+                            emotionResults{i}.sample = obj.currentTotalSamples;
+                        end
+                        
+                        obj.results.emotion = emotionResults;
+                    end
+                    
+                    % CSP特徴抽出の実行
+                    if obj.params.feature.csp.enable && ~isempty(obj.processedData)
+                        obj.cspfilters = obj.featureExtractor.trainCSP(...
+                            obj.processedData, obj.processedLabel);
+                        obj.cspfeatures = obj.featureExtractor.extractFeatures(...
+                            obj.processedData, obj.cspfilters);
+                        
+                        if ~isempty(obj.cspfeatures)
+                            obj.mergeAndSaveData();
+                            fprintf('CSP Features and previous data saved\n');
+                        end
+                    end
+                    
+                    % 分類器の学習
+                    if obj.params.classifier.svm.enable && ~isempty(obj.cspfeatures)
+                        classifierResults = obj.classifier.trainOffline(...
+                            obj.cspfeatures, obj.processedLabel);
+                        obj.results.performance = classifierResults.performance;
+                        obj.svmclassifier = classifierResults.classifier;
+                        
+                        if ~isempty(obj.svmclassifier)
+                            obj.mergeAndSaveData();
+                            fprintf('Classifier training completed and data saved\n');
+                        end
+                    end
+                    
                 end
                 
             catch ME
@@ -528,7 +578,10 @@ classdef EEGAcquisitionManager < handle
                 % 保存データの構造体を直接作成
                 saveData = struct();
                 
+                % 基本パラメータの保存
                 saveData.params = obj.params;
+                
+                % 生データとラベルの保存
                 if ~isempty(mergedData)
                     saveData.rawData = mergedData;
                     saveData.labels = mergedLabels;
@@ -536,33 +589,56 @@ classdef EEGAcquisitionManager < handle
                     saveData.rawData = obj.rawData;
                     saveData.labels = obj.labels;
                 end
-
-                if ~obj.isOnlineMode
-                    % 処理済みデータがある場合は追加
-                    if ~isempty(obj.processedData)
-                        saveData.processedData = obj.processedData;
-                        saveData.processedLabel = obj.processedLabel;
-                        saveData.processingInfo = obj.processingInfo;
-                    end
-                    
-                    % CSPデータがある場合は追加
-                    if ~isempty(obj.cspfeatures)
-                        saveData.cspFilters = obj.cspfilters;
-                        saveData.cspFeatures = obj.cspfeatures;
-                    end
-                    
-                    % 分類器データがある場合は追加
-                    if ~isempty(obj.classifier) && ~isempty(obj.classifier.svmModel)
-                        saveData.svmClassifier = obj.svmclassifier;
-                        if ~isempty(obj.classifier.performance)
-                            saveData.results.performance = obj.results.performance;
-                        end
-                    end
-                else
-                    % オンライン処理の場合の保存
+                
+                % 処理済みデータの保存
+                if ~isempty(obj.processedData)
+                    saveData.processedData = obj.processedData;
+                    saveData.processedLabel = obj.processedLabel;
+                    saveData.processingInfo = obj.processingInfo;
+                end
+                
+                % CSPデータの保存
+                if ~isempty(obj.cspfeatures)
                     saveData.cspFilters = obj.cspfilters;
+                    saveData.cspFeatures = obj.cspfeatures;
+                end
+                
+                % 分類器データの保存
+                if ~isempty(obj.svmclassifier)
                     saveData.svmClassifier = obj.svmclassifier;
-                    saveData.results = obj.results;
+                end
+                
+                % 解析結果の保存
+                if ~isempty(obj.results)
+                    % パワー値の保存
+                    if isfield(obj.results, 'power')
+                        saveData.results.power = obj.results.power;
+                    end
+                    
+                    % FAA値の保存
+                    if isfield(obj.results, 'faa')
+                        saveData.results.faa = obj.results.faa;
+                    end
+                    
+                    % ERD値の保存
+                    if isfield(obj.results, 'erd')
+                        saveData.results.erd = obj.results.erd;
+                    end
+                    
+                    % 感情分類結果の保存
+                    if isfield(obj.results, 'emotion')
+                        saveData.results.emotion = obj.results.emotion;
+                    end
+                    
+                    % 分類性能の保存
+                    if isfield(obj.results, 'performance')
+                        saveData.results.performance = obj.results.performance;
+                    end
+                    
+                    % 予測結果の保存
+                    if isfield(obj.results, 'predict')
+                        saveData.results.predict = obj.results.predict;
+                    end
                 end
                 
                 % データの保存とパスの取得
@@ -571,6 +647,7 @@ classdef EEGAcquisitionManager < handle
                 
                 % 保存したデータの概要を表示
                 obj.displaySavedDataSummary(saveData);
+                
             catch ME
                 obj.guiController.showError('Save Error', ME.message);
                 fprintf('Error details: %s\n', ME.message);
@@ -603,12 +680,12 @@ classdef EEGAcquisitionManager < handle
                     loadedData = DataLoading.loadDataBrowserWithPrompt('classifier');
                     obj.cspfilters = loadedData.cspFilters;
                     obj.svmclassifier = loadedData.svmClassifier;
-
+                    
                     % 最適閾値情報の読み込み
                     if obj.params.classifier.svm.threshold.useOptimal && ...
-                       isfield(loadedData, 'results') && ...
-                       isfield(loadedData.results, 'performance') && ...
-                       isfield(loadedData.results.performance, 'optimalThreshold')
+                            isfield(loadedData, 'results') && ...
+                            isfield(loadedData.results, 'performance') && ...
+                            isfield(loadedData.results.performance, 'optimalThreshold')
                         obj.optimalThreshold = loadedData.results.performance.optimalThreshold;
                         fprintf('Loaded optimal threshold: %.3f\n', obj.optimalThreshold);
                     else
@@ -630,16 +707,16 @@ classdef EEGAcquisitionManager < handle
                 if obj.params.signal.normalize.enabled
                     % データ読み込みダイアログの表示
                     loadedNormalizedData = DataLoading.loadDataBrowserWithPrompt('normalization');
-
+                    
                     % 記録した正規化パラメータ情報を読み込む
                     obj.normParams = loadedNormalizedData.processingInfo.normalize.normParams;
-
+                    
                     % 正規化パラメータのチェック
                     obj.validateNormalizationParams(obj.normParams);
-
+                    
                     fprintf('正規化パラメータを初期化しました\n');
                     fprintf('正規化方法: %s\n', obj.params.signal.normalize.method);
-
+                    
                     % 正規化パラメータの情報を表示
                     obj.displayNormalizationParams(obj.normParams);
                 end
@@ -663,7 +740,7 @@ classdef EEGAcquisitionManager < handle
                     if any(normParams.std == 0)
                         error('標準偏差が0のチャンネルが存在します．');
                     end
-
+                    
                 case 'minmax'
                     if ~isfield(normParams, 'min') || ~isfield(normParams, 'max')
                         error('min-max正規化に必要なパラメータ（min, max）が不足しています．');
@@ -671,7 +748,7 @@ classdef EEGAcquisitionManager < handle
                     if any(normParams.max == normParams.min)
                         error('最大値と最小値が同じチャンネルが存在します．');
                     end
-
+                    
                 case 'robust'
                     if ~isfield(normParams, 'median') || ~isfield(normParams, 'mad')
                         error('ロバスト正規化に必要なパラメータ（median, mad）が不足しています．');
@@ -679,52 +756,33 @@ classdef EEGAcquisitionManager < handle
                     if any(normParams.mad == 0)
                         error('MADが0のチャンネルが存在します．');
                     end
-
+                    
                 otherwise
                     error('未知の正規化方法です: %s', obj.params.signal.normalize.method);
             end
         end
-
+        
         function displayNormalizationParams(obj, normParams)
             % 正規化パラメータの情報を表示
             fprintf('\n正規化パラメータの情報:\n');
             fprintf('------------------------\n');
-
+            
             switch obj.params.signal.normalize.method
                 case 'zscore'
                     fprintf('平均値の範囲: [%.4f, %.4f]\n', min(normParams.mean), max(normParams.mean));
                     fprintf('標準偏差の範囲: [%.4f, %.4f]\n', min(normParams.std), max(normParams.std));
-
+                    
                 case 'minmax'
                     fprintf('最小値の範囲: [%.4f, %.4f]\n', min(normParams.min), max(normParams.min));
                     fprintf('最大値の範囲: [%.4f, %.4f]\n', min(normParams.max), max(normParams.max));
-
+                    
                 case 'robust'
                     fprintf('中央値の範囲: [%.4f, %.4f]\n', min(normParams.median), max(normParams.median));
                     fprintf('MADの範囲: [%.4f, %.4f]\n', min(normParams.mad), max(normParams.mad));
             end
-
+            
             fprintf('------------------------\n');
         end
-        
-%         function loadedData = loadDataBrowser(obj)
-%             try
-%                 % ファイル選択ダイアログを表示
-%                 [filename, pathname] = uigetfile({'*.mat', 'MAT-files (*.mat)'}, ...
-%                     'Select EEG data file', obj.params.acquisition.save.path);
-%                 
-%                 if filename ~= 0  % ユーザーがファイルを選択した場合
-%                     fullpath = fullfile(pathname, filename);
-%                     
-%                     % データの読み込み
-%                     loadedData = obj.dataManager.loadDataset(fullpath);
-%                     
-%                     fprintf('Successfully loaded data from: %s\n', fullpath);
-%                 end
-%             catch ME
-%                 error('Failed to load data: %s', ME.message);
-%             end
-%         end
         
         function initializeDataBuffers(obj)
             obj.processingWindow = round(obj.params.signal.window.analysis * obj.params.device.sampleRate);
@@ -744,17 +802,17 @@ classdef EEGAcquisitionManager < handle
             try
                 obj.dataBuffer = [obj.dataBuffer, newData];
                 
-                if size(obj.dataBuffer, 2) >= obj.bufferSize                    
+                if size(obj.dataBuffer, 2) >= obj.bufferSize
                     % オンライン処理の更新
-                        if obj.isOnlineMode
-                            obj.processOnline();
-                        end
-                        
+                    if obj.isOnlineMode
+                        obj.processOnline();
+                    end
+                    
                     % GUI処理の更新
                     if obj.params.gui.display.visualization.enable.rawData || ...
-                        obj.params.gui.display.visualization.enable.processedData || ...
-                        obj.params.gui.display.visualization.enable.spectrum || ...
-                        obj.params.gui.display.visualization.enable.ersp
+                            obj.params.gui.display.visualization.enable.processedData || ...
+                            obj.params.gui.display.visualization.enable.spectrum || ...
+                            obj.params.gui.display.visualization.enable.ersp
                         obj.processGUI();
                     end
                     
@@ -828,7 +886,17 @@ classdef EEGAcquisitionManager < handle
 
                 % FAA計算と保存
                 if obj.params.feature.faa.enable && ~isempty(preprocessedSegment)
-                    [faaValue, arousalState] = obj.powerExtractor.calculateFAA(preprocessedSegment);
+                    % faaResultsを受け取るように変更
+                    faaResults = obj.powerExtractor.calculateFAA(preprocessedSegment);
+                    if ~isempty(faaResults) && iscell(faaResults)
+                        faaResult = faaResults{1}; % オンライン処理では最初の結果のみ使用
+                        faaValue = faaResult.faa;
+                        arousalState = faaResult.arousal;
+                    elseif isstruct(faaResults)
+                        faaValue = faaResults.faa;
+                        arousalState = faaResults.arousal;
+                    end
+
                     fprintf('FAA Value: %.4f, Arousal State: %s\n', faaValue, arousalState);
 
                     % FAA値の結果を保存
@@ -844,25 +912,35 @@ classdef EEGAcquisitionManager < handle
                         obj.results.faa(end+1) = newFAAResult;
                     end
                 end
-
+                
                 % ERD計算と保存
                 if obj.params.feature.erd.enable && ~isempty(preprocessedSegment)
-                    [erdValues, erdPercent] = obj.powerExtractor.calculateERD(preprocessedSegment);
+                    % ERD結果の取得
+                    erdResults = obj.powerExtractor.calculateERD(preprocessedSegment);
 
-                    % ERD値の結果表示（構造体のフィールドごとに処理）
-                    bandNames = fieldnames(erdValues);
-                    for i = 1:length(bandNames)
-                        bandName = bandNames{i};
-                        fprintf('%s band - ERD: %.2f%% (Value: %.4f)\n', ...
-                            bandName, ...
-                            mean(erdPercent.(bandName)), ...
-                            mean(erdValues.(bandName)));
+                    % セル配列の場合
+                    if iscell(erdResults)
+                        erdResult = erdResults{1};  % オンライン処理では最初の結果のみ使用
+                    else
+                        erdResult = erdResults;
                     end
 
-                    % ERD値の結果を保存
+                    % ERD値の結果表示
+                    if isstruct(erdResult)
+                        bandNames = fieldnames(erdResult.values);
+                        for i = 1:length(bandNames)
+                            bandName = bandNames{i};
+                            fprintf('%s band - ERD: %.2f%% (Value: %.4f)\n', ...
+                                bandName, ...
+                                mean(erdResult.percent.(bandName)), ...
+                                mean(erdResult.values.(bandName)));
+                        end
+                    end
+
+                    % ERD結果の保存
                     newERDResult = struct(...
-                        'values', erdValues, ...
-                        'percent', erdPercent, ...
+                        'values', erdResult.values, ...
+                        'percent', erdResult.percent, ...
                         'time', currentTime, ...
                         'sample', obj.currentTotalSamples ...
                     );
@@ -873,74 +951,68 @@ classdef EEGAcquisitionManager < handle
                         obj.results.erd(end+1) = newERDResult;
                     end
                 end
-
+                
                 if obj.params.feature.emotion.enable && ~isempty(preprocessedSegment)
                     % 感情状態の分類を実行
-                    [emotionState, coordinates] = obj.powerExtractor.classifyEmotion(preprocessedSegment);
+                    emotionResults = obj.powerExtractor.classifyEmotion(preprocessedSegment);
 
-                    % emotionStateがセル配列の場合は文字列に変換
-                    if iscell(emotionState)
-                        emotionState = emotionState{1};
+                    % セル配列の場合
+                    if iscell(emotionResults)
+                        emotionResult = emotionResults{1};  % オンライン処理では最初の結果のみ使用
+                    else
+                        emotionResult = emotionResults;
                     end
 
-                    % 感情状態を4次元座標に変換（objを使用してメソッドを呼び出し）
-                    emotionCoords = obj.getEmotionCoordinates(emotionState);
+                    % 結果表示
+%                     fprintf('Emotion State: %s\n', emotionResult.state);
+%                     fprintf('Valence: %.2f, Arousal: %.2f\n', ...
+%                         emotionResult.coordinates.valence, ...
+%                         emotionResult.coordinates.arousal);
 
-                    % 結果の保存用構造体を作成
+                    % 感情状態の結果を保存
                     newEmotionResult = struct(...
-                        'state', emotionState, ...
-                        'coordinates', coordinates, ...
-                        'emotionCoords', emotionCoords, ...  % 4次元座標を追加
+                        'state', emotionResult.state, ...
+                        'coordinates', emotionResult.coordinates, ...
+                        'emotionCoords', emotionResult.emotionCoords, ...
                         'time', currentTime, ...
                         'sample', obj.currentTotalSamples ...
                     );
 
-                    % results構造体に感情分類結果を保存
                     if isempty(obj.results.emotion)
                         obj.results.emotion = newEmotionResult;
                     else
                         obj.results.emotion(end+1) = newEmotionResult;
                     end
-
-                    % UDPで4次元座標を送信
-                    try
-%                         obj.udpManager.sendTrigger(emotionCoords);    % UDP送信用のプログラムを下に追加
-%                         fprintf('UDP sent: Emotion=%s, Coordinates=[%.0f %.0f %.0f %.0f]\n', ...
-%                             emotionState, emotionCoords(1), emotionCoords(2), ...
-%                             emotionCoords(3), emotionCoords(4));
-                    catch ME
-                        warning(ME.identifier, '%s', ME.message);
-                    end
                 end
-
+                
                 % CSP特徴抽出
                 if obj.params.feature.csp.enable && ~isempty(preprocessedSegment)
                     currentFeatures = obj.featureExtractor.extractFeatures(...
                         preprocessedSegment, obj.cspfilters);
                 end
-
+                
                 % SVM特徴分類
                 if obj.params.classifier.svm.enable && ~isempty(currentFeatures)
                     % 閾値の取得（優先順位：最適閾値 > 手動設定閾値 > デフォルト値）
                     if obj.params.classifier.svm.threshold.useOptimal && ...
-                       ~isempty(obj.params.classifier.svm.threshold.optimal)
+                            ~isempty(obj.params.classifier.svm.threshold.optimal)
                         threshold = obj.params.classifier.svm.threshold.optimal;
                     else
                         threshold = obj.params.classifier.svm.threshold.rest;
                     end
-
+                    
                     % 分類の実行
                     [label, score] = obj.classifier.predictOnline(...
                         currentFeatures, obj.svmclassifier, threshold);
-
+                    
                     % 結果の保存
                     currentTime = toc(obj.processingTimer)*1000;
                     newPredictResult = struct(...
                         'label', label, ...
                         'score', score, ...
                         'time', currentTime ...
-                    );
-
+                        );
+                    
                     if isempty(obj.results.predict)
                         obj.results.predict = newPredictResult;
                     else
@@ -951,11 +1023,10 @@ classdef EEGAcquisitionManager < handle
                 % UDP送信（FAA値と覚醒状態の送信）
                 % 後に構造体で送信できるようにして計算した結果を全て送る（今は手動で選択）
                 % udpData = emotionCoords;    % 感情分類
-                udpData = label;
+                % udpData = label;
+                udpData = faaValue;
                 obj.udpManager.sendTrigger(udpData);
-                fprintf('Label=%f \n', label); 
-                fprintf('Score=%f \n', score); 
-
+                
             catch ME
                 warning(ME.identifier, 'Error in processOnline: %s\n', ME.message);
                 fprintf('Error stack:\n');
@@ -967,38 +1038,38 @@ classdef EEGAcquisitionManager < handle
         end
         
         function processGUI(obj)
-            try          
+            try
                 % 15秒分のデータに対してフィルタリング処理
                 preprocessedBuffer = obj.signalProcessor.preprocess(obj.dataBuffer);
-
+                
                 % 最新の5秒分のデータを抽出
                 displaySeconds = obj.params.gui.display.visualization.scale.displaySeconds;
                 displaySamples = round(displaySeconds * obj.params.device.sampleRate);
-
+                
                 % 表示用データの準備
                 displayData = struct();
-
+                
                 % 生データの最新5秒分を抽出
                 displayData.rawData = obj.dataBuffer(:, end-displaySamples+1:end);
-
+                
                 % フィルタリング済みデータの最新5秒分を抽出
                 displayData.processedData = preprocessedBuffer(:, end-displaySamples+1:end);
-
+                
                 % パワースペクトル計算
                 if obj.params.gui.display.visualization.enable.spectrum
                     [pxx, f] = obj.powerExtractor.calculateSpectrum(displayData.processedData);
                     displayData.spectrum = struct('pxx', pxx, 'f', f);
                 end
-
+                
                 % ERSP計算
                 if obj.params.gui.display.visualization.enable.ersp
                     [ersp, times, freqs] = obj.powerExtractor.calculateERSP(displayData.processedData);
                     displayData.ersp = struct('ersp', ersp, 'times', times, 'freqs', freqs);
                 end
-
+                
                 % GUI更新
                 obj.guiController.updateResults(displayData);
-
+                
             catch ME
                 warning(ME.identifier, '%s', ME.message);
                 fprintf('Error in GUI processing: %s\n', ME.message);
@@ -1009,7 +1080,7 @@ classdef EEGAcquisitionManager < handle
             % バッファが処理準備完了かチェック
             ready = size(obj.dataBuffer, 2) >= obj.bufferSize;
         end
-
+        
         function updateParameter(obj, paramName, value)
             % パラメータの動的更新
             try
@@ -1040,7 +1111,7 @@ classdef EEGAcquisitionManager < handle
             emotionMap = containers.Map(...
                 {'安静', '興奮', '喜び', '快適', 'リラックス', '眠気', '憂鬱', '不快', '緊張'}, ...
                 {[0 0 0 0], [100 0 0 100], [100 0 0 0], [100 100 0 0], ...
-                 [0 100 0 0], [0 100 100 0], [0 0 100 0], [0 0 100 100], [0 0 0 100]});
+                [0 100 0 0], [0 100 100 0], [0 0 100 0], [0 0 100 100], [0 0 0 100]});
             
             if emotionMap.isKey(emotionState)
                 coords = emotionMap(emotionState);
@@ -1049,7 +1120,7 @@ classdef EEGAcquisitionManager < handle
                 warning('Emotion state "%s" not found. Using default coordinates.', emotionState);
             end
         end
-
+        
         
         function displaySavedDataSummary(~, saveData)
             fprintf('\nSaved Data Summary:\n');

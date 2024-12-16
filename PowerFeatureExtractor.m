@@ -104,30 +104,43 @@ classdef PowerFeatureExtractor < handle
             end
         end
         
-        function [faaValue, arousalState] = calculateFAA(obj, data)
+        function [faaResults] = calculateFAA(obj, data)
             try
-                % 左右それぞれのパワー値計算
-                leftPower = obj.calculatePower(data(obj.leftChannels,:), [8 13]);
-                rightPower = obj.calculatePower(data(obj.rightChannels,:), [8 13]);
-                
-                % デバッグ情報の出力
-%                 fprintf('Left channels power: %f\n', mean(leftPower));
-%                 fprintf('Right channels power: %f\n', mean(rightPower));
-                
-                % 左右のパワー値の平均を計算
-                leftMean = mean(leftPower);
-                rightMean = mean(rightPower);
-                
-                % FAA値の計算 (log(右) - log(左))
-                faaValue = log(rightMean) - log(leftMean);
-                
-                % 覚醒状態の判定
-                if faaValue > obj.faaThreshold
-                    arousalState = 'aroused';
-                else
-                    arousalState = 'non-aroused';
+                % データ形式に応じて処理を分岐
+                if iscell(data)
+                    numEpochs = length(data);
+                    faaResults = cell(numEpochs, 1);
+                    
+                    for epoch = 1:numEpochs
+                        % 左右それぞれのパワー値計算
+                        leftPower = obj.calculatePower(data{epoch}(obj.leftChannels,:), [8 13]);
+                        rightPower = obj.calculatePower(data{epoch}(obj.rightChannels,:), [8 13]);
+                        
+                        % FAA値の計算
+                        [faaValue, arousalState] = obj.computeFAAValue(leftPower, rightPower);
+                        faaResults{epoch} = struct(...
+                            'faa', faaValue, ...
+                            'arousal', arousalState, ...
+                            'leftPower', mean(leftPower), ...
+                            'rightPower', mean(rightPower));
+                    end
+                    
+                else  % 3次元配列の場合
+                    numEpochs = size(data, 3);
+                    faaResults = cell(numEpochs, 1);
+                    
+                    for epoch = 1:numEpochs
+                        leftPower = obj.calculatePower(data(obj.leftChannels,:,epoch), [8 13]);
+                        rightPower = obj.calculatePower(data(obj.rightChannels,:,epoch), [8 13]);
+                        
+                        [faaValue, arousalState] = obj.computeFAAValue(leftPower, rightPower);
+                        faaResults{epoch} = struct(...
+                            'faa', faaValue, ...
+                            'arousal', arousalState, ...
+                            'leftPower', mean(leftPower), ...
+                            'rightPower', mean(rightPower));
+                    end
                 end
-                
                 
             catch ME
                 fprintf('Error in calculateFAA: %s\n', ME.message);
@@ -135,37 +148,37 @@ classdef PowerFeatureExtractor < handle
             end
         end
         
-        function [emotionState, coordinates] = classifyEmotion(obj, data)
+        function [emotionResults] = classifyEmotion(obj, data)
             try
-                % FAA値と覚醒度を計算
-                [faaValue, ~] = obj.calculateFAA(data);
-                [abRatio, ~] = obj.calculateABRatio(data);
-
-                % 座標変換
-                valence = tanh(faaValue * obj.scalingFactor);
-                arousal = -tanh((abRatio - 1) * obj.scalingFactor);
-                
-                % 極座標への変換
-                radius = sqrt(valence^2 + arousal^2);
-                angle = atan2(arousal, valence);
-
-                % 感情状態の分類
-                if radius < obj.emotionThreshold
-                    emotionState = obj.neutralLabel;
-                else
-                    angles = linspace(-pi, pi, length(obj.emotionLabels));
-                    angleIdx = find(angle >= angles, 1, 'last');
-                    if isempty(angleIdx) || angleIdx > length(obj.emotionLabels)
-                        angleIdx = 1;
+                if iscell(data)
+                    numEpochs = length(data);
+                    emotionResults = cell(numEpochs, 1);
+                    
+                    for epoch = 1:numEpochs
+                        % 各エポックの感情状態を分類
+                        [emotionState, coordinates, emotionCoords] = obj.computeEmotionState(data{epoch});
+                        
+                        emotionResults{epoch} = struct(...
+                            'state', emotionState, ...
+                            'coordinates', coordinates, ...
+                            'emotionCoords', emotionCoords);
                     end
-                    emotionState = obj.emotionLabels{angleIdx};
+                    
+                else  % 3次元配列の場合
+                    numEpochs = size(data, 3);
+                    emotionResults = cell(numEpochs, 1);
+                    
+                    for epoch = 1:numEpochs
+                        % 各エポックの感情状態を分類
+                        [emotionState, coordinates, emotionCoords] = obj.computeEmotionState(data(:,:,epoch));
+                        
+                        emotionResults{epoch} = struct(...
+                            'state', emotionState, ...
+                            'coordinates', coordinates, ...
+                            'emotionCoords', emotionCoords);
+                    end
                 end
-
-                coordinates = struct('valence', valence, ...
-                                  'arousal', arousal, ...
-                                  'radius', radius, ...
-                                  'angle', angle);
-
+                
             catch ME
                 fprintf('Error in classifyEmotion: %s\n', ME.message);
                 fprintf('Stack trace:\n');
@@ -335,6 +348,50 @@ classdef PowerFeatureExtractor < handle
             end
         end
         
+        function [powerResults] = calculatePowerForAllBands(obj, data)
+            try
+                bandNames = obj.params.feature.power.bands.names;
+                if iscell(bandNames{1})
+                    bandNames = bandNames{1};
+                end
+                
+                if iscell(data)
+                    numEpochs = length(data);
+                    powerResults = cell(numEpochs, 1);
+                    
+                    for epoch = 1:numEpochs
+                        bandPowers = struct();
+                        for i = 1:length(bandNames)
+                            bandName = bandNames{i};
+                            freqRange = obj.params.feature.power.bands.(bandName);
+                            bandPower = obj.calculatePower(data{epoch}, freqRange);
+                            bandPowers.(bandName) = bandPower;
+                        end
+                        powerResults{epoch} = bandPowers;
+                    end
+                    
+                else
+                    numEpochs = size(data, 3);
+                    powerResults = cell(numEpochs, 1);
+                    
+                    for epoch = 1:numEpochs
+                        bandPowers = struct();
+                        for i = 1:length(bandNames)
+                            bandName = bandNames{i};
+                            freqRange = obj.params.feature.power.bands.(bandName);
+                            bandPower = obj.calculatePower(data(:,:,epoch), freqRange);
+                            bandPowers.(bandName) = bandPower;
+                        end
+                        powerResults{epoch} = bandPowers;
+                    end
+                end
+                
+            catch ME
+                fprintf('Error in calculatePowerForAllBands: %s\n', ME.message);
+                rethrow(ME);
+            end
+        end
+        
         function calculateBaseline(obj, baselineData)
             % 安静時データからベースラインパワーを計算
             try
@@ -368,35 +425,37 @@ classdef PowerFeatureExtractor < handle
             end
         end
         
-        function [erdValues, erdPercent] = calculateERD(obj, data)
+        function [erdResults] = calculateERD(obj, data)
             try
                 % ベースラインが未設定の場合はエラー
                 if ~obj.isBaselineSet
                     error('Baseline power not set. Call updateBaseline first.');
                 end
-
-                % 結果格納用の初期化
-                erdValues = struct();
-                erdPercent = struct();
-
-                % 各周波数帯でのERD計算
-                for i = 1:length(obj.freqBands)
-                    bandName = obj.freqBands{i};
-                    freqRange = obj.params.feature.power.bands.(bandName);
-
-                    % 現在のパワー値を計算
-                    currentPower = obj.calculatePower(data, freqRange);
-                    basePower = obj.baselinePower.(bandName);
-
-                    % ERDを計算 (basePower - currentPower) / basePower * 100
-                    erdValue = basePower - currentPower;
-                    erdPct = (erdValue ./ basePower) * 100;
-
-                    % 結果を保存
-                    erdValues.(bandName) = erdValue;
-                    erdPercent.(bandName) = erdPct;
+                
+                if iscell(data)
+                    numEpochs = length(data);
+                    erdResults = cell(numEpochs, 1);
+                    
+                    for epoch = 1:numEpochs
+                        % 各周波数帯でのERD計算
+                        [erdValues, erdPercent] = obj.computeERDValues(data{epoch});
+                        erdResults{epoch} = struct(...
+                            'values', erdValues, ...
+                            'percent', erdPercent);
+                    end
+                    
+                else
+                    numEpochs = size(data, 3);
+                    erdResults = cell(numEpochs, 1);
+                    
+                    for epoch = 1:numEpochs
+                        [erdValues, erdPercent] = obj.computeERDValues(data(:,:,epoch));
+                        erdResults{epoch} = struct(...
+                            'values', erdValues, ...
+                            'percent', erdPercent);
+                    end
                 end
-
+                
             catch ME
                 warning(ME.identifier, '%s', ME.message);
                 rethrow(ME);
@@ -530,6 +589,105 @@ classdef PowerFeatureExtractor < handle
             % 特徴量の標準化
             features = (features - mean(features)) ./ std(features);
         end
+        
+        function [faaValue, arousalState] = computeFAAValue(obj, leftPower, rightPower)
+            % FAA値計算のヘルパーメソッド
+            leftMean = mean(leftPower);
+            rightMean = mean(rightPower);
+            
+            faaValue = log(rightMean) - log(leftMean);
+            
+            if faaValue > obj.faaThreshold
+                arousalState = 'aroused';
+            else
+                arousalState = 'non-aroused';
+            end
+        end
+        
+        function [erdValues, erdPercent] = computeERDValues(obj, epochData)
+            % ERD計算のヘルパーメソッド
+            erdValues = struct();
+            erdPercent = struct();
+            
+            for i = 1:length(obj.freqBands)
+                bandName = obj.freqBands{i};
+                freqRange = obj.params.feature.power.bands.(bandName);
+                
+                % 現在のパワー値を計算
+                currentPower = obj.calculatePower(epochData, freqRange);
+                basePower = obj.baselinePower.(bandName);
+                
+                % ERDを計算
+                erdValue = basePower - currentPower;
+                erdPct = (erdValue ./ basePower) * 100;
+                
+                erdValues.(bandName) = erdValue;
+                erdPercent.(bandName) = erdPct;
+            end
+        end
+        
+        function [emotionState, coordinates, emotionCoords] = computeEmotionState(obj, epochData)
+            % FAA値とα/β比の計算
+            [faaValue, ~] = obj.computeFAAValue(...
+                obj.calculatePower(epochData(obj.leftChannels,:), [8 13]), ...
+                obj.calculatePower(epochData(obj.rightChannels,:), [8 13]));
+            
+            % 前頭葉のチャンネルのデータを取得
+            frontalData = epochData([obj.leftChannels, obj.rightChannels],:);
+            
+            % アルファ波とベータ波のパワーを計算
+            alphaPower = obj.calculatePower(frontalData, [8 13]);
+            betaPower = obj.calculatePower(frontalData, [13 30]);
+            
+            % α/β比の計算
+            abRatio = mean(alphaPower) / mean(betaPower);
+            
+            % 感情座標の計算
+            valence = tanh(faaValue * obj.scalingFactor);
+            arousal = -tanh((abRatio - 1) * obj.scalingFactor);
+            
+            % 極座標への変換
+            radius = sqrt(valence^2 + arousal^2);
+            angle = atan2(arousal, valence);
+            
+            % 感情状態の分類
+            if radius < obj.emotionThreshold
+                emotionState = obj.neutralLabel;
+            else
+                angles = linspace(-pi, pi, length(obj.emotionLabels));
+                angleIdx = find(angle >= angles, 1, 'last');
+                if isempty(angleIdx) || angleIdx > length(obj.emotionLabels)
+                    angleIdx = 1;
+                end
+                emotionState = obj.emotionLabels{angleIdx};
+            end
+            
+            % 返却値の設定
+            coordinates = struct('valence', valence, ...
+                'arousal', arousal, ...
+                'radius', radius, ...
+                'angle', angle);
+            
+            % 4次元感情座標の取得
+            emotionCoords = obj.getEmotionCoordinates(emotionState);
+        end
+        
+        function coords = getEmotionCoordinates(obj, emotionState)
+            % 感情状態を4次元座標に変換するメソッド
+            % 座標は [快活性, 快不活性, 不快不活性, 不快活性] を表す
+            emotionMap = containers.Map(...
+                obj.emotionLabels, ...
+                {[0 0 0 0], [100 0 0 100], [100 0 0 0], [100 100 0 0], ...
+                [0 100 0 0], [0 100 100 0], [0 0 100 0], [0 0 100 100], [0 0 0 100]});
+            
+            if emotionMap.isKey(emotionState)
+                coords = emotionMap(emotionState);
+            else
+                coords = [0 0 0 0];  % デフォルト値（安静状態）
+                warning('Emotion state "%s" not found. Using default coordinates.', emotionState);
+            end
+        end
+        
     end
     
     methods (Static)

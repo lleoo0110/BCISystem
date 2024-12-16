@@ -2,9 +2,12 @@
 % params = getConfig('epocx');
 % params = getConfig('epocx', 'preset', 'magic_offline');
 % params = getConfig('epocx', 'preset', 'magic_online');
+% params = getConfig('epocx', 'preset', 'ddaExperiment');
 
+% 全初期化：clc; clear all; close all; instrreset;
+% コマンドクリア：clc
+% ワークスペースクリア：clear all
 % ウィンドウ初期化：close all;
-% コマンドクリア：clear all
 % UDP系エラー初期化：instrreset;
 
 
@@ -12,9 +15,11 @@
 currentDir = pwd;
 setupPaths(currentDir);
 
+
 %%  指定のパラメータで実行
-params = getConfig('epocx', 'preset', 'magic_offline');
-manager = EEGAcquisitionManager(params);
+params = getConfig('epocx', 'preset', 'ddaExperiment');
+analyzer = EEGAnalyzer(params);     % アナライザーの初期化
+analyzer.analyze();                            % 解析の実行
 
 
 %% パス設定補助関数
