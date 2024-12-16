@@ -117,14 +117,14 @@ function params = getConfig(deviceType, varargin)
         'enable', true, ...           % 信号処理の有効/無効：通常はtrue
         'window', struct(...          % 解析窓の設定
             'analysis', 2.0, ...      % 解析窓の長さ（秒）：ERDは2.0秒，MIは1.0秒程度
-            'stimulus', 5, ...      % 刺激提示時間（秒）：実験プロトコルに合わせて設定
+            'stimulus', 5.0, ...      % 刺激提示時間（秒）：実験プロトコルに合わせて設定
             'bufferSize', 15, ...     % データバッファのサイズ（秒）：メモリ使用量に影響
             'updateBuffer', 0.5, ...    % バッファの更新間隔（秒）：小さいほど処理負荷増
             'step', [], ...           % 解析窓のシフト幅：自動計算（変更不要）
             'updateInterval', [] ...  % 更新間隔：自動計算（変更不要）
         ), ...
         'epoch', struct(...           % エポック分割の設定
-            'storageType', 'cell', ... % データ形式：'array'または'cell'を選択
+            'storageType', 'array', ... % データ形式：'array'または'cell'を選択
             'method', 'time', ...         % エポック化方法：'time'または'odd-even'（注意：welch.windowLengthよりも小さいエポックはエラーが出る）
             'overlap', 0.25, ...      % オーバーラップ率：0-1の値（0.25推奨）
             'baseline', [] ...        % ベースライン期間：自動設定（変更不要）

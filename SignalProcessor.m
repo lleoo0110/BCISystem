@@ -39,6 +39,8 @@ classdef SignalProcessor < handle
                 % データの設定と前処理
                 obj.rawData = eegData;
                 obj.preprocess(eegData);
+                
+                fprintf('preprocess\n');
                     
                 % 正規化処理
                 if obj.params.signal.normalize.enabled
@@ -53,6 +55,8 @@ classdef SignalProcessor < handle
                                 'normParams', normParams);
                     end
                 end
+                
+                fprintf('normalize\n');
                 
                 if ~isempty(labels)
                     % トリガー情報が指定されている場合のエポック処理
@@ -70,6 +74,8 @@ classdef SignalProcessor < handle
                     obj.processedData = obj.preprocessedData;
                     obj.processedLabel = [];  % 明示的に空を設定
                 end
+                
+                fprintf('epoching\n');
 
                 % 処理情報の最終更新
                 obj.updateFinalProcessingInfo();
@@ -86,28 +92,53 @@ classdef SignalProcessor < handle
         
         function preprocessedData = preprocess(obj, data)
             try
-                tmpData = data;
-                
-                % ノッチフィルタ処理
-                if obj.params.signal.filter.notch.enabled
-                    [tmpData, notchInfo] = obj.notchFilterDesigner.designAndApplyFilter(tmpData);
-                    obj.processingInfo.filter.notch = notchInfo;
-                    obj.processingInfo.processingOrder{end+1} = 'notch_filter';
+                if iscell(data)
+                    % セル配列の場合の処理
+                    preprocessedData = cell(size(data));
+                    for i = 1:length(data)
+                        tmpData = data{i};
+
+                        % ノッチフィルタ処理
+                        if obj.params.signal.filter.notch.enabled
+                            [tmpData, notchInfo] = obj.notchFilterDesigner.designAndApplyFilter(tmpData);
+                            obj.processingInfo.filter.notch = notchInfo;
+                            obj.processingInfo.processingOrder{end+1} = 'notch_filter';
+                        end
+
+                        % FIRフィルタ処理
+                        if obj.params.signal.filter.fir.enabled
+                            [tmpData, firInfo] = obj.filterDesigner.designAndApplyFilter(tmpData);
+                            obj.processingInfo.filter.fir = firInfo;
+                            obj.processingInfo.processingOrder{end+1} = 'fir_filter';
+                        end
+
+                        preprocessedData{i} = tmpData;
+                    end
+                else
+                    tmpData = data;
+
+                    % ノッチフィルタ処理
+                    if obj.params.signal.filter.notch.enabled
+                        [tmpData, notchInfo] = obj.notchFilterDesigner.designAndApplyFilter(tmpData);
+                        obj.processingInfo.filter.notch = notchInfo;
+                        obj.processingInfo.processingOrder{end+1} = 'notch_filter';
+                    end
+
+                    % FIRフィルタ処理
+                    if obj.params.signal.filter.fir.enabled
+                        [tmpData, firInfo] = obj.filterDesigner.designAndApplyFilter(tmpData);
+                        obj.processingInfo.filter.fir = firInfo;
+                        obj.processingInfo.processingOrder{end+1} = 'fir_filter';
+                    end
+
+                    preprocessedData = tmpData;
                 end
-                
-                % FIRフィルタ処理
-                if obj.params.signal.filter.fir.enabled
-                    [tmpData, firInfo] = obj.filterDesigner.designAndApplyFilter(tmpData);
-                    obj.processingInfo.filter.fir = firInfo;
-                    obj.processingInfo.processingOrder{end+1} = 'fir_filter';
-                end
-                
-                obj.preprocessedData = tmpData;
-                preprocessedData = obj.preprocessedData;
-                
+
+                obj.preprocessedData = preprocessedData;  % 処理結果を保存
+
                 % フィルタ処理情報の更新
                 obj.updateFilteringInfo();
-                
+
             catch ME
                 error('SIGNALPROCESSOR:PREPROCESS', 'Preprocessing failed: %s', ME.message);
             end

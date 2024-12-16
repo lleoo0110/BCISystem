@@ -453,6 +453,7 @@ classdef EEGAcquisitionManager < handle
                         end
                     end
                     
+                    obj.mergeAndSaveData();
                 end
                 
             catch ME
@@ -964,10 +965,10 @@ classdef EEGAcquisitionManager < handle
                     end
 
                     % 結果表示
-%                     fprintf('Emotion State: %s\n', emotionResult.state);
-%                     fprintf('Valence: %.2f, Arousal: %.2f\n', ...
-%                         emotionResult.coordinates.valence, ...
-%                         emotionResult.coordinates.arousal);
+                    fprintf('Emotion State: %s\n', emotionResult.state);
+                    fprintf('Valence: %.2f, Arousal: %.2f\n', ...
+                        emotionResult.coordinates.valence, ...
+                        emotionResult.coordinates.arousal);
 
                     % 感情状態の結果を保存
                     newEmotionResult = struct(...
