@@ -59,7 +59,7 @@ function params = getConfig(deviceType, varargin)
             'type', 'EEG' ...         % ストリームタイプ：'EEG'固定．変更不要
         ), ...
         'simulate', struct(...        % シミュレーションモード設定
-            'enable', false, ...       % シミュレーションの有効/無効：実機がない場合はtrue
+            'enable', true, ...       % シミュレーションの有効/無効：実機がない場合はtrue
             'signal', struct(...      % シミュレーション信号の設定
                 'alpha', struct(...   % アルファ波（8-13Hz）のシミュレーション設定
                     'freq', 10, ...   % 中心周波数：8-13の間で設定（Hz）
@@ -319,6 +319,15 @@ function params = getConfig(deviceType, varargin)
                         'background', 'white' ... % 背景色：'white'または'black'
                     ) ...
                 ) ...
+            ), ...
+            'slider', struct(...
+                'enable', true, ...        % スライダーの有効/無効
+                'position', [800 400 400 200], ... % [x y width height]
+                'defaultValue', 1, ...     % デフォルト値
+                'minValue', 1, ...         % 最小値
+                'maxValue', 9, ...         % 最大値
+                'steps', 9, ...            % ステップ数
+                'title', 'Label Slider' ...     % ウィンドウタイトル
             ) ...
         ) ...
     );

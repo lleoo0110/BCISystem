@@ -78,6 +78,9 @@ classdef EEGAcquisitionManager < handle
             % サンプル数カウンタの初期化
             obj.totalSampleCount = 0;
             obj.lastResetSampleCount = 0;
+            
+            % スライダーウィンドウの作成
+            obj.guiController.createSliderWindow();
         end
         
         function delete(obj)
@@ -799,16 +802,32 @@ classdef EEGAcquisitionManager < handle
             if isempty(newData)
                 return;
             end
-            
+
             try
                 obj.dataBuffer = [obj.dataBuffer, newData];
-                
+
                 if size(obj.dataBuffer, 2) >= obj.bufferSize
+                    % スライダーが有効で，かつシステムがpause状態でない場合のみラベルを記録
+                    if ~obj.isPaused
+                        sliderValue = obj.guiController.getSliderValue();
+                        if ~isempty(sliderValue)  % スライダーが有効で値が存在する場合
+                            currentTime = toc(obj.processingTimer)*1000;
+                            obj.currentTotalSamples = obj.totalSampleCount + size(obj.rawData, 2);
+
+                            % ラベル情報の作成と記録
+                            trigger = struct(...
+                                'value', sliderValue, ...
+                                'time', uint64(currentTime), ...
+                                'sample', obj.currentTotalSamples);
+                            obj.labels = [obj.labels; trigger];
+                        end
+                    end
+
                     % オンライン処理の更新
                     if obj.isOnlineMode
                         obj.processOnline();
                     end
-                    
+
                     % GUI処理の更新
                     if obj.params.gui.display.visualization.enable.rawData || ...
                             obj.params.gui.display.visualization.enable.processedData || ...
@@ -816,12 +835,12 @@ classdef EEGAcquisitionManager < handle
                             obj.params.gui.display.visualization.enable.ersp
                         obj.processGUI();
                     end
-                    
+
                     % データシフト
                     shiftSize = obj.slidingStep;
                     obj.dataBuffer = obj.dataBuffer(:, shiftSize:end);
                 end
-                
+
             catch ME
                 warning(ME.identifier, '%s', ME.message);
             end

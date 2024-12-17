@@ -1,6 +1,6 @@
-function preset = ddaExperiment_preset()
+ function preset = ahaloud_preset()
     % トリガーマッピングの設定
-    n = 80; % 最大値
+    n = 9; % 最大値
     trigger_mappings = cell(n, 2);
     for i = 1:n
         trigger_mappings(i,:) = {num2str(i), i};
@@ -16,12 +16,22 @@ function preset = ddaExperiment_preset()
         );
     end
 
+    % マッピング構造体の生成（通常は変更不要）
+    mapping_struct = struct();
+    for i = 1:size(trigger_mappings, 1)
+        field_name = sprintf('trigger%d', i);
+        mapping_struct.(field_name) = struct(...
+            'text', trigger_mappings{i,1}, ...
+            'value', trigger_mappings{i,2} ...
+        );
+    end
+
     preset = struct(...
         'acquisition', struct(...
-            'mode', 'online', ...      % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
+            'mode', 'offline', ...      % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
             'save', struct(...
                 'enable', true, ...     % データ保存の有効/無効：通常はtrue
-                'name', 'gi-ta_noDDA', ...     % 保存時のファイル名プレフィックス：実験内容を反映した名前を推奨
+                'name', 'kishi_Experiment', ...     % 保存時のファイル名プレフィックス：実験内容を反映した名前を推奨
                 'path', './Experiment Data', ...    % データ保存先ディレクトリ：絶対パスまたは相対パス
                 'saveInterval', 60, ...  % 一時保存を行う間隔（秒）：30-120秒程度，大きすぎると負荷増大
                 'fields', struct(...     % 各データの保存有無を設定
@@ -31,9 +41,9 @@ function preset = ddaExperiment_preset()
                     'processedData', true, ...      % 前処理済みデータ：必要に応じて
                     'processedLabel', true, ...     % 処理済みラベル：必要に応じて
                     'processingInfo', true, ...     % 処理パラメータ情報：デバッグ用
-                    'cspFilters', false, ...         % CSPフィルタ：オンライン処理で使用
-                    'cspFeatures', false, ...        % CSP特徴量：分析用
-                    'svmClassifier', false, ...      % 学習済みSVM：オンライン処理で使用
+                    'cspFilters', true, ...         % CSPフィルタ：オンライン処理で使用
+                    'cspFeatures', true, ...        % CSP特徴量：分析用
+                    'svmClassifier', true, ...      % 学習済みSVM：オンライン処理で使用
                     'results', true ...             % 解析結果：評価用
                 ) ...
             ), ...
@@ -48,9 +58,9 @@ function preset = ddaExperiment_preset()
                     'processedData', true, ...
                     'processedLabel', true, ...
                     'processingInfo', true, ...
-                    'cspFilters', false, ...
-                    'cspFeatures', false, ...
-                    'svmClassifier', false, ...
+                    'cspFilters', true, ...
+                    'cspFeatures', true, ...
+                    'svmClassifier', true, ...
                     'results', true ...
                 ) ...
             ) ...
@@ -70,8 +80,8 @@ function preset = ddaExperiment_preset()
             ), ...
             'send', struct(...
                 'enabled', true, ...       % UDP送信の有効/無効
-                'port', 54312, ...         % 送信ポート番号：受信側と合わせる
-                'address', '192.168.100.75', ... % 送信先アドレス：別PCの場合はIPアドレスを指定
+                'port', 54321, ...         % 送信ポート番号：受信側と合わせる
+                'address', '127.0.0.1', ... % 送信先アドレス：別PCの場合はIPアドレスを指定
                 'bufferSize', 1024, ...    % 送信バッファサイズ：通常は変更不要
                 'encoding', 'UTF-8' ...    % 文字エンコーディング：通常は変更不要
             ) ...
@@ -79,16 +89,16 @@ function preset = ddaExperiment_preset()
         'signal', struct(...
             'enable', true, ...           % 信号処理の有効/無効：通常はtrue
             'window', struct(...          % 解析窓の設定
-                'analysis', 2.0, ...      % 解析窓の長さ（秒）：ERDは2.0秒，MIは1.0秒程度
-                'stimulus', 5.0, ...      % 刺激提示時間（秒）：実験プロトコルに合わせて設定
+                'analysis', 4.0, ...      % 解析窓の長さ（秒）：ERDは2.0秒，MIは1.0秒程度
+                'stimulus', 4.0, ...      % 刺激提示時間（秒）：実験プロトコルに合わせて設定
                 'bufferSize', 15, ...     % データバッファのサイズ（秒）：10-20秒程度．大きいとメモリ使用量増
-                'updateBuffer', 1, ...  % バッファの更新間隔（秒）：0.1-1.0秒．小さいほど処理負荷増
+                'updateBuffer', 4, ...  % バッファの更新間隔（秒）：0.1-1.0秒．小さいほど処理負荷増
                 'step', [], ...           % 解析窓のシフト幅：自動計算（変更不要）
                 'updateInterval', [] ...  % 更新間隔：自動計算（変更不要）
             ), ...
             'epoch', struct(...           % エポック分割の設定
-                'storageType', 'cell', ... % データ形式：'array'（行列）または'cell'（セル配列）
-                'method', 'odd-even', ...         % エポック化方法：'time'または'odd-even'（注意：welch.windowLengthよりも小さいエポックはエラーが出る）
+                'storageType', 'array', ... % データ形式：'array'（行列）または'cell'（セル配列）
+                'method', 'time', ...         % エポック化方法：'time'または'odd-even'（注意：welch.windowLengthよりも小さいエポックはエラーが出る）
                 'overlap', 0.25, ...      % オーバーラップ率：0-1の値．0.25-0.5程度を推奨
                 'baseline', [] ...        % ベースライン期間：自動設定（変更不要）
             ), ...
@@ -196,15 +206,51 @@ function preset = ddaExperiment_preset()
                 'enable', false ...      % ERD特徴量の有効/無効：運動想起時はtrue
             ), ...
             'csp', struct(...            % 共通空間パターンの設定
-                'enable', false ...      % CSP特徴量の有効/無効：分類時はtrue
+                'enable', true, ...      % CSP特徴量の有効/無効：分類時はtrue
+                'storageType', 'array', ... % データ保存形式：'array'または'cell'
+                'patterns', 7, ...       % 使用するパターン数：チャンネル数の半分程度
+                'regularization', 0.05 ... % 正則化パラメータ：0.01-0.1程度
             ) ...
         ), ...
         'classifier', struct(...
             'svm', struct(...            % SVMの設定
-                'enable', false ...      % SVM分類器の有効/無効：分類時はtrue
+                'enable', true, ...      % SVM分類器の有効/無効：分類時はtrue
+                'type', 'ecoc', ...       % 分類器タイプ：'svm'（2クラス）または'ecoc'（多クラス）
+                'kernel', 'rbf', ...     % カーネル関数：'rbf'（推奨），'linear'，'polynomial'
+                'optimize', true, ...    % ハイパーパラメータ最適化：精度重視の場合true
+                'probability', true, ...  % 確率推定の有効/無効：閾値調整時はtrue
+                'threshold', struct(...   % 閾値関連の設定
+                    'rest', 0.5, ...     % デフォルトの安静状態閾値：0.3-0.7程度
+                    'useOptimal', true, ... % 最適閾値を使用するか：通常はtrue
+                    'optimal', [], ...    % クロスバリデーションで自動設定される
+                    'range', [0.1:0.05:0.9] ... % 閾値探索の範囲：細かい刻みで探索
+                ), ...
+                'hyperparameters', struct(... % ハイパーパラメータ設定
+                    'optimizer', 'gridsearch', ... % 最適化手法：'gridsearch'または'bayesian'
+                    'boxConstraint', [0.1, 1, 10, 100], ... % Cパラメータの探索範囲
+                    'kernelScale', [0.1, 1, 10, 100] ... % γパラメータの探索範囲
+                ) ...
             ), ...
             'evaluation', struct(...     % 評価設定
-                'enable', false ...      % 評価機能の有効/無効：学習時はtrue
+                'enable', true, ...      % 評価機能の有効/無効：学習時はtrue
+                'method', 'kfold', ...   % 評価方法：'kfold'（推奨）または'holdout'
+                'kfold', 5, ...          % 分割数：5または10を推奨
+                'holdoutRatio', 0.2, ... % ホールドアウト法の検証データ比率：0.2-0.3程度
+                'metrics', struct(...    % 評価指標の設定
+                    'accuracy', true, ... % 正解率：基本指標としてtrue
+                    'precision', true, ... % 適合率：クラス別性能評価用
+                    'recall', true, ...   % 再現率：クラス別性能評価用
+                    'f1score', true, ... % F1スコア：バランスの取れた評価指標
+                    'auc', true, ...     % AUC：2クラス分類の総合評価指標
+                    'confusion', true ... % 混同行列：詳細な性能分析用
+                ), ...
+                'visualization', struct(... % 可視化設定
+                    'enable', true, ...    % 可視化機能の有効/無効
+                    'confusionMatrix', true, ... % 混同行列の表示：分類性能の詳細確認
+                    'roc', true, ...       % ROC曲線：2クラス分類の性能評価
+                    'learningCurve', true, ... % 学習曲線：過学習の確認
+                    'featureImportance', true ... % 特徴量重要度：特徴選択用
+                ) ...
             ) ...
         ), ...
         'gui', struct(...
@@ -212,10 +258,10 @@ function preset = ddaExperiment_preset()
                 'visualization', struct(...
                     'refreshRate', 0.2, ...     % 表示更新レート（秒）：0.1-0.5程度
                     'enable', struct(...        % 表示項目の有効/無効設定
-                        'rawData', true, ...    % 生データの表示：信号確認用
-                        'processedData', true, ... % 処理済みデータ：処理結果確認用
-                        'spectrum', true, ...   % スペクトル表示：周波数分析用
-                        'ersp', true ...       % 事象関連スペクトル：時間周波数分析用
+                        'rawData', false, ...    % 生データの表示：信号確認用
+                        'processedData', false, ... % 処理済みデータ：処理結果確認用
+                        'spectrum', false, ...   % スペクトル表示：周波数分析用
+                        'ersp', false ...       % 事象関連スペクトル：時間周波数分析用
                     ), ...
                     'scale', struct(...        % 表示スケールの設定
                         'auto', true, ...      % 自動スケーリング：通常はtrue
@@ -241,6 +287,15 @@ function preset = ddaExperiment_preset()
                         ) ...
                     ) ...
                 ) ...
+            ), ...
+            'slider', struct(...
+                'enable', true, ...        % スライダーの有効/無効
+                'position', [800 400 400 200], ... % [x y width height]
+                'defaultValue', 2, ...     % デフォルト値
+                'minValue', 1, ...         % 最小値
+                'maxValue', 3, ...         % 最大値
+                'steps', 3, ...            % ステップ数
+                'title', 'Emotion Label Slider' ...     % ウィンドウタイトル
             ) ...
         ) ...
     );
