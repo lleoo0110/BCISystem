@@ -59,7 +59,7 @@ function params = getConfig(deviceType, varargin)
             'type', 'EEG' ...         % ストリームタイプ：'EEG'固定．変更不要
         ), ...
         'simulate', struct(...        % シミュレーションモード設定
-            'enable', true, ...       % シミュレーションの有効/無効：実機がない場合はtrue
+            'enable', false, ...       % シミュレーションの有効/無効：実機がない場合はtrue
             'signal', struct(...      % シミュレーション信号の設定
                 'alpha', struct(...   % アルファ波（8-13Hz）のシミュレーション設定
                     'freq', 10, ...   % 中心周波数：8-13の間で設定（Hz）
@@ -119,7 +119,7 @@ function params = getConfig(deviceType, varargin)
             'analysis', 2.0, ...      % 解析窓の長さ（秒）：ERDは2.0秒，MIは1.0秒程度
             'stimulus', 5.0, ...      % 刺激提示時間（秒）：実験プロトコルに合わせて設定
             'bufferSize', 15, ...     % データバッファのサイズ（秒）：メモリ使用量に影響
-            'updateBuffer', 0.5, ...    % バッファの更新間隔（秒）：小さいほど処理負荷増
+            'updateBuffer', 1, ...    % バッファの更新間隔（秒）：小さいほど処理負荷増
             'step', [], ...           % 解析窓のシフト幅：自動計算（変更不要）
             'updateInterval', [] ...  % 更新間隔：自動計算（変更不要）
         ), ...

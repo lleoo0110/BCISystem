@@ -1,10 +1,10 @@
-function preset = ddaExperiment_preset()
+function preset = magic_visual_B_preset()
     % トリガーマッピングの設定
-    n = 80; % 最大値
-    trigger_mappings = cell(n, 2);
-    for i = 1:n
-        trigger_mappings(i,:) = {num2str(i), i};
-    end
+    trigger_mappings = {
+        '安静', 1;         % クラス1：安静状態（基準状態）
+        'じりじり', 2;       % クラス2：じりじり状態，必要に応じて追加可能
+        'ぴかぴか', 3;       % クラス3：ぴかぴか状態
+    };
 
     % マッピング構造体の生成（通常は変更不要）
     mapping_struct = struct();
@@ -18,10 +18,10 @@ function preset = ddaExperiment_preset()
 
     preset = struct(...
         'acquisition', struct(...
-            'mode', 'online', ...      % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
+            'mode', 'offline', ...      % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
             'save', struct(...
                 'enable', true, ...     % データ保存の有効/無効：通常はtrue
-                'name', 'shibako_noDDA', ...     % 保存時のファイル名プレフィックス：実験内容を反映した名前を推奨
+                'name', 'Experiment_B', ...     % 保存時のファイル名プレフィックス：実験内容を反映した名前を推奨
                 'path', './Experiment Data', ...    % データ保存先ディレクトリ：絶対パスまたは相対パス
                 'saveInterval', 60, ...  % 一時保存を行う間隔（秒）：30-120秒程度，大きすぎると負荷増大
                 'fields', struct(...     % 各データの保存有無を設定
@@ -31,9 +31,9 @@ function preset = ddaExperiment_preset()
                     'processedData', true, ...      % 前処理済みデータ：必要に応じて
                     'processedLabel', true, ...     % 処理済みラベル：必要に応じて
                     'processingInfo', true, ...     % 処理パラメータ情報：デバッグ用
-                    'cspFilters', false, ...         % CSPフィルタ：オンライン処理で使用
-                    'cspFeatures', false, ...        % CSP特徴量：分析用
-                    'svmClassifier', false, ...      % 学習済みSVM：オンライン処理で使用
+                    'cspFilters', true, ...         % CSPフィルタ：オンライン処理で使用
+                    'cspFeatures', true, ...        % CSP特徴量：分析用
+                    'svmClassifier', true, ...      % 学習済みSVM：オンライン処理で使用
                     'results', true ...             % 解析結果：評価用
                 ) ...
             ), ...
@@ -48,9 +48,9 @@ function preset = ddaExperiment_preset()
                     'processedData', true, ...
                     'processedLabel', true, ...
                     'processingInfo', true, ...
-                    'cspFilters', false, ...
-                    'cspFeatures', false, ...
-                    'svmClassifier', false, ...
+                    'cspFilters', true, ...
+                    'cspFeatures', true, ...
+                    'svmClassifier', true, ...
                     'results', true ...
                 ) ...
             ) ...
@@ -70,8 +70,8 @@ function preset = ddaExperiment_preset()
             ), ...
             'send', struct(...
                 'enabled', true, ...       % UDP送信の有効/無効
-                'port', 54312, ...         % 送信ポート番号：受信側と合わせる
-                'address', '192.168.11.13', ... % 送信先アドレス：別PCの場合はIPアドレスを指定
+                'port', 54321, ...         % 送信ポート番号：受信側と合わせる
+                'address', '127.0.0.1', ... % 送信先アドレス：別PCの場合はIPアドレスを指定
                 'bufferSize', 1024, ...    % 送信バッファサイズ：通常は変更不要
                 'encoding', 'UTF-8' ...    % 文字エンコーディング：通常は変更不要
             ) ...
@@ -87,8 +87,8 @@ function preset = ddaExperiment_preset()
                 'updateInterval', [] ...  % 更新間隔：自動計算（変更不要）
             ), ...
             'epoch', struct(...           % エポック分割の設定
-                'storageType', 'cell', ... % データ形式：'array'（行列）または'cell'（セル配列）
-                'method', 'odd-even', ...         % エポック化方法：'time'または'odd-even'（注意：welch.windowLengthよりも小さいエポックはエラーが出る）
+                'storageType', 'array', ... % データ形式：'array'（行列）または'cell'（セル配列）
+                'method', 'time', ...         % エポック化方法：'time'または'odd-even'（注意：welch.windowLengthよりも小さいエポックはエラーが出る）
                 'overlap', 0.25, ...      % オーバーラップ率：0-1の値．0.25-0.5程度を推奨
                 'baseline', [] ...        % ベースライン期間：自動設定（変更不要）
             ), ...
@@ -101,11 +101,11 @@ function preset = ddaExperiment_preset()
             'normalize', struct(...       % 正規化の設定
                 'enabled', true, ...      % 正規化の有効/無効：通常はtrue
                 'type', 'all', ...        % 正規化の種類：'all'（全体）or 'epoch'（エポックごと）
-                'method', 'zscore' ...    % 正規化方法：'zscore'，'minmax'，'robust'から選択
+                'method', 'robust' ...    % 正規化方法：'zscore'，'minmax'，'robust'から選択
             ), ...
             'frequency', struct(...       % 周波数解析の設定
-                'min', 1, ...             % 解析する最小周波数（Hz）：通常1Hz
-                'max', 50, ...            % 解析する最大周波数（Hz）：通常50Hz
+                'min', 13, ...             % 解析する最小周波数（Hz）：通常1Hz
+                'max', 30, ...            % 解析する最大周波数（Hz）：通常50Hz
                 'bands', struct(...       % 周波数帯域の定義
                     'delta', [1 4], ...   % デルタ波帯域（Hz）：1-4Hz
                     'theta', [4 8], ...   % シータ波帯域（Hz）：4-8Hz
@@ -169,10 +169,10 @@ function preset = ddaExperiment_preset()
                 ) ...
             ), ...
             'faa', struct(...            % 前頭部アルファ非対称性の設定
-                'enable', true ...       % FAA特徴量の有効/無効：感情分析時はtrue
+                'enable', false ...       % FAA特徴量の有効/無効：感情分析時はtrue
             ), ...
             'emotion', struct(...        % 感情分析の設定
-                'enable', true, ...              % 感情分類の有効/無効
+                'enable', false, ...              % 感情分類の有効/無効
                 'channels', struct(...           % 使用するチャンネル設定
                     'left', [1, 3], ...         % 左前頭葉チャンネル：電極配置に応じて設定
                     'right', [14, 12] ...       % 右前頭葉チャンネル：電極配置に応じて設定
@@ -193,18 +193,54 @@ function preset = ddaExperiment_preset()
                 ) ...
             ), ...
             'erd', struct(...            % 事象関連脱同期の設定
-                'enable', false ...      % ERD特徴量の有効/無効：運動想起時はtrue
+                'enable', true ...      % ERD特徴量の有効/無効：運動想起時はtrue
             ), ...
             'csp', struct(...            % 共通空間パターンの設定
-                'enable', false ...      % CSP特徴量の有効/無効：分類時はtrue
+                'enable', true, ...      % CSP特徴量の有効/無効：分類時はtrue
+                'storageType', 'array', ... % データ保存形式：'array'または'cell'
+                'patterns', 7, ...       % 使用するパターン数：チャンネル数の半分程度
+                'regularization', 0.05 ... % 正則化パラメータ：0.01-0.1程度
             ) ...
         ), ...
         'classifier', struct(...
             'svm', struct(...            % SVMの設定
-                'enable', false ...      % SVM分類器の有効/無効：分類時はtrue
+                'enable', true, ...      % SVM分類器の有効/無効：分類時はtrue
+                'type', 'ecoc', ...       % 分類器タイプ：'svm'（2クラス）または'ecoc'（多クラス）
+                'kernel', 'rbf', ...     % カーネル関数：'rbf'（推奨），'linear'，'polynomial'
+                'optimize', true, ...    % ハイパーパラメータ最適化：精度重視の場合true
+                'probability', true, ...  % 確率推定の有効/無効：閾値調整時はtrue
+                'threshold', struct(...   % 閾値関連の設定
+                    'rest', 0.5, ...     % デフォルトの安静状態閾値：0.3-0.7程度
+                    'useOptimal', true, ... % 最適閾値を使用するか：通常はtrue
+                    'optimal', [], ...    % クロスバリデーションで自動設定される
+                    'range', [0.1:0.05:0.9] ... % 閾値探索の範囲：細かい刻みで探索
+                ), ...
+                'hyperparameters', struct(... % ハイパーパラメータ設定
+                    'optimizer', 'gridsearch', ... % 最適化手法：'gridsearch'または'bayesian'
+                    'boxConstraint', [0.1, 1, 10, 100], ... % Cパラメータの探索範囲
+                    'kernelScale', [0.1, 1, 10, 100] ... % γパラメータの探索範囲
+                ) ...
             ), ...
             'evaluation', struct(...     % 評価設定
-                'enable', false ...      % 評価機能の有効/無効：学習時はtrue
+                'enable', true, ...      % 評価機能の有効/無効：学習時はtrue
+                'method', 'kfold', ...   % 評価方法：'kfold'（推奨）または'holdout'
+                'kfold', 5, ...          % 分割数：5または10を推奨
+                'holdoutRatio', 0.2, ... % ホールドアウト法の検証データ比率：0.2-0.3程度
+                'metrics', struct(...    % 評価指標の設定
+                    'accuracy', true, ... % 正解率：基本指標としてtrue
+                    'precision', true, ... % 適合率：クラス別性能評価用
+                    'recall', true, ...   % 再現率：クラス別性能評価用
+                    'f1score', true, ... % F1スコア：バランスの取れた評価指標
+                    'auc', true, ...     % AUC：2クラス分類の総合評価指標
+                    'confusion', true ... % 混同行列：詳細な性能分析用
+                ), ...
+                'visualization', struct(... % 可視化設定
+                    'enable', true, ...    % 可視化機能の有効/無効
+                    'confusionMatrix', true, ... % 混同行列の表示：分類性能の詳細確認
+                    'roc', true, ...       % ROC曲線：2クラス分類の性能評価
+                    'learningCurve', true, ... % 学習曲線：過学習の確認
+                    'featureImportance', true ... % 特徴量重要度：特徴選択用
+                ) ...
             ) ...
         ), ...
         'gui', struct(...
