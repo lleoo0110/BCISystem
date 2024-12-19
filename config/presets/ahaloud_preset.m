@@ -189,7 +189,7 @@
                 ), ...
                 'thresholds', struct(...        % 閾値設定
                     'abRatio', 1.0, ...         % α/β比の閾値：0.5-2.0程度
-                    'centerRegion', 0.3, ...    % 中心領域の判定閾値：0.2-0.4程度
+                    'centerRegion', 0.15, ...    % 中心領域の判定閾値：0.2-0.4程度
                     'faa', 0.5 ...              % FAA判定の閾値：0.3-0.7程度
                 ), ...
                 'labels', struct(...
@@ -258,10 +258,10 @@
                 'visualization', struct(...
                     'refreshRate', 0.2, ...     % 表示更新レート（秒）：0.1-0.5程度
                     'enable', struct(...        % 表示項目の有効/無効設定
-                        'rawData', false, ...    % 生データの表示：信号確認用
-                        'processedData', false, ... % 処理済みデータ：処理結果確認用
-                        'spectrum', false, ...   % スペクトル表示：周波数分析用
-                        'ersp', false ...       % 事象関連スペクトル：時間周波数分析用
+                        'rawData', true, ...    % 生データの表示：信号確認用
+                        'processedData', true, ... % 処理済みデータ：処理結果確認用
+                        'spectrum', true, ...   % スペクトル表示：周波数分析用
+                        'ersp', true ...       % 事象関連スペクトル：時間周波数分析用
                     ), ...
                     'scale', struct(...        % 表示スケールの設定
                         'auto', true, ...      % 自動スケーリング：通常はtrue

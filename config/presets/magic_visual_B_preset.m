@@ -101,10 +101,10 @@ function preset = magic_visual_B_preset()
             'normalize', struct(...       % 正規化の設定
                 'enabled', true, ...      % 正規化の有効/無効：通常はtrue
                 'type', 'all', ...        % 正規化の種類：'all'（全体）or 'epoch'（エポックごと）
-                'method', 'robust' ...    % 正規化方法：'zscore'，'minmax'，'robust'から選択
+                'method', 'zscore' ...    % 正規化方法：'zscore'，'minmax'，'robust'から選択
             ), ...
             'frequency', struct(...       % 周波数解析の設定
-                'min', 13, ...             % 解析する最小周波数（Hz）：通常1Hz
+                'min', 8, ...             % 解析する最小周波数（Hz）：通常1Hz
                 'max', 30, ...            % 解析する最大周波数（Hz）：通常50Hz
                 'bands', struct(...       % 周波数帯域の定義
                     'delta', [1 4], ...   % デルタ波帯域（Hz）：1-4Hz
@@ -193,7 +193,7 @@ function preset = magic_visual_B_preset()
                 ) ...
             ), ...
             'erd', struct(...            % 事象関連脱同期の設定
-                'enable', true ...      % ERD特徴量の有効/無効：運動想起時はtrue
+                'enable', false ...      % ERD特徴量の有効/無効：運動想起時はtrue
             ), ...
             'csp', struct(...            % 共通空間パターンの設定
                 'enable', true, ...      % CSP特徴量の有効/無効：分類時はtrue

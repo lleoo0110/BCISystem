@@ -4,6 +4,12 @@
 % params = getConfig('epocx', 'preset', 'magic_online');
 % params = getConfig('epocx', 'preset', 'ddaExperiment');
 
+% params = getConfig('epocx', 'preset', 'magic_visual_A');
+% params = getConfig('epocx', 'preset', 'magic_visual_B');
+% params = getConfig('epocx', 'preset', 'magic_visual_C');
+
+% params = getConfig('epocx', 'preset', 'ahaloud');
+
 % 全初期化：clc; clear all; close all; instrreset;
 % コマンドクリア：clc
 % ワークスペースクリア：clear all
@@ -17,7 +23,7 @@ setupPaths(currentDir);
 
 
 %%  指定のパラメータで実行
-params = getConfig('epocx', 'preset', 'ddaExperiment');
+params = getConfig('epocx', 'preset', 'magic_visual_A');
 analyzer = EEGAnalyzer(params);     % アナライザーの初期化
 analyzer.analyze();                            % 解析の実行
 

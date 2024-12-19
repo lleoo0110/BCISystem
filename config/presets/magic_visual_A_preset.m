@@ -89,11 +89,11 @@ function preset = magic_visual_A_preset()
             'epoch', struct(...           % エポック分割の設定
                 'storageType', 'array', ... % データ形式：'array'（行列）または'cell'（セル配列）
                 'method', 'time', ...         % エポック化方法：'time'または'odd-even'（注意：welch.windowLengthよりも小さいエポックはエラーが出る）
-                'overlap', 0.25, ...      % オーバーラップ率：0-1の値．0.25-0.5程度を推奨
+                'overlap', 0, ...      % オーバーラップ率：0-1の値．0.25-0.5程度を推奨
                 'baseline', [] ...        % ベースライン期間：自動設定（変更不要）
             ), ...
             'augmentation', struct(...    % データ拡張の設定
-                'enabled', false, ...     % データ拡張の有効/無効：データ量が少ない場合はtrue
+                'enabled', true, ...     % データ拡張の有効/無効：データ量が少ない場合はtrue
                 'numAugmentations', 4, ... % 1エポックあたりの拡張数：2-8程度
                 'maxShiftRatio', 0.1, ... % 最大シフト率：0-0.5の値．0.1-0.2程度を推奨
                 'noiseLevel', 0.05 ...    % ノイズレベル：0-0.2の値．0.05-0.1程度を推奨
@@ -101,10 +101,10 @@ function preset = magic_visual_A_preset()
             'normalize', struct(...       % 正規化の設定
                 'enabled', true, ...      % 正規化の有効/無効：通常はtrue
                 'type', 'all', ...        % 正規化の種類：'all'（全体）or 'epoch'（エポックごと）
-                'method', 'robust' ...    % 正規化方法：'zscore'，'minmax'，'robust'から選択
+                'method', 'zscore' ...    % 正規化方法：'zscore'，'minmax'，'robust'から選択
             ), ...
             'frequency', struct(...       % 周波数解析の設定
-                'min', 13, ...             % 解析する最小周波数（Hz）：通常1Hz
+                'min', 8, ...             % 解析する最小周波数（Hz）：通常1Hz
                 'max', 30, ...            % 解析する最大周波数（Hz）：通常50Hz
                 'bands', struct(...       % 周波数帯域の定義
                     'delta', [1 4], ...   % デルタ波帯域（Hz）：1-4Hz
@@ -133,7 +133,7 @@ function preset = magic_visual_A_preset()
         ), ...
         'feature', struct(...
             'power', struct(...           % パワー値計算の設定
-                'enable', true, ...       % パワー値計算の有効/無効：特徴量として使用する場合true
+                'enable', false, ...       % パワー値計算の有効/無効：特徴量として使用する場合true
                 'method', 'welch', ...    % パワー計算方法：'welch'（推奨），'fft'，'filter'，'wavelet'，'hilbert'
                 'normalize', true, ...    % パワー値の正規化：z-score正規化を推奨
                 'fft', struct(...         % FFT解析設定
@@ -193,12 +193,12 @@ function preset = magic_visual_A_preset()
                 ) ...
             ), ...
             'erd', struct(...            % 事象関連脱同期の設定
-                'enable', true ...      % ERD特徴量の有効/無効：運動想起時はtrue
+                'enable', false ...      % ERD特徴量の有効/無効：運動想起時はtrue
             ), ...
             'csp', struct(...            % 共通空間パターンの設定
                 'enable', true, ...      % CSP特徴量の有効/無効：分類時はtrue
                 'storageType', 'array', ... % データ保存形式：'array'または'cell'
-                'patterns', 7, ...       % 使用するパターン数：チャンネル数の半分程度
+                'patterns', 4, ...       % 使用するパターン数：チャンネル数の半分程度
                 'regularization', 0.05 ... % 正則化パラメータ：0.01-0.1程度
             ) ...
         ), ...
@@ -206,7 +206,7 @@ function preset = magic_visual_A_preset()
             'svm', struct(...            % SVMの設定
                 'enable', true, ...      % SVM分類器の有効/無効：分類時はtrue
                 'type', 'ecoc', ...       % 分類器タイプ：'svm'（2クラス）または'ecoc'（多クラス）
-                'kernel', 'rbf', ...     % カーネル関数：'rbf'（推奨），'linear'，'polynomial'
+                'kernel', 'linear', ...     % カーネル関数：'rbf'（推奨），'linear'，'polynomial'
                 'optimize', true, ...    % ハイパーパラメータ最適化：精度重視の場合true
                 'probability', true, ...  % 確率推定の有効/無効：閾値調整時はtrue
                 'threshold', struct(...   % 閾値関連の設定
