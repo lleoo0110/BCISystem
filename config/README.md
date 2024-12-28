@@ -4,8 +4,8 @@
 このディレクトリには、BCIシステムの設定ファイルが格納されています。設定は柔軟で、異なる実験やデバイス用にカスタマイズ可能です。
 
 ## ファイル構造
-- `template_preset.m`: デフォルト設定テンプレート
-- `getConfig.m`: 設定ローダー
+- `template_preset.m`: デフォルトパラメータ設定
+- `getConfig.m`: パラメータ設定読み込み
 
 ## 設定パラメータ
 - デバイス設定
@@ -18,8 +18,8 @@
 ## 使用方法
 ```matlab
 % プリセット設定を読み込む
-params = getConfig('epocx');  % デフォルトEPOC X設定
-params = getConfig('epocx', 'preset', 'magic_offline');  % オフラインモード
+params = getConfig('epocx');  % デフォルトEPOCX設定
+params = getConfig('epocx', 'preset', 'magic');  % オフラインモード
 ```
 
 ## カスタマイズ
