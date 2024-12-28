@@ -39,19 +39,19 @@ addpath(genpath('path/to/bci-system'));
 
 ## 使用方法
 
-### オンラインモード
-```matlab
-% オンラインデータ収集と処理
-params = getConfig('epocx');
-manager = EEGAcquisitionManager(params);
-```
-
-### オフライン解析
+### オフラインモード
 ```matlab
 % データの解析
 params = getConfig('epocx');
 analyzer = EEGAnalyzer(params);
 analyzer.analyze();
+```
+
+### オンラインモード
+```matlab
+% オンラインデータ収集と処理
+params = getConfig('epocx');
+manager = EEGAcquisitionManager(params);
 ```
 
 ## サポートされているデバイス
