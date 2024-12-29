@@ -6,14 +6,14 @@
 ## システム構成
 システムは以下のような階層構造で構成されています：
 
-<img src="docs/images/system_structure.png" width="800" alt="System Structure">
+<img src="images/system_structure.png" width="800" alt="System Structure">
 
 システムは大きく分けて以下の2つのサブシステムで構成されています：
 
 1. データ収集システム (Data Acquisition System)
 2. データ分析システム (Data Analysis System)
 
-<img src="docs/images/system_flow.png" width="600" alt="System Flow">
+<img src="images/system_flow.png" width="600" alt="System Flow">
 
 ## フォルダ構造
 
