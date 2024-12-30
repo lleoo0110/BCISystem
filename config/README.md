@@ -29,7 +29,7 @@ config/
 params = getConfig('epocx');  % デバイス名を指定
 
 % プリセットを指定する場合
-params = getConfig('epocx', 'preset', 'presetA');
+params = getConfig('epocx', 'preset', 'customPresets/presetA');
 ```
 
 ## 主要設定カテゴリ

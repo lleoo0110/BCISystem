@@ -731,17 +731,6 @@ classdef EEGAcquisitionManager < handle
 
                 % CSP特徴量の抽出と分類
                 currentFeatures = obj.processCSPFeatures(analysisSegment, currentTime);
-                
-                switch obj.params.classifier.activeClassifier
-                    case 'svm'
-                         [label, ~] = obj.processClassification(currentFeatures);
-                         
-                    case 'ecoc'
-                         [label, ~] = obj.processClassification(currentFeatures);
-
-                    case 'cnn'
-                         [label, ~] = obj.processClassification(analysisSegment);
-                end
 
                 % 分類器による分類
                 if ~isempty(currentFeatures)
@@ -955,47 +944,52 @@ classdef EEGAcquisitionManager < handle
             score = [];
 
             try
-                switch obj.params.classifier.activeClassifier
-                    case 'svm'
-                        % SVMモデルの存在確認
-                        if ~isfield(obj.classifiers, 'svm') || isempty(obj.classifiers.svm.model)
-                            fprintf('Warning: SVM model not found\n');
-                            return;
+                if ~isempty(currentFeatures)
+                    activeClassifier = obj.params.classifier.activeClassifier;
+                    fprintf('Active classifier: %s\n', activeClassifier);  % デバッグ出力
+
+                    switch activeClassifier
+                        case 'svm'
+                            % SVMモデルの存在確認
+                            if ~isfield(obj.classifiers, 'svm') || isempty(obj.classifiers.svm.model)
+                                fprintf('Warning: SVM model not found\n');
+                                return;
+                            end
+
+                            [label, score] = obj.svmClassifier.predictOnline(...
+                                currentFeatures, obj.classifiers.svm.model, obj.optimalThreshold);
+
+                        case 'ecoc'
+                            [label, score] = obj.ecocClassifier.predictOnline(...
+                                currentFeatures, obj.classifiers.ecoc.model);
+
+                        case 'cnn'
+                            [label, score] = obj.cnnClassifier.predictOnline(...
+                                currentFeatures, obj.classifiers.cnn.model);
+                    end
+
+                    % 予測結果の保存
+                    if ~isempty(label)
+                        currentTime = toc(obj.processingTimer)*1000;
+                        newPredictResult = struct(...
+                            'label', label, ...
+                            'score', score, ...
+                            'time', currentTime, ...
+                            'classifier', activeClassifier);
+
+                        % SVMの場合のみ閾値情報を追加
+                        if strcmp(activeClassifier, 'svm') && obj.params.classifier.svm.probability
+                            newPredictResult.threshold = obj.optimalThreshold;
                         end
 
-                        [label, score] = obj.svmClassifier.predictOnline(...
-                            currentFeatures, obj.classifiers.svm.model, obj.optimalThreshold);
+                        if isempty(obj.results.predict)
+                            obj.results.predict = newPredictResult;
+                        else
+                            obj.results.predict(end+1) = newPredictResult;
+                        end
 
-                    case 'ecoc'
-                        [label, score] = obj.ecocClassifier.predictOnline(...
-                            currentFeatures, obj.classifiers.ecoc.model);
-
-                    case 'cnn'
-                        [label, score] = obj.cnnClassifier.predictOnline(...
-                            currentFeatures, obj.classifiers.cnn.model);
-                end
-
-                % 予測結果の保存
-                if ~isempty(label)
-                    currentTime = toc(obj.processingTimer)*1000;
-                    newPredictResult = struct(...
-                        'label', label, ...
-                        'score', score, ...
-                        'time', currentTime, ...
-                        'classifier', obj.params.classifier.activeClassifier);
-
-                    % SVMの場合のみ閾値情報を追加
-                    if strcmp(activeClassifier, 'svm') && obj.params.classifier.svm.probability
-                        newPredictResult.threshold = obj.optimalThreshold;
+                        fprintf('Prediction result saved successfully\n');
                     end
-
-                    if isempty(obj.results.predict)
-                        obj.results.predict = newPredictResult;
-                    else
-                        obj.results.predict(end+1) = newPredictResult;
-                    end
-
-                    fprintf('Prediction result saved successfully\n');
                 end
             catch ME
                 fprintf('Error in processClassification: %s\n', ME.message);

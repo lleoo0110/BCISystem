@@ -6,8 +6,6 @@ classdef CNNClassifier < handle
         adaBoostModel      % AdaBoostモデル
         isEnabled          % 有効/無効フラグ
         isInitialized      % 初期化フラグ
-        bestValAccuracy    % 最良の検証精度
-        patienceCounter    % Early Stopping用カウンター
     end
     
     properties (Access = public)
@@ -153,10 +151,6 @@ classdef CNNClassifier < handle
                 validationData = trainData(:,:,:,validationIndices);
                 validationLabels = trainLabels(validationIndices);
 
-                % Early Stopping用の初期化
-                obj.bestValAccuracy = 0;
-                obj.patienceCounter = 0;
-
                 % モニタリング設定の取得
                 monitoring = obj.params.classifier.cnn.training.monitoring;
 
@@ -165,6 +159,14 @@ classdef CNNClassifier < handle
                 if ~monitoring.plot_training
                     plotSetting = 'none';
                 end
+
+                % Early Stopping用のOutputFcn
+                bestValAccuracy = 0;
+                patience = validationPatience;
+                patienceCounter = 0;
+
+                outputFcn = @(info)stopIfValidationAccuracyStops(info, ...
+                    bestValAccuracy, patience, patienceCounter);
 
                 % 学習オプションの設定
                 options = trainingOptions('adam', ...
@@ -176,7 +178,7 @@ classdef CNNClassifier < handle
                     'ValidationPatience', validationPatience, ...
                     'Shuffle', 'every-epoch', ...
                     'Verbose', true, ...
-                    'OutputFcn', @obj.outputFunction, ...
+                    'OutputFcn', outputFcn, ...
                     'Plots', plotSetting);
 
                 % レイヤーの構築
@@ -197,27 +199,26 @@ classdef CNNClassifier < handle
             end
         end
 
-        function stop = outputFunction(obj, info)
-            % Early Stoppingのための出力関数
+        function stop = stopIfValidationAccuracyStops(info, bestValAccuracy, patience, patienceCounter)
             stop = false;
-            
+
             % 検証精度の取得
             if ~isempty(info.ValidationAccuracy)
                 currentAccuracy = info.ValidationAccuracy;
-                
+
                 % 精度が改善した場合
-                if currentAccuracy > obj.bestValAccuracy
-                    obj.bestValAccuracy = currentAccuracy;
-                    obj.patienceCounter = 0;
+                if currentAccuracy > bestValAccuracy
+                    bestValAccuracy = currentAccuracy;
+                    patienceCounter = 0;
                 else
-                    obj.patienceCounter = obj.patienceCounter + 1;
+                    patienceCounter = patienceCounter + 1;
                 end
-                
+
                 % patience回数を超えたら停止
-                if obj.patienceCounter >= obj.params.classifier.cnn.training.validation.patience
+                if patienceCounter >= patience
                     stop = true;
                     fprintf('Early stopping triggered. Best validation accuracy: %.2f%%\n', ...
-                        obj.bestValAccuracy);
+                        bestValAccuracy);
                 end
             end
         end
