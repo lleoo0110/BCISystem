@@ -59,33 +59,45 @@ classdef UDPManager < handle
         function sendTrigger(obj, trigger)
             try
                 if ischar(trigger) || isstring(trigger)
-                    % character or string
-                    fprintf(udpObject, char(trigger));
-                    disp(['Sent text message: ' char(trigger)]);
+                    % 文字列データの送信
+                    fprintf(obj.sendSocket, char(trigger));
+                    fprintf('Sent text message: %s\n', char(trigger));
+
+                elseif iscategorical(trigger)
+                    % categorical型データの送信
+                    triggerValue = double(trigger);
+                    bytes = typecast(int32(triggerValue), 'uint8');
+                    fwrite(obj.sendSocket, bytes, 'uint8');
+                    fprintf('Sent categorical trigger value: %d\n', triggerValue);
+
                 elseif isnumeric(trigger)
+                    % 数値データの送信
                     if mod(trigger, 1) == 0
-                        % Integer
+                        % 整数値
                         bytes = typecast(int32(trigger), 'uint8');
                         dataType = 'integer';
                     else
-                        % Float
+                        % 浮動小数点値
                         bytes = typecast(single(trigger), 'uint8');
                         dataType = 'float';
                     end
 
-                    % Send the numeric data as bytes
+                    % データ送信
                     fwrite(obj.sendSocket, bytes, 'uint8');
+                    fprintf('Sent %s trigger: %d\n', dataType, trigger);
+
                 else
-                    % Throw an error for unsupported data types
-                    error('Unsupported data type. Please use text or numeric data.');
+                    % その他のデータ型の場合はエラー
+                    error('Unsupported trigger data type: %s', class(trigger));
                 end
 
-                % 送信確認のログを追加
-                fprintf('INFO: Trigger %d sent successfully\n', trigger);
+                % 送信確認のログ
+                fprintf('INFO: Trigger sent successfully\n');
+
             catch ME
                 warning(ME.identifier, 'UDP send error: %s', ME.message);
                 % エラーの詳細をログに記録
-                fprintf('ERROR: Failed to send trigger %d\n', trigger);
+                fprintf('ERROR: Failed to send trigger: %s\n', ME.message);
             end
         end
         

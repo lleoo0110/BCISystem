@@ -11,7 +11,9 @@ classdef GUIControllerManager < handle
         startButton
         stopButton
         pauseButton
-        modeToggle
+       
+        % モード表示用のテキスト
+        modeDisplay
 
         % ラベル関連コンポーネント
         labelButtons
@@ -71,14 +73,13 @@ classdef GUIControllerManager < handle
         
         function delete(obj)
             try
-                if ~isempty(obj.updateTimer) && isvalid(obj.updateTimer)
+                if ~isempty(obj.updateTimer)
                     stop(obj.updateTimer);
                     delete(obj.updateTimer);
                 end
-                if isvalid(obj.mainFigure)
-                    delete(obj.mainFigure);
-                end
-                if obj.isSliderEnabled && isvalid(obj.sliderFigure)
+                
+                delete(obj.mainFigure);
+                if obj.isSliderEnabled
                     delete(obj.sliderFigure);
                 end
             catch ME
@@ -94,17 +95,6 @@ classdef GUIControllerManager < handle
             set(obj.statusText, 'String', ['Status: ' status]);
             obj.updateButtonStates();
         end
-        
-%         function updateMode(obj, mode)
-%             if strcmpi(mode, 'online')
-%                 set(obj.modeToggle, 'Value', 1);
-%                 set(obj.modeToggle, 'String', 'Offline Mode');
-%             else
-%                 set(obj.modeToggle, 'Value', 0);
-%                 set(obj.modeToggle, 'String', 'Online Mode');
-%             end
-%             obj.updateParameterPanel(mode);
-%         end
         
         function updateDisplayData(obj, displayData)
             try
@@ -139,87 +129,6 @@ classdef GUIControllerManager < handle
                 warning(ME.identifier, '%s', ME.message);
             end
         end
-        
-%         function updateResults(obj, data)
-%             try
-%                 displayInfo = obj.processForDisplay(data);
-% 
-%                 if ~isempty(displayInfo)
-%                     % 生データの表示更新
-%                     if isfield(displayInfo, 'rawData') && ...
-%                             obj.params.gui.display.visualization.enable.rawData
-%                         obj.updateRawDataPlot(displayInfo.rawData);
-%                     end
-% 
-%                     % 処理済みデータの表示更新
-%                     if isfield(displayInfo, 'processedData') && ...
-%                             obj.params.gui.display.visualization.enable.processedData
-%                         obj.updateProcessedDataPlot(displayInfo.processedData);
-%                     end
-% 
-%                     % スペクトルの表示更新
-%                     if isfield(displayInfo, 'spectrum') && ...
-%                             obj.params.gui.display.visualization.enable.spectrum
-%                         obj.updateSpectrumPlot(displayInfo.spectrum);
-%                     end
-% 
-%                     % ERSPの表示更新
-%                     if isfield(displayInfo, 'ersp') && ...
-%                             obj.params.gui.display.visualization.enable.ersp
-%                         obj.updateERSPPlot(displayInfo.ersp);
-%                     end
-%                 end
-%             catch ME
-%                 warning(ME.identifier, '%s', ME.message);
-%             end
-%         end
-        
-%         function displayInfo = processForDisplay(obj, data)
-%             try
-%                 displayInfo = struct();
-% 
-%                 % 生データの追加
-%                 if obj.params.gui.display.visualization.enable.rawData
-%                     displayInfo.rawData = data.rawData;
-%                 end
-% 
-%                 % 処理済みデータの追加
-%                 if obj.params.gui.display.visualization.enable.processedData
-%                     displayInfo.processedData = data.processedData;
-%                 end
-% 
-%                 % パワースペクトルの計算と追加
-%                 if obj.params.gui.display.visualization.enable.spectrum
-%                     [pxx, f] = obj.powerExtractor.calculateSpectrum(data.processedData);
-%                     displayInfo.spectrum = struct('pxx', pxx, 'f', f);
-%                 end
-% 
-%                 % ERSPの計算と追加
-%                 if obj.params.gui.display.visualization.enable.ersp
-%                     [ersp, times, freqs] = obj.powerExtractor.calculateERSP(data.processedData);
-%                     displayInfo.ersp = struct('ersp', ersp, 'times', times, 'freqs', freqs);
-%                 end
-% 
-%             catch ME
-%                 warning(ME.identifier, '%s', ME.message);
-%                 displayInfo = struct();
-%             end
-%         end
-        
-%         function updateDisplayBuffer(obj, newData)
-%             if isempty(newData)
-%                 return;
-%             end
-%             
-%             totalSamples = size(obj.displayBuffer, 2);
-%             newSamples = size(newData, 2);
-%             
-%             if newSamples >= totalSamples
-%                 obj.displayBuffer = newData(:, end-totalSamples+1:end);
-%             else
-%                 obj.displayBuffer = [obj.displayBuffer(:, newSamples+1:end), newData];
-%             end
-%         end
 
         function showError(~, title, message)
             errordlg(message, title);
@@ -228,19 +137,19 @@ classdef GUIControllerManager < handle
         function closeAllWindows(obj)
             try
                 % まずコールバックを無効化
-                if ~isempty(obj.mainFigure) && isvalid(obj.mainFigure)
+                if ~isempty(obj.mainFigure)
                     set(obj.mainFigure, 'CloseRequestFcn', []);
                     set(findobj(obj.mainFigure, 'Type', 'uicontrol'), 'Callback', []);
                 end
 
                 % タイマーの停止
-                if ~isempty(obj.updateTimer) && isvalid(obj.updateTimer)
+                if ~isempty(obj.updateTimer)
                     stop(obj.updateTimer);
                     delete(obj.updateTimer);
                 end
 
                 % メインウィンドウを閉じる
-                if ~isempty(obj.mainFigure) && isvalid(obj.mainFigure)
+                if ~isempty(obj.mainFigure)
                     delete(obj.mainFigure);
                 end
 
@@ -250,7 +159,7 @@ classdef GUIControllerManager < handle
         end
         
         function createSliderWindow(obj)
-            if ~obj.isSliderEnabled || (~isempty(obj.sliderFigure) && isvalid(obj.sliderFigure))
+            if ~obj.isSliderEnabled || (~isempty(obj.sliderFigure))
                 return;  % すでにウィンドウが存在する場合は作成しない
             end
 
@@ -346,11 +255,10 @@ classdef GUIControllerManager < handle
                 'Enable', 'off', ...
                 'Callback', @obj.pauseButtonCallback);
             
-            obj.modeToggle = uicontrol(obj.controlPanel, ...
-                'Style', 'togglebutton', ...
-                'String', 'Online Mode', ...
-                'Position', [350 80 100 30], ...
-                'Callback', @obj.modeToggleCallback);
+            obj.modeDisplay = uicontrol(obj.controlPanel, ...
+                'Style', 'text', ...
+                'String', sprintf('Mode: %s', upper(obj.params.acquisition.mode)), ...
+                'Position', [350 80 100 30]);
             
             % 状態表示
             obj.statusText = uicontrol(obj.controlPanel, ...
@@ -370,10 +278,6 @@ classdef GUIControllerManager < handle
                 obj.visualPanel = uipanel(obj.mainFigure, ...
                     'Title', 'Visualization', ...
                     'Position', [0.02 0.3 0.96 0.48]);
-
-                if ~isvalid(obj.visualPanel)
-                    error('Failed to create visualization panel');
-                end
                 
             catch ME
                 fprintf('Error in createVisualizationPanel: %s\n', ME.message);
@@ -929,10 +833,8 @@ classdef GUIControllerManager < handle
             
             xRange = get(axHandle, 'XLim');
             lineColor = 'w';
-            textColor = 'w';
             if strcmp(erspParams.colormap.background, 'white')
                 lineColor = 'k';
-                textColor = 'k';
             end
             
             for i = 1:length(bandNames)
@@ -943,10 +845,6 @@ classdef GUIControllerManager < handle
                         '--', 'Color', lineColor, 'LineWidth', 0.5);
                     plot(axHandle, xRange, [bandRange(2) bandRange(2)], ...
                         '--', 'Color', lineColor, 'LineWidth', 0.5);
-                    text(xRange(2), mean(bandRange), [' ' bandName], ...
-                        'Color', textColor, ...
-                        'HorizontalAlignment', 'left', ...
-                        'VerticalAlignment', 'middle');
                 end
             end
             hold(axHandle, 'off');
@@ -1061,22 +959,6 @@ classdef GUIControllerManager < handle
             end
         end
         
-        function modeToggleCallback(obj, ~, ~)
-            % 現在の状態の反対のモードを設定
-            if get(obj.modeToggle, 'Value')
-                mode = 'online';
-                set(obj.modeToggle, 'String', 'Offline Mode');
-            else
-                mode = 'offline';
-                set(obj.modeToggle, 'String', 'Online Mode');
-            end
-
-            % モード変更のコールバックを呼び出し
-            if isfield(obj.callbacks, 'onModeChange')
-                obj.callbacks.onModeChange(mode);
-            end
-        end
-        
         function onLabelButtonClick(obj, labelValue)
             if obj.isRunning && ~obj.isPaused && ...
                     ~isempty(obj.callbacks) && isfield(obj.callbacks, 'onLabel')
@@ -1112,12 +994,10 @@ classdef GUIControllerManager < handle
                 set(obj.startButton, 'Enable', 'off');
                 set(obj.stopButton, 'Enable', 'on');
                 set(obj.pauseButton, 'Enable', 'on');
-                set(obj.modeToggle, 'Enable', 'off');
             else
                 set(obj.startButton, 'Enable', 'on');
                 set(obj.stopButton, 'Enable', 'off');
                 set(obj.pauseButton, 'Enable', 'off');
-                set(obj.modeToggle, 'Enable', 'on');
             end
             
             if obj.isPaused
@@ -1132,20 +1012,12 @@ classdef GUIControllerManager < handle
                 obj.stopButtonCallback();
             end
             
-            if ~isempty(obj.updateTimer) && isvalid(obj.updateTimer)
+            if ~isempty(obj.updateTimer)
                 stop(obj.updateTimer);
                 delete(obj.updateTimer);
             end
             
             delete(obj.mainFigure);
-        end
-        
-        function updateParameterPanel(obj, mode)
-            if strcmpi(mode, 'online')
-                set(obj.paramPanel, 'Title', 'Online Display Control');
-            else
-                set(obj.paramPanel, 'Title', 'Offline Display Control');
-            end
         end
         
         function sliderCallback(obj, src, ~)

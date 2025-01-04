@@ -189,7 +189,7 @@ function preset = template_preset()
                 'method', 'robust' ...   % 正規化方法：'zscore', 'minmax', 'robust'
             ), ...
             'augmentation', struct(... % データ拡張設定
-                'enable', false, ...    % データ拡張の有効/無効
+                'enable', true, ...    % データ拡張の有効/無効
                 'augmentationRatio', 4, ... % 元のデータに対する拡張データの比率
                 'combinationLimit', 3, ... % 1回の拡張で適用できる最大手法数
                 'methods', struct(...   % 拡張手法の設定

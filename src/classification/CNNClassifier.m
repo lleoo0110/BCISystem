@@ -62,7 +62,6 @@ classdef CNNClassifier < handle
                 % 性能指標の更新
                 obj.updatePerformanceMetrics(testMetrics);
                 
-                
                 % 交差検証の実行    
                 crossValidationResults = [];        % クロスバリデーション結果の初期化
                 if obj.params.classifier.cnn.training.validation.enable
@@ -99,20 +98,17 @@ classdef CNNClassifier < handle
             end
         end
 
-        function [label, score] = predictOnline(obj, cnnModel, data)
+        function [label, score] = predictOnline(obj, data, cnnModel)
             if ~obj.isEnabled
                 error('CNN is disabled');
             end
 
             try
                 % データの整形
-                predictData = obj.prepareOnlineData(data);
-                
-                % モデルの検証
-                obj.validateModel();
+                prepData = obj.prepareDataForCNN(data);
                 
                 % 予測の実行
-                [label, scores] = classify(cnnModel, predictData);
+                [label, scores] = classify(cnnModel, prepData);
                 
                 % クラス1（安静状態）の確率を取得
                 score = scores(:,1);
@@ -698,39 +694,6 @@ classdef CNNClassifier < handle
             catch ME
                 fprintf('\nError in prepareDataForCNN: %s\n', ME.message);
                 rethrow(ME);
-            end
-        end
-        
-        function predictData = prepareOnlineData(obj, data)
-            try
-                % データの形状を確認
-                [channels, samples] = size(data);
-                
-                % チャネル数の検証
-                if channels ~= obj.params.device.channelCount
-                    error('Invalid number of channels. Expected %d, got %d', ...
-                        obj.params.device.channelCount, channels);
-                end
-                
-                % サンプル数の検証
-                expectedSamples = round(obj.params.signal.window.analysis * obj.params.device.sampleRate);
-                if samples ~= expectedSamples
-                    error('Invalid number of samples. Expected %d, got %d', ...
-                        expectedSamples, samples);
-                end
-                
-                % CNNの入力形式に変換 [channels × samples × 1]
-                predictData = reshape(data, [channels, samples, 1]);
-                
-            catch ME
-                error('Online data preparation failed: %s', ME.message);
-            end
-        end
-        
-        function validateModel(obj)
-            % モデルの検証
-            if isempty(obj.net) || ~isobject(obj.net)
-                error('Invalid CNN model. Please train the model first.');
             end
         end
         

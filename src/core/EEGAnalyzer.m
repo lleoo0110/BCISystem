@@ -74,6 +74,8 @@ classdef EEGAnalyzer < handle
 
                 obj.saveResults();
                 
+                % 全てのウィンドウを閉じる
+                close all;
             catch ME
                 error('Analysis failed: %s', ME.message);
             end
