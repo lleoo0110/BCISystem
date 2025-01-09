@@ -58,6 +58,7 @@ classdef EEGAcquisitionManager < handle
         fileIndex
         lastSaveTime
         lastSavedFilePath    % 最後に保存したファイルのパス
+        latestResults           % UDP送信用の最新結果保持用
         
         % サンプル数管理用の変数を追加
         totalSampleCount    % 累積サンプル数
@@ -682,18 +683,34 @@ classdef EEGAcquisitionManager < handle
                 
                 switch obj.params.classifier.activeClassifier
                     case 'svm'
-                         [label, ~] = obj.processClassification(currentFeatures);
+                         [label, score] = obj.processClassification(currentFeatures);
                          
                     case 'ecoc'
-                         [label, ~] = obj.processClassification(currentFeatures);
+                         [label, score] = obj.processClassification(currentFeatures);
 
                     case 'cnn'
-                         [label, ~] = obj.processClassification(analysisSegment);
+                         [label, score] = obj.processClassification(analysisSegment);
                 end
+
+                % 最新の結果を構造体として保存
+                obj.latestResults = struct(...
+                    'prediction', struct(...
+                        'label', label, ...
+                        'score', score, ...
+                        'classifier', obj.params.classifier.activeClassifier ...
+                    ), ...
+                    'features', struct(...
+                        'power', obj.results.power, ...
+                        'faa', obj.results.faa, ...
+                        'abRatio', obj.results.abRatio, ...
+                        'emotion', obj.results.emotion, ...
+                        'csp', obj.results.csp.features ...
+                    ) ...
+                );
 
                 % UDP送信
                 if ~isempty(label)
-                    obj.sendResults(label);
+                    obj.sendResults(obj.latestResults);
                 end
 
             catch ME
