@@ -35,7 +35,6 @@ classdef DataAugmenter < handle
                maxCount = max(labelCounts);
 
                balanceAugPerClass = maxCount - labelCounts;
-               disp(balanceAugPerClass);
 
                remainingAugs = targetTotalEpochs - (epochs + sum(balanceAugPerClass));
 
@@ -46,7 +45,6 @@ classdef DataAugmenter < handle
                else
                    augCountsPerClass = balanceAugPerClass;
                end
-               disp(augCountsPerClass);
 
                totalAugmentations = sum(augCountsPerClass);
 
@@ -68,7 +66,6 @@ classdef DataAugmenter < handle
                        baseIdx = classEpochs(randi(obj.rng, length(classEpochs)));
                        methods = obj.selectAugmentationMethods();
                        info.methodsUsed{currentIdx-epochs} = methods;
-                       disp(methods);
 
                        augmentedEpoch = data(:,:,baseIdx);
                        for method = methods

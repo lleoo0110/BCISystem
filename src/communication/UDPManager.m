@@ -58,34 +58,40 @@ classdef UDPManager < handle
         
         function sendTrigger(obj, trigger)
             try
-                if ischar(trigger) || isstring(trigger)
-                    % character or string
-                    fprintf(udpObject, char(trigger));
-                    disp(['Sent text message: ' char(trigger)]);
+                if isstruct(trigger)
+                    % 構造体をJSONに変換して送信
+                    jsonStr = jsonencode(trigger);
+                    fprintf(obj.sendSocket, jsonStr);
+                    fprintf('Sent JSON data: %s\n', jsonStr);
+                    
+                elseif ischar(trigger) || isstring(trigger)
+                    % 文字列データの送信
+                    fprintf(obj.sendSocket, char(trigger));
+                    fprintf('Sent text message: %s\n', char(trigger));
+                    
+                elseif iscategorical(trigger)
+                    % categorical型データの送信
+                    triggerValue = double(trigger);
+                    bytes = typecast(int32(triggerValue), 'uint8');
+                    fwrite(obj.sendSocket, bytes, 'uint8');
+                    fprintf('Sent categorical trigger value: %d\n', triggerValue);
+                    
                 elseif isnumeric(trigger)
                     if mod(trigger, 1) == 0
-                        % Integer
                         bytes = typecast(int32(trigger), 'uint8');
-                        dataType = 'integer';
                     else
-                        % Float
                         bytes = typecast(single(trigger), 'uint8');
-                        dataType = 'float';
                     end
-
-                    % Send the numeric data as bytes
                     fwrite(obj.sendSocket, bytes, 'uint8');
                 else
-                    % Throw an error for unsupported data types
-                    error('Unsupported data type. Please use text or numeric data.');
+                    error('Unsupported trigger data type: %s', class(trigger));
                 end
 
-                % 送信確認のログを追加
-                fprintf('INFO: Trigger %d sent successfully\n', trigger);
+                fprintf('INFO: Trigger sent successfully\n');
+                
             catch ME
                 warning(ME.identifier, 'UDP send error: %s', ME.message);
-                % エラーの詳細をログに記録
-                fprintf('ERROR: Failed to send trigger %d\n', trigger);
+                fprintf('ERROR: Failed to send trigger: %s\n', ME.message);
             end
         end
         
@@ -184,6 +190,28 @@ classdef UDPManager < handle
                 obj.cleanup();
                 rethrow(ME);
             end
+        end
+        
+        function logTriggerInfo(~, trigger)
+            fprintf('=== Trigger Information ===\n');
+            fprintf('Data type: %s\n', class(trigger));
+            
+            if isstruct(trigger)
+                fprintf('Structure fields:\n');
+                fields = fieldnames(trigger);
+                for i = 1:length(fields)
+                    fprintf('  %s: %s\n', fields{i}, class(trigger.(fields{i})));
+                end
+            elseif iscategorical(trigger)
+                fprintf('Categories: %s\n', strjoin(string(categories(trigger)), ', '));
+                fprintf('Value: %s (numeric: %d)\n', char(trigger), double(trigger));
+            elseif isnumeric(trigger)
+                fprintf('Value: %d\n', trigger);
+            elseif ischar(trigger) || isstring(trigger)
+                fprintf('Value: %s\n', char(trigger));
+            end
+            
+            fprintf('========================\n');
         end
         
         function cleanup(obj)
