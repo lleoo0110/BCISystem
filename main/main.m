@@ -1,5 +1,7 @@
 % パラメータ例：
 % params = getConfig('epocx');
+% params = getConfig('epocx', 'preset', 'test/test');
+
 % params = getConfig('epocx', 'preset', 'magic');
 % params = getConfig('epocx', 'preset', 'ddaExperiment');
 
@@ -39,7 +41,6 @@ function setupPaths(currentDir)
             'core'
             'data'
             'features'
-            'main'
             'preprocessing'
             'utils'
             'visualization'
@@ -51,7 +52,6 @@ function setupPaths(currentDir)
         
         % パスの存在確認と追加
         % ソースディレクトリの各フォルダを追加
-        fprintf('\nソースディレクトリのパス:\n');
         for i = 1:length(mainDirs)
             dirPath = fullfile(srcDir, mainDirs{i});
             if exist(dirPath, 'dir')
@@ -62,7 +62,6 @@ function setupPaths(currentDir)
         end
         
         % LSLパスの追加
-        fprintf('\nLSLパス:\n');
         if exist(lslDir, 'dir')
             addpath(genpath(lslDir));
         else
@@ -70,7 +69,6 @@ function setupPaths(currentDir)
         end
         
         % Configパスの追加
-        fprintf('\nConfigパス:\n');
         if exist(configDir, 'dir')
             addpath(genpath(configDir));
         else

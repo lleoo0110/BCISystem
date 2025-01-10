@@ -41,7 +41,6 @@ classdef EEGAcquisitionManager < handle
         % 状態管理
         isRunning
         isPaused
-        isOnlineMode
         currentTotalSamples
         
         % データバッファ
@@ -59,6 +58,7 @@ classdef EEGAcquisitionManager < handle
         fileIndex
         lastSaveTime
         lastSavedFilePath    % 最後に保存したファイルのパス
+        latestResults           % UDP送信用の最新結果保持用
         
         % サンプル数管理用の変数を追加
         totalSampleCount    % 累積サンプル数
@@ -70,7 +70,6 @@ classdef EEGAcquisitionManager < handle
             obj.params = params;
             obj.isRunning = false;
             obj.isPaused = false;
-            obj.isOnlineMode = strcmpi(params.acquisition.mode, 'online');
             
             % 初期化
             obj.initializeDataBuffers();
@@ -90,9 +89,6 @@ classdef EEGAcquisitionManager < handle
             % サンプル数カウンタの初期化
             obj.totalSampleCount = 0;
             obj.lastResetSampleCount = 0;
-            
-            % スライダーウィンドウの作成
-            obj.guiController.createSliderWindow();
         end
         
         function delete(obj)
@@ -121,37 +117,6 @@ classdef EEGAcquisitionManager < handle
                 end
             catch ME
                 warning(ME.identifier, '%s', ME.message);
-            end
-        end
-        
-        function setMode(obj, mode)
-            if ~obj.isRunning
-                % 現在のパラメータを保持してモードを更新
-                currentParams = obj.params;
-                currentParams.acquisition.mode = mode;  % 新しいモードを設定
-                obj.isOnlineMode = strcmpi(mode, 'online');  % モードフラグを更新
-                
-                % GUIを閉じる
-                if ~isempty(obj.guiController)
-                    obj.guiController.closeAllWindows();
-                end
-                
-                % タイマーの停止
-                if ~isempty(obj.acquisitionTimer) && isvalid(obj.acquisitionTimer)
-                    stop(obj.acquisitionTimer);
-                end
-                
-                % 全てのリソースを解放
-                delete(obj);
-                
-                % システムの再初期化前に待機
-                pause(0.5);
-                
-                % 新しいインスタンスを作成（新しいモードで初期化）
-                EEGAcquisitionManager(currentParams);
-            else
-                % 記録中は切り替え不可のメッセージを表示
-                warning('Cannot change mode while recording is in progress.');
             end
         end
         
@@ -186,15 +151,7 @@ classdef EEGAcquisitionManager < handle
                     obj.saveTemporaryData();
                 end
                 
-                [mergedData, mergedLabels] = obj.mergeAndSaveData();
-                
-                % オフラインモードの場合の処理
-                if ~obj.isOnlineMode
-                    if ~isempty(mergedData)
-                        obj.rawData = mergedData;
-                        obj.labels = mergedLabels;
-                    end
-                end
+                obj.mergeAndSaveData();
                 
                 % タイマーの停止
                 stop(obj.acquisitionTimer);
@@ -205,15 +162,8 @@ classdef EEGAcquisitionManager < handle
                     obj.guiController.closeAllWindows();
                 end
                 
-                % 現在のパラメータを保持
-                currentParams = obj.params;
-                
                 % 全てのリソースを解放
                 delete(obj);
-                
-                % システムの再初期化
-                pause(0.5);  % リソース解放のための短い待機
-                EEGAcquisitionManager(currentParams);
             end
         end
         
@@ -303,7 +253,7 @@ classdef EEGAcquisitionManager < handle
                 obj.setupGUICallbacks();
                 
                 % オンラインモードならオンライン初期化
-                if obj.isOnlineMode
+                if strcmpi(obj.params.acquisition.mode, 'online')
                     obj.initializeOnline();
                 end
             catch ME
@@ -337,7 +287,6 @@ classdef EEGAcquisitionManager < handle
                 'onStop', @() obj.stop(), ...
                 'onPause', @() obj.pause(), ...
                 'onResume', @() obj.resume(), ...
-                'onModeChange', @(mode) obj.setMode(mode), ...
                 'onLabel', @(value) obj.handleLabel(value), ...
                 'onParamChange', @(param, value) obj.updateParameter(param, value));
             
@@ -510,7 +459,7 @@ classdef EEGAcquisitionManager < handle
             end
         end
         
-        function [mergedData, mergedLabels] = mergeAndSaveData(obj)
+        function mergeAndSaveData(obj)
             try
                 % データの統合
                 [mergedData, mergedLabels] = obj.mergeTempFiles();
@@ -562,19 +511,18 @@ classdef EEGAcquisitionManager < handle
                 end
 
                 % アクティブな分類器の確認
-                activeClassifier = obj.params.classifier.activeClassifier;
-                if ~isfield(loadedData.classifier, activeClassifier)
-                    error('Selected classifier "%s" not found in loaded data', activeClassifier);
+                if ~isfield(loadedData.classifier, obj.params.classifier.activeClassifier)
+                    error('Selected classifier "%s" not found in loaded data', obj.params.classifier.activeClassifier);
                 end
 
                 % 分類器モデルの設定
-                if ~isfield(loadedData.classifier.(activeClassifier), 'model')
-                    error('%s model not found in loaded data', upper(activeClassifier));
+                if ~isfield(loadedData.classifier.(obj.params.classifier.activeClassifier), 'model')
+                    error('%s model not found in loaded data', upper(obj.params.classifier.activeClassifier));
                 end
                 obj.classifiers = loadedData.classifier;
 
                 % SVMの場合のみ最適閾値を設定
-                if strcmp(activeClassifier, 'svm')
+                if strcmp(obj.params.classifier.activeClassifier, 'svm')
                     if obj.params.classifier.svm.probability
                         % 分類器の性能情報から最適閾値を取得
                         if isfield(loadedData.classifier.svm, 'performance') && ...
@@ -594,7 +542,7 @@ classdef EEGAcquisitionManager < handle
                 obj.results.csp.filters = loadedData.results.csp.filters;
 
                 fprintf('Successfully initialized online processing with %s classifier\n', ...
-                    upper(activeClassifier));
+                    upper(obj.params.classifier.activeClassifier));
 
             catch ME
                 obj.guiController.showError('Online processing initialization failed', ME.message);
@@ -676,7 +624,7 @@ classdef EEGAcquisitionManager < handle
 
                 if size(obj.dataBuffer, 2) >= obj.bufferSize
                     % オンライン処理の更新
-                    if obj.isOnlineMode
+                    if strcmpi(obj.params.acquisition.mode, 'online')
                         obj.processOnline();
                     end
 
@@ -704,7 +652,6 @@ classdef EEGAcquisitionManager < handle
         
         function processOnline(obj)
             try
-                currentTime = toc(obj.processingTimer)*1000;
                 obj.currentTotalSamples = obj.totalSampleCount + size(obj.rawData, 2);
 
                 % 前処理
@@ -724,24 +671,46 @@ classdef EEGAcquisitionManager < handle
                 end
 
                 % 各特徴量の処理（最新の解析ウィンドウのみを使用）
-                obj.processPowerFeatures(analysisSegment, currentTime);
-                obj.processFAAFeatures(analysisSegment, currentTime);
-                obj.processABRatioFeatures(analysisSegment, currentTime);
-                obj.processEmotionFeatures(analysisSegment, currentTime);
+                obj.processPowerFeatures(analysisSegment);
+                obj.processFAAFeatures(analysisSegment);
+                obj.processABRatioFeatures(analysisSegment);
+                obj.processEmotionFeatures(analysisSegment);
 
                 % CSP特徴量の抽出と分類
-                currentFeatures = obj.processCSPFeatures(analysisSegment, currentTime);
-
-                % 分類器による分類
-                if ~isempty(currentFeatures)
-                    [label, ~] = obj.processClassification(currentFeatures);
-                else
-                    fprintf('Warning: No features extracted for classification\n');
+                if obj.params.feature.csp.enable
+                    currentFeatures = obj.processCSPFeatures(analysisSegment);
                 end
+                
+                switch obj.params.classifier.activeClassifier
+                    case 'svm'
+                         [label, score] = obj.processClassification(currentFeatures);
+                         
+                    case 'ecoc'
+                         [label, score] = obj.processClassification(currentFeatures);
+
+                    case 'cnn'
+                         [label, score] = obj.processClassification(analysisSegment);
+                end
+
+                % 最新の結果を構造体として保存
+                obj.latestResults = struct(...
+                    'prediction', struct(...
+                        'label', label, ...
+                        'score', score, ...
+                        'classifier', obj.params.classifier.activeClassifier ...
+                    ), ...
+                    'features', struct(...
+                        'power', obj.results.power, ...
+                        'faa', obj.results.faa, ...
+                        'abRatio', obj.results.abRatio, ...
+                        'emotion', obj.results.emotion, ...
+                        'csp', obj.results.csp.features ...
+                    ) ...
+                );
 
                 % UDP送信
                 if ~isempty(label)
-                    obj.sendResults(label);
+                    obj.sendResults(obj.latestResults);
                 end
 
             catch ME
@@ -782,7 +751,7 @@ classdef EEGAcquisitionManager < handle
 
                     % 正規化
                     if obj.params.signal.preprocessing.normalize.enable
-                        if obj.isOnlineMode
+                        if strcmpi(obj.params.acquisition.mode, 'online')
                             data = obj.normalizer.normalizeOnline(data, obj.normParams);
                         else
                             [data, ~] = obj.normalizer.normalize(data);
@@ -797,7 +766,7 @@ classdef EEGAcquisitionManager < handle
             end
         end
         
-        function processPowerFeatures(obj, preprocessedSegment, currentTime)
+        function processPowerFeatures(obj, preprocessedSegment)
             if ~obj.params.feature.power.enable || isempty(preprocessedSegment)
                 return;
             end
@@ -814,7 +783,8 @@ classdef EEGAcquisitionManager < handle
                 freqRange = obj.params.feature.power.bands.(bandName);
                 bandPowers.(bandName) = obj.powerExtractor.calculatePower(preprocessedSegment, freqRange);
             end
-        
+            
+            currentTime = toc(obj.processingTimer)*1000;
             newPowerResult = struct(...
                 'bands', bandPowers, ...
                 'time', currentTime, ...
@@ -827,7 +797,7 @@ classdef EEGAcquisitionManager < handle
             end
         end
         
-        function processFAAFeatures(obj, preprocessedSegment, currentTime)
+        function processFAAFeatures(obj, preprocessedSegment)
             if ~obj.params.feature.faa.enable || isempty(preprocessedSegment)
                 return;
             end
@@ -841,7 +811,8 @@ classdef EEGAcquisitionManager < handle
                 else
                     faaResult = faaResults;
                 end
-        
+                
+                currentTime = toc(obj.processingTimer)*1000;
                 newFAAResult = struct(...
                     'faa', faaResult.faa, ...
                     'arousal', faaResult.arousal, ...
@@ -856,14 +827,15 @@ classdef EEGAcquisitionManager < handle
             end
         end
         
-        function processABRatioFeatures(obj, preprocessedSegment, currentTime)
+        function processABRatioFeatures(obj, preprocessedSegment)
             if ~obj.params.feature.abRatio.enable || isempty(preprocessedSegment)
                 return;
             end
 
             % α/β比の計算
             [abRatio, arousalState] = obj.abRatioExtractor.calculateABRatio(preprocessedSegment);
-
+            
+            currentTime = toc(obj.processingTimer)*1000;
             newABRatioResult = struct(...
                 'ratio', abRatio, ...
                 'state', arousalState, ...
@@ -877,7 +849,7 @@ classdef EEGAcquisitionManager < handle
             end
         end
         
-        function processEmotionFeatures(obj, preprocessedSegment, currentTime)
+        function processEmotionFeatures(obj, preprocessedSegment)
             if ~obj.params.feature.emotion.enable || isempty(preprocessedSegment)
                 return;
             end
@@ -888,7 +860,8 @@ classdef EEGAcquisitionManager < handle
             else
                 emotionResult = emotionResults;
             end
-
+            
+            currentTime = toc(obj.processingTimer)*1000;
             newEmotionResult = struct(...
                 'state', emotionResult.state, ...
                 'coordinates', emotionResult.coordinates, ...
@@ -903,7 +876,7 @@ classdef EEGAcquisitionManager < handle
             end
         end
         
-        function currentFeatures = processCSPFeatures(obj, preprocessedSegment, currentTime)
+        function currentFeatures = processCSPFeatures(obj, preprocessedSegment)
             if ~obj.params.feature.csp.enable || isempty(preprocessedSegment)
                 currentFeatures = [];
                 return;
@@ -917,7 +890,8 @@ classdef EEGAcquisitionManager < handle
                 % CSP特徴量の抽出
                 currentFeatures = obj.cspExtractor.extractFeatures(...
                     preprocessedSegment, obj.results.csp.filters);
-
+                
+                currentTime = toc(obj.processingTimer)*1000;
                 if ~isempty(currentFeatures)
                     % CSP特徴量を結果に保存
                     newCSPResult = struct(...
@@ -944,53 +918,44 @@ classdef EEGAcquisitionManager < handle
             score = [];
 
             try
-                if ~isempty(currentFeatures)
-                    activeClassifier = obj.params.classifier.activeClassifier;
-                    fprintf('Active classifier: %s\n', activeClassifier);  % デバッグ出力
+                switch obj.params.classifier.activeClassifier
+                    case 'svm'
+                        % SVMモデルの存在確認
+                        if ~isfield(obj.classifiers, 'svm') || isempty(obj.classifiers.svm.model)
+                            fprintf('Warning: SVM model not found\n');
+                            return;
+                        end
 
-                    switch activeClassifier
-                        case 'svm'
-                            % SVMモデルの存在確認
-                            if ~isfield(obj.classifiers, 'svm') || isempty(obj.classifiers.svm.model)
-                                fprintf('Warning: SVM model not found\n');
-                                return;
-                            end
+                        [label, score] = obj.svmClassifier.predictOnline(...
+                            currentFeatures, obj.classifiers.svm.model, obj.optimalThreshold);
 
-                            [label, score] = obj.svmClassifier.predictOnline(...
-                                currentFeatures, obj.classifiers.svm.model, obj.optimalThreshold);
+                    case 'ecoc'
+                        [label, score] = obj.ecocClassifier.predictOnline(...
+                            currentFeatures, obj.classifiers.ecoc.model);
 
-                            % fprintf('SVM prediction completed - Label: %d, Score: %.4f\n', label, score);
+                    case 'cnn'
+                        [label, score] = obj.cnnClassifier.predictOnline(...
+                            currentFeatures, obj.classifiers.cnn.model);
+                end
 
-                        case 'ecoc'
-                            [label, score] = obj.ecocClassifier.predictOnline(...
-                                currentFeatures, obj.classifiers.ecoc.model);
+                % 予測結果の保存
+                if ~isempty(label)
+                    currentTime = toc(obj.processingTimer)*1000;
+                    newPredictResult = struct(...
+                        'label', label, ...
+                        'score', score, ...
+                        'time', currentTime, ...
+                        'classifier', obj.params.classifier.activeClassifier);
 
-                        case 'cnn'
-                            [label, score] = obj.cnnClassifier.predictOnline(...
-                                currentFeatures, obj.classifiers.cnn.model);
+                    % SVMの場合のみ閾値情報を追加
+                    if strcmp(obj.params.classifier.activeClassifier, 'svm') && obj.params.classifier.svm.probability
+                        newPredictResult.threshold = obj.optimalThreshold;
                     end
 
-                    % 予測結果の保存
-                    if ~isempty(label)
-                        currentTime = toc(obj.processingTimer)*1000;
-                        newPredictResult = struct(...
-                            'label', label, ...
-                            'score', score, ...
-                            'time', currentTime, ...
-                            'classifier', activeClassifier);
-
-                        % SVMの場合のみ閾値情報を追加
-                        if strcmp(activeClassifier, 'svm') && obj.params.classifier.svm.probability
-                            newPredictResult.threshold = obj.optimalThreshold;
-                        end
-
-                        if isempty(obj.results.predict)
-                            obj.results.predict = newPredictResult;
-                        else
-                            obj.results.predict(end+1) = newPredictResult;
-                        end
-
-                        fprintf('Prediction result saved successfully\n');
+                    if isempty(obj.results.predict)
+                        obj.results.predict = newPredictResult;
+                    else
+                        obj.results.predict(end+1) = newPredictResult;
                     end
                 end
             catch ME
