@@ -656,40 +656,19 @@ classdef CNNClassifier < handle
         
         function preparedData = prepareDataForCNN(~, data)
             try
-                % 入力データの詳細なデバッグ情報
-                fprintf('\n=== Debug Info ===\n');
-                fprintf('Input data: class=%s, ndims=%d, size=[%s]\n', ...
-                    class(data), ndims(data), mat2str(size(data)));
-
-                % データの中身を確認
-                if ~isempty(data)
-                    fprintf('Data stats: min=%.2f, max=%.2f, mean=%.2f\n', ...
-                        min(data(:)), max(data(:)), mean(data(:)));
-                end
-
                 % データ変換の過程を追跡
                 if ndims(data) == 3
                     [channels, samples, epochs] = size(data);
-                    fprintf('Processing 3D data: %d channels, %d samples, %d epochs\n', ...
-                        channels, samples, epochs);
-
                     preparedData = permute(data, [2 1 4 3]);
 
                 elseif ismatrix(data)
                     [channels, samples] = size(data);
-                    fprintf('Processing 2D data: %d channels, %d samples\n', ...
-                        channels, samples);
-
                     preparedData = permute(data, [2 1 3]);
                     preparedData = reshape(preparedData, [samples, channels, 1, 1]);
 
                 else
                     error('Unsupported data dimension: %d', ndims(data));
                 end
-
-                % 出力データの確認
-                fprintf('\nOutput data sizes:\n');
-                fprintf('preparedData: [%s]\n', mat2str(size(preparedData)));
 
             catch ME
                 fprintf('\nError in prepareDataForCNN: %s\n', ME.message);

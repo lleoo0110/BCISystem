@@ -700,11 +700,11 @@ classdef EEGAcquisitionManager < handle
                         'classifier', obj.params.classifier.activeClassifier ...
                     ), ...
                     'features', struct(...
-                        'power', obj.results.power, ...
-                        'faa', obj.results.faa, ...
-                        'abRatio', obj.results.abRatio, ...
-                        'emotion', obj.results.emotion, ...
-                        'csp', obj.results.csp.features ...
+                        'power', obj.getLatestFeature(obj.results.power), ...
+                        'faa', obj.getLatestFeature(obj.results.faa), ...
+                        'abRatio', obj.getLatestFeature(obj.results.abRatio), ...
+                        'emotion', obj.getLatestFeature(obj.results.emotion), ...
+                        'csp', obj.getLatestFeature(obj.results.csp.features) ...
                     ) ...
                 );
 
@@ -1079,6 +1079,30 @@ classdef EEGAcquisitionManager < handle
             else
                 coords = [0 0 0 0];  % デフォルト値（安静状態）
                 warning('Emotion state "%s" not found. Using default coordinates.', emotionState);
+            end
+        end
+        
+        % ヘルパー関数：最新の結果を取得
+        function latest = getLatestFeature(~, data)
+            if isempty(data)
+                latest = [];
+                return;
+            end
+
+            if isstruct(data)
+                % 構造体配列の場合、最後の要素を取得
+                latest = data(end);
+
+                % CSP特徴量の特別処理
+                if isfield(latest, 'features')
+                    latest = latest.features;
+                end
+            elseif isnumeric(data)
+                % 数値配列の場合、最後の行を取得
+                latest = data(end,:);
+            else
+                % その他のデータ型の場合は空を返す
+                latest = [];
             end
         end
     end

@@ -56,56 +56,74 @@ classdef UDPManager < handle
             end
         end
         
+        function sendTrigger(obj, data)
+            if ~obj.params.udp.send.enabled
+                return;
+            end
+
+            try
+                % データをJSONに変換
+                jsonStr = jsonencode(data);
+
+                % バッファサイズ取得
+                maxSize = obj.params.udp.send.bufferSize;
+
+                % データが大きい場合は分割して送信
+                while ~isempty(jsonStr)
+                    % バッファサイズに収まる部分を切り出し
+                    if length(jsonStr) > maxSize
+                        chunk = jsonStr(1:maxSize);
+                        jsonStr = jsonStr(maxSize+1:end);
+                    else
+                        chunk = jsonStr;
+                        jsonStr = '';
+                    end
+
+                    % チャンクを送信
+                    write(obj.sender, chunk);
+                end
+
+            catch ME
+                fprintf('ERROR: Failed to send trigger: %s\n', ME.message);
+            end
+        end
+        
         function sendTrigger(obj, trigger)
             try
-                fprintf('----------------------------------------\n');
                 if isstruct(trigger)
                     % 構造体をJSONに変換して送信
                     jsonStr = jsonencode(trigger);
-
-                    if strlength(jsonStr) > obj.params.udp.send.bufferSize
-                        warning('JSON data size exceeds UDP buffer size!');
-                        fprintf('JSON content preview: %.100s...\n', jsonStr);
-                    end
-
                     fprintf(obj.sendSocket, jsonStr);
-                    fprintf('UDP Sent: %s\n', jsonStr);
-
+                    fprintf('Sent JSON data: %s\n', jsonStr);
+                    
+                elseif ischar(trigger) || isstring(trigger)
+                    % 文字列データの送信
+                    fprintf(obj.sendSocket, char(trigger));
+                    fprintf('Sent text message: %s\n', char(trigger));
+                    
                 elseif iscategorical(trigger)
                     % categorical型データの送信
                     triggerValue = double(trigger);
                     bytes = typecast(int32(triggerValue), 'uint8');
-
                     fwrite(obj.sendSocket, bytes, 'uint8');
-
+                    fprintf('Sent categorical trigger value: %d\n', triggerValue);
+                    
                 elseif isnumeric(trigger)
                     if mod(trigger, 1) == 0
                         bytes = typecast(int32(trigger), 'uint8');
                     else
                         bytes = typecast(single(trigger), 'uint8');
                     end
-
                     fwrite(obj.sendSocket, bytes, 'uint8');
                 else
                     error('Unsupported trigger data type: %s', class(trigger));
                 end
-                
-                fprintf('----------------------------------------\n');
 
+                fprintf('INFO: Trigger sent successfully\n');
+                
             catch ME
                 warning(ME.identifier, 'UDP send error: %s', ME.message);
                 fprintf('ERROR: Failed to send trigger: %s\n', ME.message);
-                % エラー発生時の詳細情報
-                fprintf('Error details:\n');
-                fprintf('  Data type: %s\n', class(trigger));
-                if isstruct(trigger)
-                    fprintf('  Struct fields: %s\n', strjoin(fieldnames(trigger), ', '));
-                end
-                fprintf('  Stack trace:\n');
-                for i = 1:length(ME.stack)
-                    fprintf('    File: %s, Line: %d, Function: %s\n', ...
-                        ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
-                end
             end
         end
         
