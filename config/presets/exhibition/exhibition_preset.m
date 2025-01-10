@@ -10,8 +10,8 @@ function preset = exhibition_preset()
 
     %% === トリガーマッピング設定 ===
     trigger_mappings = {
-        'メラメラ', 1;         % 炎魔法
-        'ビリビリ', 2;       % 雷魔法
+        '炎魔法', 2;         % 炎魔法
+        '雷魔法', 3;       % 雷魔法
     };
 
     mapping_struct = struct();
@@ -42,7 +42,7 @@ function preset = exhibition_preset()
 
     %% === データ収集設定 ===
     acquisition = struct(...
-        'mode', 'offline', ...       % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
+        'mode', 'offline', ...       % モード選択: 'offline'（データ計測用）または 'online'（リアルタイム処理用）
         'save', struct(...
             'enable', true, ...      % データ保存の有効/無効
             'name', 'template', ...      % 保存時のファイル名プレフィックス
@@ -171,7 +171,7 @@ function preset = exhibition_preset()
                 'method', 'zscore' ...   % 正規化方法：'zscore', 'minmax', 'robust'
             ), ...
             'augmentation', struct(... % データ拡張設定
-                'enable', true, ...    % データ拡張の有効/無効
+                'enable', false, ...    % データ拡張の有効/無効
                 'augmentationRatio', 2, ... % 元のデータに対する拡張データの比率
                 'combinationLimit', 3, ... % 1回の拡張で適用できる最大手法数
                 'methods', struct(...   % 拡張手法の設定
@@ -269,7 +269,7 @@ function preset = exhibition_preset()
             ) ...
         ), ...
         'csp', struct(...              % CSPExtractor用の設定
-            'enable', false, ...
+            'enable', true, ...
             'patterns', 3, ...          % 使用するパターン数
             'regularization', 0.05 ...  % 正則化パラメータ
         ) ...
@@ -282,9 +282,9 @@ function preset = exhibition_preset()
         'activeClassifier', 'cnn', ...  % アクティブな分類器タイプ: 'svm', 'ecoc', 'cnn'
         'svm', struct(...    % SVMの設定
             'enable', true, ...
-            'optimize', false, ...
+            'optimize', true, ...
             'probability', true, ...
-            'kernel', 'linear', ...  % カーネル関数: 'linear', 'rbf', 'polynomial'
+            'kernel', 'rbf', ...  % カーネル関数: 'linear', 'rbf', 'polynomial'
             'threshold', struct(...   % 閾値関連の設定
                 'rest', 0.5, ...      % デフォルトの安静状態閾値
                 'useOptimal', true, ... % 最適閾値を使用するか

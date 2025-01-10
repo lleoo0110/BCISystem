@@ -1,15 +1,6 @@
 % パラメータ例：
 % params = getConfig('epocx');
-% params = getConfig('epocx', 'preset', 'test/test');
-
-% params = getConfig('epocx', 'preset', 'magic');
-% params = getConfig('epocx', 'preset', 'ddaExperiment');
-
-% params = getConfig('epocx', 'preset', 'magic_visualA');
-% params = getConfig('epocx', 'preset', 'magic_visualB');
-% params = getConfig('epocx', 'preset', 'magic_visualC');
-
-% params = getConfig('epocx', 'preset', 'ahaloud');
+% params = getConfig('epocx', 'preset', 'exhibition/exhibition');
 
 % 全初期化：clc; clear all; close all; instrreset;
 % コマンドクリア：clc
@@ -24,7 +15,7 @@ setupPaths(currentDir);
 
 
 %%  指定のパラメータで実行
-params = getConfig('epocx');
+params = getConfig('epocx', 'preset', 'exhibition/exhibition');
 manager = EEGAcquisitionManager(params);      % データ計測
 
 
