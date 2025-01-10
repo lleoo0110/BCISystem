@@ -44,13 +44,17 @@ classdef LSLManager < handle
         end
         
         function initializeInlet(obj)
-            obj.inlet = [];
-            obj.lib = [];
-            
-            if obj.params.lsl.simulate.enable
-                obj.inlet = obj.initializeSimulator();
-            else
-                [obj.inlet, obj.lib] = obj.initializeLSL();
+            try
+                obj.inlet = [];
+                obj.lib = [];
+                
+                if obj.params.lsl.simulate.enable
+                    obj.inlet = obj.initializeSimulator();
+                else
+                    [obj.inlet, obj.lib] = obj.initializeLSL();
+                end
+            catch ME
+                rethrow(ME);
             end
         end
         
@@ -63,16 +67,66 @@ classdef LSLManager < handle
             if ~isempty(obj.inlet) && ~isstruct(obj.inlet)
                 delete(obj.inlet);
             end
+            obj.inlet = [];
+            obj.lib = [];
+        end
+        
+        function [data, timestamp] = getLSLData(obj)
+            try
+                % LSLのinletが正しく初期化されているか確認
+                if isempty(obj.inlet) || ~isobject(obj.inlet)
+                    error('LSL inlet is not properly initialized');
+                end
+
+                % データのpull_chunk実行
+                [chunk, timestamps] = obj.inlet.pull_chunk();
+                
+                % データが空の場合の処理
+                if isempty(chunk)
+                    data = [];
+                    timestamp = [];
+                    return;
+                end
+
+                % チャンネル選択
+                if ~isempty(obj.params.device.channelNum)
+                    data = chunk(obj.params.device.channelNum, :);
+                else
+                    data = chunk;
+                end
+                
+                % タイムスタンプの設定
+                if ~isempty(timestamps)
+                    timestamp = timestamps(end);
+                else
+                    timestamp = [];
+                end
+
+            catch ME
+                fprintf('LSL data acquisition error: %s\n', ME.message);
+                data = [];
+                timestamp = [];
+            end
         end
         
         function [data, timestamp] = getSimulatedData(obj)
-            numSamples = 1;
-            t = obj.lastTimestamp + (1:numSamples)/obj.params.device.sampleRate;
-            obj.lastTimestamp = t(end);
-            
-            baseSignal = obj.generateBaseSignal(t);
-            data = obj.generateChannelData(baseSignal, numSamples);
-            timestamp = t(end);
+            try
+                numSamples = 1;
+                t = obj.lastTimestamp + (1:numSamples)/obj.params.device.sampleRate;
+                obj.lastTimestamp = t(end);
+                
+                % ベース信号の生成
+                baseSignal = obj.generateBaseSignal(t);
+                
+                % チャンネルデータの生成
+                data = obj.generateChannelData(baseSignal, numSamples);
+                timestamp = t(end);
+                
+            catch ME
+                fprintf('Simulation data generation error: %s\n', ME.message);
+                data = [];
+                timestamp = [];
+            end
         end
         
         function baseSignal = generateBaseSignal(obj, t)
@@ -132,27 +186,6 @@ classdef LSLManager < handle
             end
         end
         
-        function [data, timestamp] = getLSLData(obj)
-            [chunk, timestamps] = obj.inlet.pull_chunk();
-            
-            if isempty(chunk)
-                data = [];
-                timestamp = [];
-                return;
-            end
-            
-            data = obj.selectChannels(chunk);
-            timestamp = timestamps(end);
-        end
-        
-        function data = selectChannels(obj, chunk)
-            if ~isempty(obj.params.device.channelNum)
-                data = chunk(obj.params.device.channelNum, :);
-            else
-                data = chunk;
-            end
-        end
-        
         function simulator = initializeSimulator(obj)
             simulator = struct();
             simulator.type = 'simulator';
@@ -165,20 +198,31 @@ classdef LSLManager < handle
         end
         
         function [inlet, lib] = initializeLSL(obj)
-            lib = obj.loadLSLLibrary();
-            streamName = obj.params.device.streamName;
-            result = obj.resolveStream(lib, streamName);
-            
-            fprintf('インレットを開いています...\n');
-            inlet = lsl_inlet(result{1});
-            
-            obj.displayStreamInfo(inlet);
+            try
+                % LSLライブラリのロード
+                lib = obj.loadLSLLibrary();
+                
+                % ストリームの解決
+                streamName = obj.params.device.lsl.streamName;
+                result = obj.resolveStream(lib, streamName);
+                
+                fprintf('インレットを開いています...\n');
+                inlet = lsl_inlet(result{1});
+                
+                % ストリーム情報の表示
+                obj.displayStreamInfo(inlet);
+                
+            catch ME
+                error('LSL initialization failed: %s', ME.message);
+            end
         end
         
         function lib = loadLSLLibrary(~)
             try
+                % まず、環境変数のパスを試す
                 lib = lsl_loadlib(env_translatepath('dependencies:/liblsl-Matlab/bin'));
             catch
+                % デフォルトのパスを試す
                 lib = lsl_loadlib();
             end
         end
@@ -207,39 +251,23 @@ classdef LSLManager < handle
             try
                 inf = inlet.info();
                 fprintf('\nストリーム情報:\n');
-                fprintf('XML メタデータ:\n%s\n', inf.as_xml());
+                fprintf('名前: %s\n', inf.name());
+                fprintf('タイプ: %s\n', inf.type());
+                fprintf('チャンネル数: %d\n', inf.channel_count());
+                fprintf('サンプリングレート: %d Hz\n', inf.nominal_srate());
+                fprintf('ソースID: %s\n', inf.source_id());
                 
-                obj.displayManufacturerInfo(inf);
-                obj.displayChannelInfo(inf);
-                
-            catch ME
-                warning(ME.identifier, '%s', ME.message);
-            end
-        end
-        
-        function displayManufacturerInfo(~, inf)
-            try
-                manufacturer = inf.desc().child_value('manufacturer');
-                fprintf('製造元: %s\n', manufacturer);
-            catch ME
-                warning(ME.identifier, '%s', ME.message);
-                fprintf('製造元情報は利用できません\n');
-            end
-        end
-        
-        function displayChannelInfo(~, inf)
-            fprintf('チャンネルラベル:\n');
-            try
+                % チャンネル情報の表示
+                fprintf('\nチャンネル情報:\n');
                 ch = inf.desc().child('channels').child('channel');
                 for k = 1:inf.channel_count()
-                    fprintf('  %s\n', ch.child_value('label'));
+                    fprintf('  チャンネル %d: %s\n', k, ch.child_value('label'));
                     ch = ch.next_sibling();
                 end
+                
             catch ME
                 warning(ME.identifier, '%s', ME.message);
-                fprintf('チャンネル情報の取得に失敗しました\n');
             end
-            fprintf('\n');
         end
         
         function displaySimulatorInfo(obj)

@@ -1,13 +1,7 @@
 % パラメータ例：
 % params = getConfig('epocx');
 % params = getConfig('epocx', 'preset', 'test/test');
-
 % params = getConfig('epocx', 'preset', 'takra/ddaExperiment');
-
-% params = getConfig('epocx', 'preset', 'mano/magicVisualA');
-% params = getConfig('epocx', 'preset', 'mano/magicVisualB');
-% params = getConfig('epocx', 'preset', 'mano/magicVisualC');
-
 % params = getConfig('epocx', 'preset', 'kishi/ahaloud');
 
 % 全初期化：clc; clear all; close all; instrreset;
