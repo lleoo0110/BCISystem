@@ -42,10 +42,10 @@ function preset = exhibition_preset()
 
     %% === データ収集設定 ===
     acquisition = struct(...
-        'mode', 'offline', ...       % モード選択: 'offline'（データ計測用）または 'online'（リアルタイム処理用）
+        'mode', 'online', ...       % モード選択: 'offline'（データ計測用）または 'online'（リアルタイム処理用）
         'save', struct(...
             'enable', true, ...      % データ保存の有効/無効
-            'name', 'template', ...      % 保存時のファイル名プレフィックス
+            'name', 'exhibition', ...      % 保存時のファイル名プレフィックス
             'path', './Experiment Data', ... % データ保存先ディレクトリ
             'saveInterval', 60, ...   % 一時保存を行う間隔（秒）
             'fields', struct(...      % 保存する項目の選択
@@ -82,7 +82,7 @@ function preset = exhibition_preset()
             'enable', true, ...         % UDP受信の有効/無効
             'port', 12345, ...          % 受信ポート番号
             'address', '127.0.0.1', ... % 受信アドレス
-            'bufferSize', 1024, ...     % 受信バッファサイズ
+            'bufferSize', 8192, ...     % 受信バッファサイズ
             'encoding', 'UTF-8', ...    % 文字エンコーディング
             'triggers', struct(...       % トリガー設定
                 'enabled', true, ...     % トリガー処理の有効/無効
@@ -94,7 +94,7 @@ function preset = exhibition_preset()
             'enabled', true, ...        % UDP送信の有効/無効
             'port', 54321, ...          % 送信ポート番号
             'address', '127.0.0.1', ... % 送信先アドレス
-            'bufferSize', 1024, ...     % 送信バッファサイズ
+            'bufferSize', 8192, ...     % 送信バッファサイズ
             'encoding', 'UTF-8' ...     % 文字エンコーディング
         ) ...
     );
