@@ -58,14 +58,10 @@ classdef UDPManager < handle
         
         function sendTrigger(obj, trigger)
             try
-                % デバッグ情報：バッファサイズの表示
-                fprintf('Current UDP buffer size: %d bytes\n', obj.params.udp.send.bufferSize);
-
+                fprintf('----------------------------------------\n');
                 if isstruct(trigger)
                     % 構造体をJSONに変換して送信
                     jsonStr = jsonencode(trigger);
-                    % デバッグ情報：JSONデータのサイズ確認
-                    fprintf('JSON data size: %d bytes\n', strlength(jsonStr));
 
                     if strlength(jsonStr) > obj.params.udp.send.bufferSize
                         warning('JSON data size exceeds UDP buffer size!');
@@ -73,24 +69,14 @@ classdef UDPManager < handle
                     end
 
                     fprintf(obj.sendSocket, jsonStr);
-                    fprintf('Sent JSON data: %s\n', jsonStr);
-
-                elseif ischar(trigger) || isstring(trigger)
-                    % 文字列データのサイズ確認
-                    dataSize = strlength(char(trigger));
-                    fprintf('String data size: %d bytes\n', dataSize);
-
-                    fprintf(obj.sendSocket, char(trigger));
-                    fprintf('Sent text message: %s\n', char(trigger));
+                    fprintf('UDP Sent: %s\n', jsonStr);
 
                 elseif iscategorical(trigger)
                     % categorical型データの送信
                     triggerValue = double(trigger);
                     bytes = typecast(int32(triggerValue), 'uint8');
-                    fprintf('Categorical data size: %d bytes\n', length(bytes));
 
                     fwrite(obj.sendSocket, bytes, 'uint8');
-                    fprintf('Sent categorical trigger value: %d\n', triggerValue);
 
                 elseif isnumeric(trigger)
                     if mod(trigger, 1) == 0
@@ -98,14 +84,12 @@ classdef UDPManager < handle
                     else
                         bytes = typecast(single(trigger), 'uint8');
                     end
-                    fprintf('Numeric data size: %d bytes\n', length(bytes));
 
                     fwrite(obj.sendSocket, bytes, 'uint8');
                 else
                     error('Unsupported trigger data type: %s', class(trigger));
                 end
-
-                fprintf('INFO: Trigger sent successfully\n');
+                
                 fprintf('----------------------------------------\n');
 
             catch ME
