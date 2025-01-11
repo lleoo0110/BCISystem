@@ -58,20 +58,80 @@ classdef SVMClassifier < handle
             end
 
             try
-                [label, scores] = predict(model, features);
-                score = scores(:,1);  % クラス1（安静）の確率を返す
+                % 入力データの検証
+                validateattributes(features, {'numeric'}, {'2d'}, 'predictOnline', 'features');
+                if isempty(features)
+                    error('Features cannot be empty');
+                end
 
+                % モデルの検証
+                if isempty(model)
+                    error('Model cannot be empty');
+                end
+
+                % モデルのクラスラベルを取得
+                classLabels = model.ClassNames;
+                if length(classLabels) ~= 2
+                    error('SVMClassifier only supports binary classification');
+                end
+
+                % 予測の実行
+                [predicted_label, scores] = predict(model, features);
+
+                % 確率推定が有効な場合の処理
                 if obj.params.classifier.svm.probability
-                    % 閾値判定による2値分類
-                    if score >= threshold
-                        label = 1;  % 安静状態
+                    % 第1クラスの確率を取得
+                    score = scores(:,1);
+
+                    % 閾値による2値分類
+                    if ~isempty(threshold)
+                        % 閾値に基づいてラベルを割り当て
+                        label = classLabels(2) * ones(size(score));  % デフォルトで第2クラス
+                        label(score >= threshold) = classLabels(1);  % 閾値以上なら第1クラス
                     else
-                        label = 2;  % タスク状態
+                        % 閾値がない場合はモデルの予測をそのまま使用
+                        label = predicted_label;
+                    end
+                else
+                    % 確率推定が無効な場合
+                    label = predicted_label;
+                    score = scores(:,1);
+                end
+
+                % 出力の検証
+                if any(isnan(label)) || any(isnan(score))
+                    error('NaN values detected in prediction output');
+                end
+
+                % デバッグ情報の出力（詳細モード時のみ）
+                if obj.params.classifier.svm.probability
+                    fprintf('予測詳細:\n');
+                    fprintf('  クラス: [%d, %d]\n', classLabels(1), classLabels(2));
+                    fprintf('  確率: [%.3f, %.3f]\n', scores(1,1), scores(1,2));
+                    fprintf('  予測クラス: %d\n', label(1));
+                    if ~isempty(threshold)
+                        fprintf('  使用閾値: %.3f\n', threshold);
                     end
                 end
-                
+
             catch ME
-                error('SVM prediction failed: %s', ME.message);
+                % エラー情報の詳細化
+                errorMsg = sprintf('SVM prediction failed: %s\nInput size: [%s]', ...
+                    ME.message, mat2str(size(features)));
+
+                % エラースタックの表示（デバッグ用）
+                fprintf('Error details:\n');
+                fprintf('  Message: %s\n', ME.message);
+                fprintf('  Input features size: [%s]\n', mat2str(size(features)));
+                if exist('scores', 'var')
+                    fprintf('  Scores size: [%s]\n', mat2str(size(scores)));
+                    if exist('classLabels', 'var')
+                        fprintf('  Class labels: [%d, %d]\n', classLabels(1), classLabels(2));
+                    end
+                    fprintf('  Score values: [%.3f, %.3f]\n', scores(1,1), scores(1,2));
+                end
+
+                error('SVMClassifier:PredictionError', errorMsg);
             end
         end
     end
