@@ -1,19 +1,22 @@
-function preset = exhibition_preset()
+function preset = dda_preset()
     %% === プリセット情報 ===
     preset_info = struct(...
-        'name', 'exhibition', ...
-        'description', 'exhibition preset', ...
+        'name', 'dda', ...
+        'description', 'dda preset', ...
         'version', '1.0', ...
-        'author', 'LLEOO', ...
-        'date', '2025-01-10' ...
+        'author', 'lleoo', ...
+        'date', '2025-01-15' ...
     );
 
     %% === トリガーマッピング設定 ===
-    trigger_mappings = {
-        '炎魔法', 2;         % 炎魔法
-        '雷魔法', 3;       % 雷魔法
-    };
+     % トリガーマッピングの設定
+    n = 80; % 最大値
+    trigger_mappings = cell(n, 2);
+    for i = 1:n
+        trigger_mappings(i,:) = {num2str(i), i};
+    end
 
+    % マッピング構造体の生成
     mapping_struct = struct();
     for i = 1:size(trigger_mappings, 1)
         field_name = sprintf('trigger%d', i);
@@ -26,7 +29,7 @@ function preset = exhibition_preset()
     %% === LSL設定 ===
     lsl = struct(...
         'simulate', struct(...
-            'enable', true, ...
+            'enable', false, ...
             'signal', struct(...
                 'alpha', struct(...
                     'freq', 10, ...
@@ -42,10 +45,10 @@ function preset = exhibition_preset()
 
     %% === データ収集設定 ===
     acquisition = struct(...
-        'mode', 'online', ...       % モード選択: 'offline'（データ計測用）または 'online'（リアルタイム処理用）
+        'mode', 'offline', ...       % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
         'save', struct(...
             'enable', true, ...      % データ保存の有効/無効
-            'name', 'exhibition', ...      % 保存時のファイル名プレフィックス
+            'name', 'dda', ...      % 保存時のファイル名プレフィックス
             'path', './Experiment Data', ... % データ保存先ディレクトリ
             'saveInterval', 60, ...   % 一時保存を行う間隔（秒）
             'fields', struct(...      % 保存する項目の選択
@@ -82,7 +85,7 @@ function preset = exhibition_preset()
             'enable', true, ...         % UDP受信の有効/無効
             'port', 12345, ...          % 受信ポート番号
             'address', '127.0.0.1', ... % 受信アドレス
-            'bufferSize', 8192, ...     % 受信バッファサイズ
+            'bufferSize', 1024, ...     % 受信バッファサイズ
             'encoding', 'UTF-8', ...    % 文字エンコーディング
             'triggers', struct(...       % トリガー設定
                 'enabled', true, ...     % トリガー処理の有効/無効
@@ -94,7 +97,7 @@ function preset = exhibition_preset()
             'enabled', true, ...        % UDP送信の有効/無効
             'port', 54321, ...          % 送信ポート番号
             'address', '127.0.0.1', ... % 送信先アドレス
-            'bufferSize', 8192, ...     % 送信バッファサイズ
+            'bufferSize', 1024, ...     % 送信バッファサイズ
             'encoding', 'UTF-8' ...     % 文字エンコーディング
         ) ...
     );
@@ -104,16 +107,16 @@ function preset = exhibition_preset()
         'enable', true, ...           % 信号処理の有効/無効
         'window', struct(...           % 解析窓の設定
             'analysis', 2.0, ...       % 解析窓の長さ（秒）
-            'stimulus', 5.0, ...       % 刺激提示時間（秒）
+            'stimulus', 2.0, ...       % 刺激提示時間（秒）
             'bufferSize', 15, ...      % データバッファのサイズ（秒）
-            'updateBuffer', 0.5, ...     % バッファの更新間隔（秒）
+            'updateBuffer', 1, ...     % バッファの更新間隔（秒）
             'step', [], ...            % 解析窓のシフト幅：自動計算
             'updateInterval', [] ...    % 更新間隔：自動計算
         ), ...
         'epoch', struct(...            % エポック化設定
             'method', 'time', ...      % エポック化方法：'time'または'odd-even'
             'storageType', 'array', ... % データ形式：'array'または'cell'
-            'overlap', 0.25, ...       % オーバーラップ率
+            'overlap', 0, ...       % オーバーラップ率
             'baseline', [-0.5 0] ...   % ベースライン期間（秒）
         ), ...
         'frequency', struct(...         % 周波数解析の設定
@@ -168,11 +171,11 @@ function preset = exhibition_preset()
             'normalize', struct(...     % 正規化設定
                 'enable', false, ...     % 正規化の有効/無効
                 'type', 'all', ...       % 正規化の種類：'all'または'epoch'
-                'method', 'zscore' ...   % 正規化方法：'zscore', 'minmax', 'robust'
+                'method', 'robust' ...   % 正規化方法：'zscore', 'minmax', 'robust'
             ), ...
             'augmentation', struct(... % データ拡張設定
                 'enable', false, ...    % データ拡張の有効/無効
-                'augmentationRatio', 2, ... % 元のデータに対する拡張データの比率
+                'augmentationRatio', 4, ... % 元のデータに対する拡張データの比率
                 'combinationLimit', 3, ... % 1回の拡張で適用できる最大手法数
                 'methods', struct(...   % 拡張手法の設定
                     'noise', struct(...  % ノイズ付加
@@ -208,10 +211,10 @@ function preset = exhibition_preset()
     %% === 特徴抽出設定 ===
     feature = struct(...
         'power', struct(...            % パワー特徴抽出の設定
-            'enable', false, ...        % パワー解析の有効/無効
+            'enable', true, ...        % パワー解析の有効/無効
             'method', 'welch', ...     % パワー計算方法: 'welch' または 'filter'
                 'normalize', struct(...
-                'enable', true, ...    % 正規化の有効/無効
+                'enable', false, ...    % 正規化の有効/無効
                 'methods', {{'relative', 'log'}} ... % 正規化方法: 'relative', 'log', 'zscore', 'db', 'robust'
             ), ...
             'welch', struct(...        % Welch法のパラメータ設定
@@ -236,7 +239,7 @@ function preset = exhibition_preset()
             ) ...
         ), ...
         'faa', struct(...              % FAAExtractor用の設定
-            'enable', false, ...
+            'enable', true, ...
             'channels', struct(...
                 'left', [1, 3], ...    % 左前頭葉チャンネル（EPOC Xの場合）
                 'right', [14, 12] ...  % 右前頭葉チャンネル（EPOC Xの場合）
@@ -244,7 +247,7 @@ function preset = exhibition_preset()
             'threshold', 0.5 ...       % FAA判定の閾値
         ), ...
         'abRatio', struct(...          % ABRatioExtractor用の設定
-            'enable', false, ...
+            'enable', true, ...
             'channels', struct(...
                 'left', [1, 3], ...    % 左前頭葉チャンネル（EPOC Xの場合）
                 'right', [14, 12] ...  % 右前頭葉チャンネル（EPOC Xの場合）
@@ -252,7 +255,7 @@ function preset = exhibition_preset()
             'threshold', 1.0 ...       % α/β比の閾値
         ), ...
         'emotion', struct(...          % EmotionExtractor用の設定
-            'enable', false, ...
+            'enable', true, ...
             'channels', struct(...
                 'left', [1, 3], ...    % 左前頭葉チャンネル（EPOC Xの場合）
                 'right', [14, 12] ...  % 右前頭葉チャンネル（EPOC Xの場合）
@@ -269,7 +272,7 @@ function preset = exhibition_preset()
             ) ...
         ), ...
         'csp', struct(...              % CSPExtractor用の設定
-            'enable', true, ...
+            'enable', false, ...
             'patterns', 3, ...          % 使用するパターン数
             'regularization', 0.05 ...  % 正則化パラメータ
         ) ...
@@ -279,12 +282,12 @@ function preset = exhibition_preset()
     num_classes = size(trigger_mappings, 1);        % クラス数を動的に設定
     
     classifier = struct(...
-        'activeClassifier', 'svm', ...  % アクティブな分類器タイプ: 'svm', 'ecoc', 'cnn'
+        'activeClassifier', 'cnn', ...  % アクティブな分類器タイプ: 'svm', 'ecoc', 'cnn'
         'svm', struct(...    % SVMの設定
-            'enable', true, ...
-            'optimize', true, ...
+            'enable', false, ...
+            'optimize', false, ...
             'probability', true, ...
-            'kernel', 'rbf', ...  % カーネル関数: 'linear', 'rbf', 'polynomial'
+            'kernel', 'linear', ...  % カーネル関数: 'linear', 'rbf', 'polynomial'
             'threshold', struct(...   % 閾値関連の設定
                 'rest', 0.5, ...      % デフォルトの安静状態閾値
                 'useOptimal', true, ... % 最適閾値を使用するか
@@ -298,10 +301,10 @@ function preset = exhibition_preset()
             ) ...
         ), ...
         'ecoc', struct(...   % ECOCの設定
-            'enable', false, ...
+            'enable', true, ...
             'optimize', false, ...
             'probability', true, ...
-            'kernel', 'rbf', ...  % カーネル関数: 'linear', 'rbf', 'polynomial'
+            'kernel', 'linear', ...  % カーネル関数: 'linear', 'rbf', 'polynomial'
             'coding', 'onevsall', ... % コーディング方式: 'onevsall', 'allpairs'
             'learners', 'svm', ...    % 基本学習器: 'svm', 'tree'
             'hyperparameters', struct(... % ハイパーパラメータ設定
@@ -388,7 +391,7 @@ function preset = exhibition_preset()
                 'scale', struct(...         % 表示スケールの設定
                     'auto', true, ...       % 自動スケーリング
                     'raw', [4200 4400], ... % 生データの表示範囲（μV）
-                    'processed', [-20 20], ... % 処理済みデータの表示範囲（μV）
+                    'processed', [-40 40], ... % 処理済みデータの表示範囲（μV）
                     'freq', [0 50], ...     % 周波数表示範囲（Hz）
                     'power', [0.01 100], ... % パワー表示範囲（μV²/Hz）
                     'displaySeconds', 5 ... % 時系列データの表示時間幅（秒）

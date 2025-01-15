@@ -64,9 +64,9 @@ classdef FAAExtractor < handle
             
             % 状態判定
             if faaValue > obj.faaThreshold
-                arousalState = 'aroused';
+                arousalState = 'positive';
             else
-                arousalState = 'non-aroused';
+                arousalState = 'negative';
             end
         end
     end

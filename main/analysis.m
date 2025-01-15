@@ -15,7 +15,7 @@ setupPaths(currentDir);
 
 
 %%  指定のパラメータで実行
-params = getConfig('epocx', 'preset', 'exhibition/exhibition');
+params = getConfig('epocx', 'preset', 'takara/dda');
 analyzer = EEGAnalyzer(params);     % アナライザーの初期化
 analyzer.analyze();                            % 解析の実行
 

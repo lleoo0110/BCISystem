@@ -305,65 +305,202 @@ classdef EEGAnalyzer < handle
 
         function extractPowerFeatures(obj)
             try
-                bandNames = obj.params.feature.power.bands.names;
-                if iscell(bandNames{1})
-                    bandNames = bandNames{1};
+                if isempty(obj.processedData) || isempty(obj.labels)
+                    warning('PowerExtractor:NoData', 'データまたはラベルが空です');
+                    return;
                 end
 
-                bandPowers = struct();
-                for i = 1:length(bandNames)
-                    bandName = bandNames{i};
-                    freqRange = obj.params.feature.power.bands.(bandName);
-                    bandPowers.(bandName) = obj.powerExtractor.calculatePower(...
-                        obj.processedData, freqRange);
+                % データの形状を確認
+                numEpochs = size(obj.processedData, 3);
+
+                % タイミング情報の取得
+                timings = zeros(numEpochs, 1);
+                samples = zeros(numEpochs, 1);
+
+                for i = 1:length(obj.labels)
+                    if i <= numEpochs
+                        timings(i) = obj.labels(i).time;
+                        samples(i) = obj.labels(i).sample;
+                    end
                 end
 
-                obj.results.power = struct('bands', bandPowers);
-                
+                % エポックごとの処理
+                for epoch = 1:numEpochs
+                    % 周波数帯域ごとのパワーを計算
+                    bandNames = obj.params.feature.power.bands.names;
+                    if iscell(bandNames{1})
+                        bandNames = bandNames{1};
+                    end
+
+                    % 各周波数帯域のパワーを計算
+                    bandPowers = struct();
+                    for i = 1:length(bandNames)
+                        bandName = bandNames{i};
+                        freqRange = obj.params.feature.power.bands.(bandName);
+                        bandPowers.(bandName) = obj.powerExtractor.calculatePower(...
+                            obj.processedData(:,:,epoch), freqRange);
+                    end
+
+                    % 新しい結果の構築
+                    newResult = struct(...
+                        'powers', bandPowers, ...
+                        'bands', {bandNames}, ...
+                        'time', timings(epoch), ...
+                        'sample', samples(epoch));
+
+                    % 結果の追加
+                    if isempty(obj.results.power)
+                        obj.results.power = newResult;
+                    else
+                        obj.results.power(end+1) = newResult;
+                    end
+                end
+
+                fprintf('パワー特徴量の抽出が完了しました（%d エポック）\n', numEpochs);
+
             catch ME
-                error('Power feature extraction failed: %s', ME.message);
+                error('PowerExtractor:ExtractionFailed', 'パワー特徴量の抽出に失敗しました: %s', ME.message);
             end
         end
         
         function extractFAAFeatures(obj)
             try
-                obj.results.faa = obj.faaExtractor.calculateFAA(obj.processedData);
+                if isempty(obj.processedData) || isempty(obj.labels)
+                    warning('FAAExtractor:NoData', 'データまたはラベルが空です');
+                    return;
+                end
+
+                numEpochs = size(obj.processedData, 3);
+                timings = zeros(numEpochs, 1);
+                samples = zeros(numEpochs, 1);
+
+                % タイミング情報の取得
+                for i = 1:length(obj.labels)
+                    if i <= numEpochs
+                        timings(i) = obj.labels(i).time;
+                        samples(i) = obj.labels(i).sample;
+                    end
+                end
+
+                % エポックごとのFAA値を計算
+                for epoch = 1:numEpochs
+                    faaResults = obj.faaExtractor.calculateFAA(obj.processedData(:,:,epoch));
+
+                    % 新しい結果の構築
+                    newResult = struct(...
+                        'faa', faaResults{1}.faa, ...
+                        'arousal', faaResults{1}.arousal, ...
+                        'time', timings(epoch), ...
+                        'sample', samples(epoch));
+
+                    % 結果の追加
+                    if isempty(obj.results.faa)
+                        obj.results.faa = newResult;
+                    else
+                        obj.results.faa(end+1) = newResult;
+                    end
+                end
+
+                fprintf('FAA特徴量の抽出が完了しました（%d エポック）\n', numEpochs);
+
             catch ME
-                error('FAA feature extraction failed: %s', ME.message);
+                error('FAAExtractor:ExtractionFailed', 'FAA特徴量の抽出に失敗しました: %s', ME.message);
             end
         end
 
         function extractABRatioFeatures(obj)
             try
-                for epoch = 1:size(obj.processedData, 3)
-                    [abRatio, arousalState] = obj.abRatioExtractor.calculateABRatio(obj.processedData(:,:,epoch));
+                if isempty(obj.processedData) || isempty(obj.labels)
+                    warning('ABRatioExtractor:NoData', 'データまたはラベルが空です');
+                    return;
+                end
 
-                    if isempty(obj.results.abRatio)
-                        obj.results.abRatio = struct('ratio', [], 'state', [], 'time', [], 'sample', []);
+                % データの形状を確認
+                numEpochs = size(obj.processedData, 3);
+
+                % ラベルからタイムスタンプとサンプル情報を取得
+                timings = zeros(numEpochs, 1);
+                samples = zeros(numEpochs, 1);
+
+                for i = 1:length(obj.labels)
+                    if i <= numEpochs
+                        timings(i) = obj.labels(i).time;
+                        samples(i) = obj.labels(i).sample;
                     end
+                end
 
+                % エポックごとの処理
+                for epoch = 1:numEpochs
+                    % α/β比の計算
+                    [abRatio, arousalState] = obj.abRatioExtractor.calculateABRatio(...
+                        obj.processedData(:,:,epoch));
+
+                    % 新しい結果の構築
                     newResult = struct(...
                         'ratio', abRatio, ...
                         'state', arousalState, ...
-                        'time', epoch, ...
-                        'sample', epoch);
+                        'time', timings(epoch), ...     % ラベルから取得したタイムスタンプ
+                        'sample', samples(epoch));      % ラベルから取得したサンプル番号
 
+                    % 結果の追加
                     if isempty(obj.results.abRatio)
                         obj.results.abRatio = newResult;
                     else
                         obj.results.abRatio(end+1) = newResult;
                     end
                 end
+
+                % 処理結果のサマリーを表示
+                fprintf('α/β比の特徴抽出が完了しました（%d エポック）\n', numEpochs);
+
             catch ME
-                error('AB ratio feature extraction failed: %s', ME.message);
+                error('ABRatioExtractor:ExtractionFailed', ME.message);
             end
         end
 
         function extractEmotionFeatures(obj)
             try
-                obj.results.emotion = obj.emotionExtractor.classifyEmotion(obj.processedData);
+                if isempty(obj.processedData) || isempty(obj.labels)
+                    warning('EmotionExtractor:NoData', 'データまたはラベルが空です');
+                    return;
+                end
+
+                numEpochs = size(obj.processedData, 3);
+                timings = zeros(numEpochs, 1);
+                samples = zeros(numEpochs, 1);
+
+                % タイミング情報の取得
+                for i = 1:length(obj.labels)
+                    if i <= numEpochs
+                        timings(i) = obj.labels(i).time;
+                        samples(i) = obj.labels(i).sample;
+                    end
+                end
+
+                % エポックごとの感情状態を分類
+                for epoch = 1:numEpochs
+                    emotionResult = obj.emotionExtractor.classifyEmotion(obj.processedData(:,:,epoch));
+
+                    % 新しい結果の構築
+                    newResult = struct(...
+                        'state', emotionResult{1}.state, ...
+                        'coordinates', emotionResult{1}.coordinates, ...
+                        'emotionCoords', emotionResult{1}.emotionCoords, ...
+                        'time', timings(epoch), ...
+                        'sample', samples(epoch));
+
+                    % 結果の追加
+                    if isempty(obj.results.emotion)
+                        obj.results.emotion = newResult;
+                    else
+                        obj.results.emotion(end+1) = newResult;
+                    end
+                end
+
+                fprintf('感情特徴量の抽出が完了しました（%d エポック）\n', numEpochs);
+
             catch ME
-                error('Emotion feature extraction failed: %s', ME.message);
+                error('EmotionExtractor:ExtractionFailed', '感情特徴量の抽出に失敗しました: %s', ME.message);
             end
         end
 
