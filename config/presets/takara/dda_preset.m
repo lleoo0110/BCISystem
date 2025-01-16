@@ -49,7 +49,7 @@ function preset = dda_preset()
         'save', struct(...
             'enable', true, ...      % データ保存の有効/無効
             'name', 'dda', ...      % 保存時のファイル名プレフィックス
-            'path', './Experiment Data', ... % データ保存先ディレクトリ
+            'path', './Experiment Data/DDA Test', ... % データ保存先ディレクトリ
             'saveInterval', 60, ...   % 一時保存を行う間隔（秒）
             'fields', struct(...      % 保存する項目の選択
                 'params', true, ...             % 設定情報
@@ -114,8 +114,8 @@ function preset = dda_preset()
             'updateInterval', [] ...    % 更新間隔：自動計算
         ), ...
         'epoch', struct(...            % エポック化設定
-            'method', 'time', ...      % エポック化方法：'time'または'odd-even'
-            'storageType', 'array', ... % データ形式：'array'または'cell'
+            'method', 'odd-even', ...      % エポック化方法：'time'または'odd-even'
+            'storageType', 'cell', ... % データ形式：'array'または'cell'
             'overlap', 0, ...       % オーバーラップ率
             'baseline', [-0.5 0] ...   % ベースライン期間（秒）
         ), ...
@@ -219,7 +219,7 @@ function preset = dda_preset()
             ), ...
             'welch', struct(...        % Welch法のパラメータ設定
                 'windowType', 'hamming', ... % 窓関数: 'hamming', 'hann', 'blackman'
-                'windowLength', 256, ...     % 窓長（サンプル数）
+                'windowLength', 64, ...     % 窓長（サンプル数）
                 'overlap', 0.5, ...          % オーバーラップ率（0-1）
                 'nfft', 512, ...            % FFTポイント数
                 'freqResolution', 0.5, ...   % 周波数分解能（Hz）
@@ -241,24 +241,24 @@ function preset = dda_preset()
         'faa', struct(...              % FAAExtractor用の設定
             'enable', true, ...
             'channels', struct(...
-                'left', [1, 3], ...    % 左前頭葉チャンネル（EPOC Xの場合）
-                'right', [14, 12] ...  % 右前頭葉チャンネル（EPOC Xの場合）
+                'left', [1], ...    % 左前頭葉チャンネル（EPOC Xの場合）
+                'right', [14] ...  % 右前頭葉チャンネル（EPOC Xの場合）
             ), ...
-            'threshold', 0.5 ...       % FAA判定の閾値
+            'threshold', 0 ...       % FAA判定の閾値
         ), ...
         'abRatio', struct(...          % ABRatioExtractor用の設定
             'enable', true, ...
             'channels', struct(...
-                'left', [1, 3], ...    % 左前頭葉チャンネル（EPOC Xの場合）
-                'right', [14, 12] ...  % 右前頭葉チャンネル（EPOC Xの場合）
+                'left', [1], ...    % 左前頭葉チャンネル（EPOC Xの場合）
+                'right', [14] ...  % 右前頭葉チャンネル（EPOC Xの場合）
             ), ...
             'threshold', 1.0 ...       % α/β比の閾値
         ), ...
         'emotion', struct(...          % EmotionExtractor用の設定
             'enable', true, ...
             'channels', struct(...
-                'left', [1, 3], ...    % 左前頭葉チャンネル（EPOC Xの場合）
-                'right', [14, 12] ...  % 右前頭葉チャンネル（EPOC Xの場合）
+                'left', [1], ...    % 左前頭葉チャンネル（EPOC Xの場合）
+                'right', [14] ...  % 右前頭葉チャンネル（EPOC Xの場合）
             ), ...
             'threshold', 0.3, ...      % 中心領域の判定閾値
             'labels', struct(...

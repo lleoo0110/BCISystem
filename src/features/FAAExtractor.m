@@ -27,20 +27,20 @@ classdef FAAExtractor < handle
                     faaResults = cell(numEpochs, 1);
                     
                     for epoch = 1:numEpochs
-                        [faaValue, arousalState] = obj.computeFAAForEpoch(data{epoch});
+                        [faaValue, pleasureState] = obj.computeFAAForEpoch(data{epoch});
                         faaResults{epoch} = struct(...
                             'faa', faaValue, ...
-                            'arousal', arousalState);
+                            'pleasureState', pleasureState);
                     end
                 else
                     numEpochs = size(data, 3);
                     faaResults = cell(numEpochs, 1);
                     
                     for epoch = 1:numEpochs
-                        [faaValue, arousalState] = obj.computeFAAForEpoch(data(:,:,epoch));
+                        [faaValue, pleasureState] = obj.computeFAAForEpoch(data(:,:,epoch));
                         faaResults{epoch} = struct(...
                             'faa', faaValue, ...
-                            'arousal', arousalState);
+                            'pleasureState', pleasureState);
                     end
                 end
             catch ME
@@ -50,7 +50,7 @@ classdef FAAExtractor < handle
     end
     
     methods (Access = private)
-        function [faaValue, arousalState] = computeFAAForEpoch(obj, epochData)
+        function [faaValue, pleasureState] = computeFAAForEpoch(obj, epochData)
             % アルファ帯域のパワー計算
             leftPower = obj.powerExtractor.calculatePower(...
                 epochData(obj.leftChannels,:), [8 13]);
@@ -64,9 +64,9 @@ classdef FAAExtractor < handle
             
             % 状態判定
             if faaValue > obj.faaThreshold
-                arousalState = 'positive';
+                pleasureState = 'positive';
             else
-                arousalState = 'negative';
+                pleasureState = 'negative';
             end
         end
     end

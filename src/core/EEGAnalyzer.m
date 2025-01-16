@@ -236,21 +236,50 @@ classdef EEGAnalyzer < handle
         
         function extractFeatures(obj)
             try
+                % データ形式のチェックと必要な変換
+                if isempty(obj.processedData)
+                    error('処理済みデータが空です');
+                end
+
+                % データ形式の判定
+                isEpochCell = iscell(obj.processedData);
+
                 % CSP特徴抽出
-                if obj.params.feature.csp.enable && ~isempty(obj.processedData)
-                    % CSPフィルタの学習
-                    [filters, parameters] = obj.cspExtractor.trainCSP(...
-                        obj.processedData, obj.processedLabel);
+                if obj.params.feature.csp.enable
+                    % cell形式の場合は3D配列に変換
+                    if isEpochCell
+                        numEpochs = length(obj.processedData);
+                        [channels, samples] = size(obj.processedData{1});
+                        tempData = zeros(channels, samples, numEpochs);
+                        for i = 1:numEpochs
+                            tempData(:,:,i) = obj.processedData{i};
+                        end
 
-                    % 特徴量の抽出
-                    if ~isempty(filters)
-                        features = obj.cspExtractor.extractFeatures(...
-                            obj.processedData, filters);
+                        % CSPフィルタの学習
+                        [filters, parameters] = obj.cspExtractor.trainCSP(tempData, obj.processedLabel);
 
-                        % 結果の保存
-                        obj.results.csp.filters = filters;
-                        obj.results.csp.features = features;
-                        obj.results.csp.parameters = parameters;
+                        % 特徴量の抽出
+                        if ~isempty(filters)
+                            features = obj.cspExtractor.extractFeatures(tempData, filters);
+
+                            % 結果の保存
+                            obj.results.csp.filters = filters;
+                            obj.results.csp.features = features;
+                            obj.results.csp.parameters = parameters;
+                        end
+                    else
+                        % 従来の3D配列処理
+                        [filters, parameters] = obj.cspExtractor.trainCSP(...
+                            obj.processedData, obj.processedLabel);
+
+                        if ~isempty(filters)
+                            features = obj.cspExtractor.extractFeatures(...
+                                obj.processedData, filters);
+
+                            obj.results.csp.filters = filters;
+                            obj.results.csp.features = features;
+                            obj.results.csp.parameters = parameters;
+                        end
                     end
                 end
 
@@ -263,7 +292,7 @@ classdef EEGAnalyzer < handle
                 if obj.params.feature.faa.enable
                     obj.extractFAAFeatures();
                 end
-                
+
                 % α/β特徴量の抽出
                 if obj.params.feature.abRatio.enable
                     obj.extractABRatioFeatures();
@@ -275,7 +304,7 @@ classdef EEGAnalyzer < handle
                 end
 
             catch ME
-                error('Feature extraction failed: %s', ME.message);
+                error('特徴抽出に失敗しました: %s', ME.message);
             end
         end
         
@@ -310,13 +339,16 @@ classdef EEGAnalyzer < handle
                     return;
                 end
 
-                % データの形状を確認
-                numEpochs = size(obj.processedData, 3);
+                % データ形式の判定とエポック数の取得
+                if iscell(obj.processedData)
+                    numEpochs = length(obj.processedData);
+                else
+                    numEpochs = size(obj.processedData, 3);
+                end
 
                 % タイミング情報の取得
                 timings = zeros(numEpochs, 1);
                 samples = zeros(numEpochs, 1);
-
                 for i = 1:length(obj.labels)
                     if i <= numEpochs
                         timings(i) = obj.labels(i).time;
@@ -326,19 +358,24 @@ classdef EEGAnalyzer < handle
 
                 % エポックごとの処理
                 for epoch = 1:numEpochs
+                    % データの取得
+                    if iscell(obj.processedData)
+                        epochData = obj.processedData{epoch};
+                    else
+                        epochData = obj.processedData(:,:,epoch);
+                    end
+
                     % 周波数帯域ごとのパワーを計算
                     bandNames = obj.params.feature.power.bands.names;
                     if iscell(bandNames{1})
                         bandNames = bandNames{1};
                     end
 
-                    % 各周波数帯域のパワーを計算
                     bandPowers = struct();
                     for i = 1:length(bandNames)
                         bandName = bandNames{i};
                         freqRange = obj.params.feature.power.bands.(bandName);
-                        bandPowers.(bandName) = obj.powerExtractor.calculatePower(...
-                            obj.processedData(:,:,epoch), freqRange);
+                        bandPowers.(bandName) = obj.powerExtractor.calculatePower(epochData, freqRange);
                     end
 
                     % 新しい結果の構築
@@ -370,11 +407,16 @@ classdef EEGAnalyzer < handle
                     return;
                 end
 
-                numEpochs = size(obj.processedData, 3);
-                timings = zeros(numEpochs, 1);
-                samples = zeros(numEpochs, 1);
+                % データ形式の判定とエポック数の取得
+                if iscell(obj.processedData)
+                    numEpochs = length(obj.processedData);
+                else
+                    numEpochs = size(obj.processedData, 3);
+                end
 
                 % タイミング情報の取得
+                timings = zeros(numEpochs, 1);
+                samples = zeros(numEpochs, 1);
                 for i = 1:length(obj.labels)
                     if i <= numEpochs
                         timings(i) = obj.labels(i).time;
@@ -382,14 +424,28 @@ classdef EEGAnalyzer < handle
                     end
                 end
 
-                % エポックごとのFAA値を計算
+                % エポックごとの処理
                 for epoch = 1:numEpochs
-                    faaResults = obj.faaExtractor.calculateFAA(obj.processedData(:,:,epoch));
+                    % データの取得
+                    if iscell(obj.processedData)
+                        epochData = obj.processedData{epoch};
+                    else
+                        epochData = obj.processedData(:,:,epoch);
+                    end
+
+                    % FAA値の計算
+                    faaResults = obj.faaExtractor.calculateFAA(epochData);
+
+                    if iscell(faaResults)
+                        faaResult = faaResults{1};
+                    else
+                        faaResult = faaResults;
+                    end
 
                     % 新しい結果の構築
                     newResult = struct(...
-                        'faa', faaResults{1}.faa, ...
-                        'arousal', faaResults{1}.arousal, ...
+                        'faa', faaResult.faa, ...
+                        'pleasureState', faaResult.pleasureState, ...
                         'time', timings(epoch), ...
                         'sample', samples(epoch));
 
@@ -415,13 +471,16 @@ classdef EEGAnalyzer < handle
                     return;
                 end
 
-                % データの形状を確認
-                numEpochs = size(obj.processedData, 3);
+                % データ形式の判定とエポック数の取得
+                if iscell(obj.processedData)
+                    numEpochs = length(obj.processedData);
+                else
+                    numEpochs = size(obj.processedData, 3);
+                end
 
-                % ラベルからタイムスタンプとサンプル情報を取得
+                % タイミング情報の取得
                 timings = zeros(numEpochs, 1);
                 samples = zeros(numEpochs, 1);
-
                 for i = 1:length(obj.labels)
                     if i <= numEpochs
                         timings(i) = obj.labels(i).time;
@@ -431,16 +490,22 @@ classdef EEGAnalyzer < handle
 
                 % エポックごとの処理
                 for epoch = 1:numEpochs
+                    % データの取得
+                    if iscell(obj.processedData)
+                        epochData = obj.processedData{epoch};
+                    else
+                        epochData = obj.processedData(:,:,epoch);
+                    end
+
                     % α/β比の計算
-                    [abRatio, arousalState] = obj.abRatioExtractor.calculateABRatio(...
-                        obj.processedData(:,:,epoch));
+                    [abRatio, arousalState] = obj.abRatioExtractor.calculateABRatio(epochData);
 
                     % 新しい結果の構築
                     newResult = struct(...
                         'ratio', abRatio, ...
-                        'state', arousalState, ...
-                        'time', timings(epoch), ...     % ラベルから取得したタイムスタンプ
-                        'sample', samples(epoch));      % ラベルから取得したサンプル番号
+                        'arousalState', arousalState, ...
+                        'time', timings(epoch), ...
+                        'sample', samples(epoch));
 
                     % 結果の追加
                     if isempty(obj.results.abRatio)
@@ -450,14 +515,13 @@ classdef EEGAnalyzer < handle
                     end
                 end
 
-                % 処理結果のサマリーを表示
                 fprintf('α/β比の特徴抽出が完了しました（%d エポック）\n', numEpochs);
 
             catch ME
-                error('ABRatioExtractor:ExtractionFailed', ME.message);
+                error('ABRatioExtractor:ExtractionFailed', 'α/β比の特徴抽出に失敗しました: %s', ME.message);
             end
         end
-
+        
         function extractEmotionFeatures(obj)
             try
                 if isempty(obj.processedData) || isempty(obj.labels)
@@ -465,11 +529,16 @@ classdef EEGAnalyzer < handle
                     return;
                 end
 
-                numEpochs = size(obj.processedData, 3);
-                timings = zeros(numEpochs, 1);
-                samples = zeros(numEpochs, 1);
+                % データ形式の判定とエポック数の取得
+                if iscell(obj.processedData)
+                    numEpochs = length(obj.processedData);
+                else
+                    numEpochs = size(obj.processedData, 3);
+                end
 
                 % タイミング情報の取得
+                timings = zeros(numEpochs, 1);
+                samples = zeros(numEpochs, 1);
                 for i = 1:length(obj.labels)
                     if i <= numEpochs
                         timings(i) = obj.labels(i).time;
@@ -477,15 +546,29 @@ classdef EEGAnalyzer < handle
                     end
                 end
 
-                % エポックごとの感情状態を分類
+                % エポックごとの処理
                 for epoch = 1:numEpochs
-                    emotionResult = obj.emotionExtractor.classifyEmotion(obj.processedData(:,:,epoch));
+                    % データの取得
+                    if iscell(obj.processedData)
+                        epochData = obj.processedData{epoch};
+                    else
+                        epochData = obj.processedData(:,:,epoch);
+                    end
+
+                    % 感情特徴量の抽出
+                    emotionResult = obj.emotionExtractor.classifyEmotion(epochData);
+
+                    if iscell(emotionResult)
+                        currentResult = emotionResult{1};
+                    else
+                        currentResult = emotionResult;
+                    end
 
                     % 新しい結果の構築
                     newResult = struct(...
-                        'state', emotionResult{1}.state, ...
-                        'coordinates', emotionResult{1}.coordinates, ...
-                        'emotionCoords', emotionResult{1}.emotionCoords, ...
+                        'state', currentResult.state, ...
+                        'coordinates', currentResult.coordinates, ...
+                        'emotionCoords', currentResult.emotionCoords, ...
                         'time', timings(epoch), ...
                         'sample', samples(epoch));
 
