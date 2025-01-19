@@ -4,22 +4,12 @@ classdef Epoching < handle
         epochs          % エポック分割されたデータ
         epochLabels     % エポック化後のラベル情報
         processingInfo  % 処理情報
-        baselineWindow  % ベースライン区間
     end
     
     methods (Access = public)
         function obj = Epoching(params)
             % コンストラクタ
             obj.params = params;
-            
-            % エポックパラメータの初期化
-            if isfield(params.signal.epoch, 'baseline') && ~isempty(params.signal.epoch.baseline)
-                obj.baselineWindow = params.signal.epoch.baseline;
-            else
-                obj.baselineWindow = [-0.5 0];
-            end
-            
-            % 処理情報の初期化
             obj.initializeProcessingInfo();
         end
         

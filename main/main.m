@@ -15,7 +15,7 @@ setupPaths(currentDir);
 
 
 %%  指定のパラメータで実行
-params = getConfig('epocx', 'preset', 'exhibition/exhibition');
+params = getConfig('epocx');
 manager = EEGAcquisitionManager(params);      % データ計測
 
 

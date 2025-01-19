@@ -116,8 +116,7 @@ function preset = dda_preset()
         'epoch', struct(...            % エポック化設定
             'method', 'odd-even', ...      % エポック化方法：'time'または'odd-even'
             'storageType', 'cell', ... % データ形式：'array'または'cell'
-            'overlap', 0, ...       % オーバーラップ率
-            'baseline', [-0.5 0] ...   % ベースライン期間（秒）
+            'overlap', 0 ...       % オーバーラップ率
         ), ...
         'frequency', struct(...         % 周波数解析の設定
             'min', 1, ...              % 解析する最小周波数（Hz）
@@ -219,7 +218,7 @@ function preset = dda_preset()
             ), ...
             'welch', struct(...        % Welch法のパラメータ設定
                 'windowType', 'hamming', ... % 窓関数: 'hamming', 'hann', 'blackman'
-                'windowLength', 64, ...     % 窓長（サンプル数）
+                'windowLength', 32, ...     % 窓長（サンプル数）
                 'overlap', 0.5, ...          % オーバーラップ率（0-1）
                 'nfft', 512, ...            % FFTポイント数
                 'freqResolution', 0.5, ...   % 周波数分解能（Hz）
