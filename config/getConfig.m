@@ -1,106 +1,209 @@
 function params = getConfig(deviceType, varargin)
+    % デバイス設定とプリセットを読み込むための関数
+    %
+    % 入力:
+    %   deviceType - デバイスタイプ ('epocx', 'mn8', 'openbci8', 'openbci16')
+    %   varargin   - 名前-値ペアのパラメータ
+    %     'preset' - プリセット名 (例: 'template', 'character')
+    %
+    % 出力:
+    %   params    - 設定パラメータを含む構造体
+
+    % 入力パーサーの設定
     p = inputParser;
-    addRequired(p, 'deviceType', @(x) ischar(x) || isstring(x));
-    addParameter(p, 'preset', 'default/template', @(x) ischar(x) || isstring(x));
+    p.addRequired('deviceType', @(x) ischar(x) || isstring(x));
+    p.addParameter('preset', '', @(x) ischar(x) || isstring(x));
+
+    % パース実行
     parse(p, deviceType, varargin{:});
-    
-    try
-        % プリセットパスの解析
-        [presetCategory, presetName] = parsePresetPath(p.Results.preset);
-        
-        % 基本テンプレートの読み込み
-        template = loadPreset('default/template');
-        
-        % デバイス設定の取得
-        if ~isfield(template.device, lower(deviceType))
-            error('Unknown device type: %s', deviceType);
-        end
-        deviceConfig = template.device.(lower(deviceType));
-        
-        % パラメータの構築
-        params = template;
-        params.device = deviceConfig;
-        
-        % カスタムプリセットの適用
-        if ~strcmp(p.Results.preset, 'default/template')
-            customPreset = loadPreset(p.Results.preset);
-            params = mergeStructs(params, customPreset);
-        end
-        
-    catch ME
-        error('Configuration error: %s', ME.message);
-    end
-end
 
-function [category, name] = parsePresetPath(presetPath)
-    parts = strsplit(presetPath, '/');
-    if length(parts) == 1
-        category = 'custom';
-        name = parts{1};
-    else
-        category = parts{1};
-        name = parts{2};
-    end
-end
-
-function preset = loadPreset(presetPath)
     try
-        % 現在のファイルのディレクトリからプリセットのパスを取得
+        % デバッグ出力
+        fprintf('=== 設定読み込み開始 ===\n');
+        fprintf('デバイスタイプ: %s\n', deviceType);
+
+        % プリセット名の決定
+        if isempty(p.Results.preset)
+            presetName = 'template';
+            fprintf('プリセット指定なし - テンプレート設定を使用\n');
+        else
+            presetName = p.Results.preset;
+            fprintf('指定プリセット: %s\n', presetName);
+        end
+
+        % プリセットの完全パスを構築
         currentDir = fileparts(mfilename('fullpath'));
-        presetDir = fullfile(currentDir, 'presets');
-        
-        % プリセットファイルの完全パスを構築
-        parts = strsplit(presetPath, '/');
-        if length(parts) == 1
-            fullPath = fullfile(presetDir, 'custom', [parts{1} '_preset.m']);
-        else
-            fullPath = fullfile(presetDir, parts{1}, [parts{2} '_preset.m']);
+        presetFile = fullfile(currentDir, 'presets', [presetName '.m']);
+
+        % プリセットファイルの存在確認
+        if ~exist(presetFile, 'file')
+            error('プリセットファイルが見つかりません: %s', presetFile);
         end
-        
-        if ~exist(fullPath, 'file')
-            error('Preset file not found: %s', fullPath);
-        end
-        
-        % プリセットの読み込み
-        [presetDir, presetName] = fileparts(fullPath);
+
+        % プリセットファイルを読み込んで実行
+        [presetDir, presetFuncName] = fileparts(presetFile);
         addpath(presetDir);
-        preset = feval(presetName);
+        params = feval(presetFuncName);
         rmpath(presetDir);
-        
+
+        % プリセット情報の表示
+        if isfield(params, 'info')
+            fprintf('\nプリセット情報:\n');
+            fprintf('  名前: %s\n', params.info.name);
+            fprintf('  説明: %s\n', params.info.description);
+            fprintf('  バージョン: %s\n', params.info.version);
+            fprintf('  作成者: %s\n', params.info.author);
+            fprintf('  作成日: %s\n', params.info.date);
+        end
+
+        % デバイス設定を追加
+        params.device = getDeviceConfig(deviceType);
+
+        % 設定の整合性チェック
+        validateConfig(params, deviceType);
+
+        fprintf('\n設定の整合性チェック完了\n');
+        fprintf('=== 設定読み込み完了 ===\n');
+
     catch ME
-        error('Failed to load preset %s: %s', presetPath, ME.message);
+        % エラー情報の詳細表示
+        fprintf('\n=== エラー発生 ===\n');
+        fprintf('エラーメッセージ: %s\n', ME.message);
+        fprintf('エラー位置:\n');
+        for i = 1:length(ME.stack)
+            fprintf('  File: %s\n  Line: %d\n  Function: %s\n\n', ...
+                ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
+        end
+        rethrow(ME);
     end
 end
 
-function result = mergeStructs(orig, new)
-    % 構造体の結合を行う関数
-    % orig: オリジナルの構造体
-    % new: 新しい構造体（これの値が優先される）
-    
-    % 入力チェック
-    if ~isstruct(orig) || ~isstruct(new)
-        error('両方の入力が構造体である必要があります');
+function deviceConfig = getDeviceConfig(deviceType)
+    % デバイスの基本設定を定義する関数
+    switch lower(deviceType)
+        case 'epocx'
+            deviceConfig = struct(...
+                'name', 'EPOCX', ...
+                'channelCount', 14, ...
+                'channelNum', (4:17), ...
+                'channels', {{'AF3','F7','F3','FC5','T7','P7','O1','O2','P8','T8','FC6','F4','F8','AF4'}}, ...
+                'sampleRate', 256, ...
+                'resolution', 14, ...
+                'reference', 'CMS/DRL', ...
+                'lsl', struct(...
+                    'streamName', 'EmotivDataStream-EEG', ...
+                    'type', 'EEG', ...
+                    'format', 'float32', ...
+                    'nominal_srate', 256, ...
+                    'source_id', 'emotiv_epocx_1' ...
+                ) ...
+            );
+        
+        case 'epocflex'
+            deviceConfig = struct(...
+                'name', 'EPOCFLEX', ...
+                'channelCount', 32, ...     % 最大32チャンネルに対応
+                'channelNum', 1:32, ...     % 1から32までのチャンネル番号
+                'channels', {{'FP1','FP2','F7','F3','FZ','F4','F8','T7','C3','CZ','C4','T8','P7','P3','PZ','P4','P8','O1','OZ','O2','FC1','FC2','CP1','CP2','FC5','FC6','CP5','CP6','AF3','AF4','PO3','PO4'}}, ... % 10-20システムに基づく配置
+                'sampleRate', 256, ...      % 256Hzのサンプリングレート
+                'resolution', 16, ...       % 16ビットの解像度
+                'reference', 'CMS/DRL', ... % 共通モードセンス（CMS）と駆動右脚（DRL）を参照
+                'lsl', struct(...
+                    'streamName', 'EmotivDataStream-EEG', ...
+                    'type', 'EEG', ...
+                    'format', 'float32', ...
+                    'nominal_srate', 256, ...
+                    'source_id', 'emotiv_epocflex' ...
+                ) ...
+            );
+
+        case 'mn8'
+            deviceConfig = struct(...
+                'name', 'MN8', ...
+                'channelNum', (4:5), ...
+                'channelCount', 2, ...
+                'channels', {{'T7','T8'}}, ...
+                'sampleRate', 128, ...
+                'resolution', 8, ...
+                'reference', 'CMS/DRL', ...
+                'lsl', struct(...
+                    'streamName', 'EmotivDataStream-EEG', ...
+                    'type', 'EEG', ...
+                    'format', 'float32', ...
+                    'nominal_srate', 128, ...
+                    'source_id', 'emotiv_mn8' ...
+                ) ...
+            );
+
+        case 'openbci8'
+            deviceConfig = struct(...
+                'name', 'OPENBCI8', ...
+                'channelNum', (1:8), ...
+                'channelCount', 8, ...
+                'channels', {{'Fp1','Fp2','C3','C4','P7','P8','O1','O2'}}, ...
+                'sampleRate', 125, ...
+                'resolution', 24, ...
+                'reference', 'SRB', ...
+                'lsl', struct(...
+                    'streamName', 'OpenBCI-EEG', ...
+                    'type', 'EEG', ...
+                    'format', 'float32', ...
+                    'nominal_srate', 125, ...
+                    'source_id', 'openbci_8ch' ...
+                ) ...
+            );
+
+        case 'openbci16'
+            deviceConfig = struct(...
+                'name', 'OPENBCI16', ...
+                'channelNum', (1:16), ...
+                'channelCount', 16, ...
+                'channels', {{'Fp1','Fp2','F3','F4','C3','C4','P3','P4','O1','O2','F7','F8','T7','T8','P7','P8'}}, ...
+                'sampleRate', 250, ...
+                'resolution', 24, ...
+                'reference', 'SRB', ...
+                'lsl', struct(...
+                    'streamName', 'OpenBCI-EEG', ...
+                    'type', 'EEG', ...
+                    'format', 'float32', ...
+                    'nominal_srate', 250, ...
+                    'source_id', 'openbci_16ch' ...
+                ) ...
+            );
+
+        otherwise
+            error('Unknown device type: %s', deviceType);
     end
-    
-    % 元の構造体をコピー
-    result = orig;
-    fields = fieldnames(new);
-    
-    % 各フィールドに対して再帰的に処理
-    for i = 1:length(fields)
-        field = fields{i};
-        if isfield(orig, field)
-            % フィールドが両方の構造体に存在する場合
-            if isstruct(new.(field)) && isstruct(orig.(field))
-                % 両方が構造体の場合は再帰的にマージ
-                result.(field) = mergeStructs(orig.(field), new.(field));
-            else
-                % 構造体でない場合は新しい値で上書き
-                result.(field) = new.(field);
-            end
-        else
-            % フィールドが存在しない場合は新規追加
-            result.(field) = new.(field);
+end
+
+function validateConfig(params, deviceType)
+    % 設定の整合性をチェックする関数
+
+    % 必須フィールドの確認
+    requiredFields = {'device'};
+    for i = 1:length(requiredFields)
+        if ~isfield(params, requiredFields{i})
+            error('必須フィールドが欠落しています: %s', requiredFields{i});
+        end
+    end
+
+    % デバイス設定の整合性チェック
+    if ~strcmpi(params.device.name, getDeviceConfig(deviceType).name)
+        warning('デバイス名が一致しません。設定: %s, 期待値: %s', ...
+            params.device.name, getDeviceConfig(deviceType).name);
+    end
+
+    % プリセット固有の設定が存在する場合の追加チェック
+    if isfield(params, 'signal')
+        % サンプリングレートの整合性
+        if params.device.sampleRate ~= params.signal.window.analysis * ...
+                params.device.sampleRate / params.signal.window.analysis
+            warning('サンプリングレートと解析窓の設定に不整合があります');
+        end
+
+        % チャンネル数の整合性
+        if length(params.device.channels) ~= params.device.channelCount
+            warning('チャンネル数の設定に不整合があります');
         end
     end
 end
