@@ -26,9 +26,9 @@ classdef ABRatioExtractor < handle
                 
                 % 覚醒状態の判定
                 if abRatio < obj.abRatioThreshold
-                    arousalState = 'high';
+                    arousalState = 'arousal';
                 else
-                    arousalState = 'low';
+                    arousalState = 'no-arousal';
                 end
                 
             catch ME
