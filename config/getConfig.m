@@ -105,7 +105,7 @@ function deviceConfig = getDeviceConfig(deviceType)
                 'channelCount', 32, ...     % 最大32チャンネルに対応
                 'channelNum', 4:35, ...     % 1から32までのチャンネル番号
                 'channels', {{'Cz','Fz','Fp1','F7','F3','FC1','C3','FC5','FT9','T7','CP5','CP1','P3','P7','PO9','O1','Pz','Oz','O2','PO10','P8','P4','CP2','CP6','T8','FT10','FC6','C4','FC2','F4','F8','Fp2'}}, ... % 10-20システムに基づく配置
-                'sampleRate', 128, ...      % 256Hzのサンプリングレート
+                'sampleRate', 256, ...      % 256Hzのサンプリングレート
                 'resolution', 16, ...       % 16ビットの解像度
                 'reference', 'CMS/DRL', ... % 共通モードセンス（CMS）と駆動右脚（DRL）を参照
                 'lsl', struct(...
