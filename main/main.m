@@ -1,6 +1,7 @@
 % パラメータ例：
 % params = getConfig('epocx');
-% params = getConfig('epocx', 'preset', 'exhibition/exhibition');
+% params = getConfig('epocx', 'preset', 'character');
+% params = getConfig('epocx', 'preset', 'dda');
 
 % 全初期化：clc; clear all; close all; instrreset;
 % コマンドクリア：clc
@@ -15,7 +16,7 @@ setupPaths(currentDir);
 
 
 %%  指定のパラメータで実行
-params = getConfig('epocx');
+params = getConfig('epocx', 'preset', 'character');
 manager = EEGAcquisitionManager(params);      % データ計測
 
 
@@ -65,10 +66,6 @@ function setupPaths(currentDir)
         else
             error('Configディレクトリが見つかりません: %s', configDir);
         end
-        
-        % LSLのライブラリパスを設定に反映
-        params = getConfig('epocx');
-        params.lsl.stream.libraryPath = lslDir;
         
         fprintf('\nパスの設定が完了しました\n');
         

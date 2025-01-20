@@ -1,36 +1,22 @@
-function preset = template_preset()
+function preset = dda_preset()
     %% === プリセット情報 ===
     preset_info = struct(...
-        'name', 'template', ...
-        'description', 'Default template preset', ...
+        'name', 'dda', ...
+        'description', 'dda preset', ...
         'version', '1.0', ...
-        'author', 'Your Name', ...
-        'date', '2025-01-01' ...
+        'author', 'lleoo', ...
+        'date', '2025-01-15' ...
     );
 
     %% === トリガーマッピング設定 ===
-%      % トリガーマッピングの設定
-%     n = 80; % 最大値
-%     trigger_mappings = cell(n, 2);
-%     for i = 1:n
-%         trigger_mappings(i,:) = {num2str(i), i};
-%     end
-% 
-%     % マッピング構造体の生成（通常は変更不要）
-%     mapping_struct = struct();
-%     for i = 1:size(trigger_mappings, 1)
-%         field_name = sprintf('trigger%d', i);
-%         mapping_struct.(field_name) = struct(...
-%             'text', trigger_mappings{i,1}, ...
-%             'value', trigger_mappings{i,2} ...
-%         );
-%     end
-    
-    trigger_mappings = {
-        '安静', 1;         % クラス1：安静状態（基準状態）
-        'タスク', 2;       % クラス2：タスク状態
-    };
+     % トリガーマッピングの設定
+    n = 80; % 最大値
+    trigger_mappings = cell(n, 2);
+    for i = 1:n
+        trigger_mappings(i,:) = {num2str(i), i};
+    end
 
+    % マッピング構造体の生成
     mapping_struct = struct();
     for i = 1:size(trigger_mappings, 1)
         field_name = sprintf('trigger%d', i);
@@ -59,11 +45,11 @@ function preset = template_preset()
 
     %% === データ収集設定 ===
     acquisition = struct(...
-        'mode', 'online', ...       % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
+        'mode', 'offline', ...       % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
         'save', struct(...
             'enable', true, ...      % データ保存の有効/無効
-            'name', 'template', ...      % 保存時のファイル名プレフィックス
-            'path', './Experiment Data', ... % データ保存先ディレクトリ
+            'name', 'dda', ...      % 保存時のファイル名プレフィックス
+            'path', './Experiment Data/DDA Test', ... % データ保存先ディレクトリ
             'saveInterval', 60, ...   % 一時保存を行う間隔（秒）
             'fields', struct(...      % 保存する項目の選択
                 'params', true, ...             % 設定情報
@@ -99,7 +85,7 @@ function preset = template_preset()
             'enable', true, ...         % UDP受信の有効/無効
             'port', 12345, ...          % 受信ポート番号
             'address', '127.0.0.1', ... % 受信アドレス
-            'bufferSize', 8192, ...     % 受信バッファサイズ
+            'bufferSize', 1024, ...     % 受信バッファサイズ
             'encoding', 'UTF-8', ...    % 文字エンコーディング
             'triggers', struct(...       % トリガー設定
                 'enabled', true, ...     % トリガー処理の有効/無効
@@ -111,7 +97,7 @@ function preset = template_preset()
             'enabled', true, ...        % UDP送信の有効/無効
             'port', 54321, ...          % 送信ポート番号
             'address', '127.0.0.1', ... % 送信先アドレス
-            'bufferSize', 8192, ...     % 送信バッファサイズ
+            'bufferSize', 1024, ...     % 送信バッファサイズ
             'encoding', 'UTF-8' ...     % 文字エンコーディング
         ) ...
     );
@@ -121,23 +107,16 @@ function preset = template_preset()
         'enable', true, ...           % 信号処理の有効/無効
         'window', struct(...           % 解析窓の設定
             'analysis', 2.0, ...       % 解析窓の長さ（秒）
-            'stimulus', 5.0, ...       % 刺激提示時間（秒）
+            'stimulus', 2.0, ...       % 刺激提示時間（秒）
             'bufferSize', 15, ...      % データバッファのサイズ（秒）
             'updateBuffer', 1, ...     % バッファの更新間隔（秒）
             'step', [], ...            % 解析窓のシフト幅：自動計算
             'updateInterval', [] ...    % 更新間隔：自動計算
         ), ...
-        'epoch', struct(...            
-            'method', 'time', ...      
-            'storageType', 'array', ... 
-            'overlap', 0, ...
-            'visual', struct(...       % 視覚タスク関連の設定を追加
-                'enable', false, ...   % 視覚タスクの有効/無効
-                'taskTypes', {'observation',  'imagery'}, ... % タスクタイプ：'observation', 'imagery'
-                'observationDuration', 5.0, ... % 観察タスク時間(s)
-                'signalDuration', 1.0, ...      % 合図時間(s) 
-                'imageryDuration', 5.0 ...      % イメージタスク時間(s)
-            ) ...
+        'epoch', struct(...            % エポック化設定
+            'method', 'odd-even', ...      % エポック化方法：'time'または'odd-even'
+            'storageType', 'cell', ... % データ形式：'array'または'cell'
+            'overlap', 0 ...       % オーバーラップ率
         ), ...
         'frequency', struct(...         % 周波数解析の設定
             'min', 1, ...              % 解析する最小周波数（Hz）
@@ -239,7 +218,7 @@ function preset = template_preset()
             ), ...
             'welch', struct(...        % Welch法のパラメータ設定
                 'windowType', 'hamming', ... % 窓関数: 'hamming', 'hann', 'blackman'
-                'windowLength', 256, ...     % 窓長（サンプル数）
+                'windowLength', 32, ...     % 窓長（サンプル数）
                 'overlap', 0.5, ...          % オーバーラップ率（0-1）
                 'nfft', 512, ...            % FFTポイント数
                 'freqResolution', 0.5, ...   % 周波数分解能（Hz）
@@ -292,7 +271,7 @@ function preset = template_preset()
             ) ...
         ), ...
         'csp', struct(...              % CSPExtractor用の設定
-            'enable', true, ...
+            'enable', false, ...
             'patterns', 3, ...          % 使用するパターン数
             'regularization', 0.05 ...  % 正則化パラメータ
         ) ...
@@ -302,12 +281,12 @@ function preset = template_preset()
     num_classes = size(trigger_mappings, 1);        % クラス数を動的に設定
     
     classifier = struct(...
-        'activeClassifier', 'svm', ...  % アクティブな分類器タイプ: 'svm', 'ecoc', 'cnn'
+        'activeClassifier', 'cnn', ...  % アクティブな分類器タイプ: 'svm', 'ecoc', 'cnn'
         'svm', struct(...    % SVMの設定
-            'enable', true, ...
-            'optimize', true, ...
+            'enable', false, ...
+            'optimize', false, ...
             'probability', true, ...
-            'kernel', 'rbf', ...  % カーネル関数: 'linear', 'rbf', 'polynomial'
+            'kernel', 'linear', ...  % カーネル関数: 'linear', 'rbf', 'polynomial'
             'threshold', struct(...   % 閾値関連の設定
                 'rest', 0.5, ...      % デフォルトの安静状態閾値
                 'useOptimal', true, ... % 最適閾値を使用するか
@@ -321,10 +300,10 @@ function preset = template_preset()
             ) ...
         ), ...
         'ecoc', struct(...   % ECOCの設定
-            'enable', false, ...
+            'enable', true, ...
             'optimize', false, ...
             'probability', true, ...
-            'kernel', 'rbf', ...  % カーネル関数: 'linear', 'rbf', 'polynomial'
+            'kernel', 'linear', ...  % カーネル関数: 'linear', 'rbf', 'polynomial'
             'coding', 'onevsall', ... % コーディング方式: 'onevsall', 'allpairs'
             'learners', 'svm', ...    % 基本学習器: 'svm', 'tree'
             'hyperparameters', struct(... % ハイパーパラメータ設定
