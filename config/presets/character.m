@@ -43,7 +43,7 @@ function preset = character()
 
     %% === データ収集設定 ===
     acquisition = struct(...
-        'mode', 'online', ...       % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
+        'mode', 'offline', ...       % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
         'emg', struct(...           % EMG計測設定
             'enable', false, ...    % EMG計測の有効/無効
             'channels', struct(...
@@ -62,7 +62,7 @@ function preset = character()
         'save', struct(...
             'enable', true, ...      % データ保存の有効/無効
             'name', 'characterTest', ...      % 保存時のファイル名プレフィックス
-            'path', './Experiment Data/AHs2025', ... % データ保存先ディレクトリ
+            'path', './Experiment Data/AHs2025\mano/Day2', ... % データ保存先ディレクトリ
             'saveInterval', 60, ...   % 一時保存を行う間隔（秒）
             'fields', struct(...      % 保存する項目の選択
                 'params', true, ...             % 設定情報
