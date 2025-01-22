@@ -941,7 +941,6 @@ classdef GUIControllerManager < handle
                 obj.startTime = tic;
                 obj.updateButtonStates();
                 obj.callbacks.onStart();
-                drawnow;
             end
         end
         

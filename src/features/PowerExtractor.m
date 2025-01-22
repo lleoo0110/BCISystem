@@ -33,42 +33,90 @@ classdef PowerExtractor < handle
         end
         
         function [pxx, f] = calculateSpectrum(obj, data)
+            % データ長チェック
+            if size(data, 2) < obj.params.feature.power.welch.windowLength
+                % データが不足している場合は空の結果を返す
+                pxx = [];
+                f = [];
+                return;
+            end
+
             % Welch法によるスペクトル計算
             fs = obj.params.device.sampleRate;
             windowLength = obj.params.feature.power.welch.windowLength;
             overlap = obj.params.feature.power.welch.overlap;
             nfft = obj.params.feature.power.welch.nfft;
             windowType = obj.params.feature.power.welch.windowType;
-            
+
             window = obj.getWindow(windowType, windowLength);
             noverlap = round(windowLength * overlap);
-            
-            [pxx, f] = pwelch(data(1,:), window, noverlap, nfft, fs);
+
+            % エラー処理を追加
+            try
+                [pxx, f] = pwelch(data(1,:), window, noverlap, nfft, fs);
+            catch ME
+                warning('PowerExtractor:SpectrumCalc', ...
+                    'Failed to calculate spectrum: %s\nUsing default values', ME.message);
+                f = linspace(0, fs/2, nfft/2+1)';
+                pxx = zeros(size(f));
+            end
         end
         
         function [ersp, times, freqs] = calculateERSP(obj, data)
-            % パラメータ設定
-            fs = obj.params.device.sampleRate;
-            freqRange = obj.params.gui.display.visualization.ersp.freqRange;
-            numFreqs = obj.params.gui.display.visualization.ersp.numFreqs;
+            try
+                % パラメータ設定
+                fs = obj.params.device.sampleRate;
+                freqRange = obj.params.gui.display.visualization.ersp.freqRange;
+                numFreqs = obj.params.gui.display.visualization.ersp.numFreqs;
 
-            % 周波数軸の設定（表示用に線形スケールを使用）
-            freqs = linspace(freqRange(1), freqRange(2), numFreqs);
+                % 周波数軸の設定
+                freqs = linspace(freqRange(1), freqRange(2), numFreqs);
 
-            % spectrogram計算
-            [S, freqs, times] = spectrogram(data(1,:), ...
-                hamming(numFreqs), ...
-                round(numFreqs*0.75), ...
-                freqs, ...
-                fs, ...
-                'yaxis');
+                % データ長のチェック
+                minRequiredSamples = 2 * numFreqs;  % 最小必要サンプル数
+                if size(data, 2) < minRequiredSamples
+                    % データ不足の場合はダミーデータを返す
+                    times = (0:size(data,2)-1) / fs;
+                    ersp = zeros(length(freqs), length(times));
+                    return;
+                end
 
-            % パワー計算とdB変換
-            ersp = 10*log10(abs(S).^2);
+                % ウィンドウサイズの調整
+                windowSize = min(numFreqs, floor(size(data,2)/4));
+                windowSize = 2^nextpow2(windowSize);  % 2の累乗に調整
 
-            % サイズの確認と必要な場合の調整
-            if size(ersp, 2) ~= length(times)
-                ersp = ersp(:, 1:length(times));
+                % オーバーラップの計算
+                noverlap = round(windowSize * 0.75);
+
+                % spectrogramの計算
+                [S, ~, times] = spectrogram(data(1,:), ...
+                    hamming(windowSize), ...
+                    noverlap, ...
+                    freqs, ...  % 事前に定義した周波数軸を使用
+                    fs, ...
+                    'yaxis');
+
+                % パワーの計算とdB変換
+                ersp = 10*log10(abs(S).^2 + eps);
+
+                % サイズの確認と調整
+                if size(ersp, 2) ~= length(times)
+                    ersp = ersp(:, 1:length(times));
+                end
+
+            catch ME
+                % エラーが発生した場合はダミーデータを返す
+                warning('PowerExtractor:ERSPCalc', 'ERSP calculation failed: %s\n%s', ...
+                    ME.message, getReport(ME, 'extended'));
+                times = (0:size(data,2)-1) / fs;
+                ersp = zeros(length(freqs), length(times));
+            end
+
+            % 出力の検証
+            if isempty(ersp) || isempty(times) || isempty(freqs)
+                times = (0:size(data,2)-1) / fs;
+                freqs = linspace(freqRange(1), freqRange(2), numFreqs);
+                ersp = zeros(length(freqs), length(times));
             end
         end
     end

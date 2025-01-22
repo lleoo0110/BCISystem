@@ -50,8 +50,9 @@ classdef CNNClassifier < handle
 
                 % CNNモデルの構築と学習
                 fprintf('\nTraining final model...\n');
-                [testCNNModel, trainInfo] = obj.trainCNNModel(prepTrainData, trainLabels{1}, prepTestData, testLabels{1});
-                testMetrics = obj.evaluateModel(testCNNModel, prepTestData, testLabels{1});
+                [cnnModel, trainInfo] = obj.trainCNNModel(prepTrainData, trainLabels{1}, prepTestData, testLabels{1});
+                obj.net = cnnModel;
+                testMetrics = obj.evaluateModel(cnnModel, prepTestData, testLabels{1});
 
                 % 過学習の検出と評価
                 [isOverfit, obj.overfitMetrics] = obj.validateOverfitting(trainInfo, testMetrics);
@@ -70,9 +71,6 @@ classdef CNNClassifier < handle
                         crossValidationResults.meanAccuracy * 100, ...
                         crossValidationResults.stdAccuracy * 100);
                 end
-                
-                [cnnModel, ~] = obj.trainCNNModel(processedData, processedLabel, [], []);      %   検証なしで 全データを学習
-                obj.net = cnnModel;
 
                 % 結果の構築
                 results = struct(...
@@ -352,13 +350,6 @@ classdef CNNClassifier < handle
                 softmaxLayer('Name', 'softmax')
                 classificationLayer('Name', 'output')
             ];
-            
-            % レイヤー構成の表示
-            fprintf('\nNetwork Architecture:\n');
-            for i = 1:length(layers)
-                fprintf('%s\n', layers(i).Name);
-            end
-            fprintf('\n');
         end
 
         function stop = trainingOutputFcn(obj, info, savedInfo)

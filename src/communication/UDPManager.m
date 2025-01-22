@@ -50,6 +50,9 @@ classdef UDPManager < handle
                         % デバッグ用の出力
                         fprintf('Mapped trigger: %s -> %d\n', receivedStr, triggerValue);
                     end
+                    
+                    drawnow;
+                    
                 end
             catch ME
                 warning(ME.identifier, 'UDP receive error: %s', ME.message);

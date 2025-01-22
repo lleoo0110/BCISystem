@@ -42,16 +42,33 @@ function preset = template()
 
     %% === データ収集設定 ===
     acquisition = struct(...
-        'mode', 'online', ...       % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
+        'mode', 'offline', ...       % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
+        'emg', struct(...           % EMG計測設定
+            'enable', true, ...    % EMG計測の有効/無効
+            'channels', struct(...
+                'names', {{'EMG1', 'EMG2'}}, ...  % EMGチャンネル名
+                'count', 2 ...      % EMGチャンネル数
+            ), ...
+            'sampleRate', 250, ... % EMGサンプリングレート
+            'lsl', struct(...
+                'streamName', 'OpenBCI-EMG', ...
+                'type', 'EMG', ...
+                'format', 'float32', ...
+                'nominal_srate', 250, ...
+                'source_id', 'emg_device' ...
+            ) ...
+        ), ...
         'save', struct(...
             'enable', true, ...      % データ保存の有効/無効
-            'name', 'template', ...      % 保存時のファイル名プレフィックス
-            'path', './Experiment Data', ... % データ保存先ディレクトリ
+            'name', 'characterTest', ...      % 保存時のファイル名プレフィックス
+            'path', './Experiment Data/AHs2025', ... % データ保存先ディレクトリ
             'saveInterval', 60, ...   % 一時保存を行う間隔（秒）
             'fields', struct(...      % 保存する項目の選択
                 'params', true, ...             % 設定情報
                 'rawData', true, ...            % 生脳波データ
+                'emgData', true, ...            % 筋電位データ
                 'labels', true, ...             % イベントマーカー
+                'emgLabels', true, ...            % 筋電位マーカー
                 'processedData', true, ...      % 前処理済みデータ
                 'processedLabel', true, ...     % 処理済みラベル
                 'processingInfo', true, ...     % 処理情報
@@ -66,7 +83,9 @@ function preset = template()
             'fields', struct(...      % 保存する項目の選択
                 'params', true, ...             % 設定情報
                 'rawData', true, ...            % 生脳波データ
+                'emgData', true, ...            % 筋電位データ
                 'labels', true, ...             % イベントマーカー
+                'emgLabels', true, ...            % 筋電位マーカー
                 'processedData', true, ...      % 前処理済みデータ
                 'processedLabel', true, ...     % 処理済みラベル
                 'processingInfo', true, ...     % 処理情報
@@ -387,14 +406,14 @@ function preset = template()
                 'refreshRate', 0.2, ...     % 表示更新レート（秒）
                 'enable', struct(...        % 表示項目の有効/無効設定
                     'rawData', true, ...    % 生データの表示
-                    'processedData', true, ... % 処理済みデータの表示
+                    'emgData', true, ... % 処理済みデータの表示
                     'spectrum', true, ...   % スペクトル表示
                     'ersp', true ...        % 事象関連スペクトル表示
                 ), ...
                 'scale', struct(...         % 表示スケールの設定
                     'auto', true, ...       % 自動スケーリング
                     'raw', [4200 4400], ... % 生データの表示範囲（μV）
-                    'processed', [-40 40], ... % 処理済みデータの表示範囲（μV）
+                    'emg', [-150 150], ... % 処理済みデータの表示範囲（μV）
                     'freq', [0 50], ...     % 周波数表示範囲（Hz）
                     'power', [0.01 100], ... % パワー表示範囲（μV²/Hz）
                     'displaySeconds', 5 ... % 時系列データの表示時間幅（秒）
