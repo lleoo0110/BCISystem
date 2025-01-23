@@ -45,10 +45,10 @@ function preset = character()
     acquisition = struct(...
         'mode', 'offline', ...       % モード選択: 'offline'（解析用）または 'online'（リアルタイム処理用）
         'emg', struct(...           % EMG計測設定
-            'enable', false, ...    % EMG計測の有効/無効
+            'enable', true, ...    % EMG計測の有効/無効
             'channels', struct(...
                 'channelNum', (1:2), ...
-                'names', {{'EMG1', 'EMG2'}}, ...  % EMGチャンネル名
+                'names', {{'Face', 'Neck'}}, ...  % EMGチャンネル名
                 'count', 2 ...      % EMGチャンネル数
             ), ...
             'sampleRate', 250, ... % EMGサンプリングレート
@@ -63,7 +63,7 @@ function preset = character()
         'save', struct(...
             'enable', true, ...      % データ保存の有効/無効
             'name', 'characterTest', ...      % 保存時のファイル名プレフィックス
-            'path', './Experiment Data/AHs2025\mano/Day2', ... % データ保存先ディレクトリ
+            'path', './Experiment Data/AHs2025', ... % データ保存先ディレクトリ
             'saveInterval', 60, ...   % 一時保存を行う間隔（秒）
             'fields', struct(...      % 保存する項目の選択
                 'params', true, ...             % 設定情報
@@ -424,7 +424,7 @@ function preset = character()
                 ), ...
                 'scale', struct(...         % 表示スケールの設定
                     'auto', true, ...       % 自動スケーリング
-                    'raw', [4200 4400], ... % 生データの表示範囲（μV）
+                    'raw', [-100 100], ... % 生データの表示範囲（μV）
                     'emg', [-150 150], ... % 処理済みデータの表示範囲（μV）
                     'freq', [0 50], ...     % 周波数表示範囲（Hz）
                     'power', [0.01 100], ... % パワー表示範囲（μV²/Hz）
