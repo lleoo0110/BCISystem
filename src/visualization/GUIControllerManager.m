@@ -151,25 +151,41 @@ classdef GUIControllerManager < handle
         
         function closeAllWindows(obj)
             try
-                % まずコールバックを無効化
-                if ~isempty(obj.mainFigure)
-                    set(obj.mainFigure, 'CloseRequestFcn', []);
-                    set(findobj(obj.mainFigure, 'Type', 'uicontrol'), 'Callback', []);
-                end
-
-                % タイマーの停止
-                if ~isempty(obj.updateTimer)
+                % タイマーの停止と削除
+                if ~isempty(obj.updateTimer) && isvalid(obj.updateTimer)
                     stop(obj.updateTimer);
                     delete(obj.updateTimer);
                 end
 
-                % メインウィンドウを閉じる
-                if ~isempty(obj.mainFigure)
+                % メインウィンドウの削除
+                if ~isempty(obj.mainFigure) && isvalid(obj.mainFigure)
+                    % GUIコールバックを無効化
+                    set(obj.mainFigure, 'CloseRequestFcn', []);
+                    controls = findobj(obj.mainFigure, 'Type', 'uicontrol');
+                    set(controls, 'Callback', []);
+
+                    % メインウィンドウを削除
                     delete(obj.mainFigure);
                 end
 
+                % スライダーウィンドウの削除
+                if ~isempty(obj.sliderFigure) && isvalid(obj.sliderFigure)
+                    delete(obj.sliderFigure);
+                end
+
+                % プロットハンドルのリセット
+                if isfield(obj, 'plotHandles') && isstruct(obj.plotHandles)
+                    fields = fieldnames(obj.plotHandles);
+                    for i = 1:length(fields)
+                        if ishandle(obj.plotHandles.(fields{i}))
+                            delete(obj.plotHandles.(fields{i}));
+                        end
+                    end
+                    obj.plotHandles = struct();
+                end
+
             catch ME
-                warning(ME.identifier, '%s', ME.message);
+                warning(ME.identifier, 'Error in closeAllWindows: %s', ME.message);
             end
         end
         
@@ -654,29 +670,36 @@ classdef GUIControllerManager < handle
             end
         end
         
-       function updateRawDataPlot(obj, data)
+        function updateRawDataPlot(obj, data)
             if ~ishandle(obj.plotHandles.rawData) || ~isvalid(obj.plotHandles.rawData)
                 return;
             end
             try
+                % 表示チャンネルの選択
+                displayChannels = obj.params.gui.display.visualization.channels.eeg.display;
+                data = data(displayChannels, :);
+
+                % チャンネル名をデバイス設定から取得
+                channelNames = obj.params.device.channels(displayChannels);
+
                 % 表示用データの準備
-                displaySeconds = obj.params.gui.display.visualization.scale.displaySeconds;
-                timeAxis = (0:size(data,2)-1) / obj.params.device.sampleRate;
+                displaySecondsEEG = obj.params.gui.display.visualization.scale.displaySeconds;
+                timeAxisEEG = (0:size(data,2)-1) / obj.params.device.sampleRate;
 
                 % プロットの更新
                 axes(obj.plotHandles.rawData);
                 cla(obj.plotHandles.rawData);
                 hold(obj.plotHandles.rawData, 'on');
 
-                % カラーマップの生成（チャンネル数に応じた色の配列）
+                % カラーマップの生成
                 colors = lines(size(data,1));
 
-                % 各チャンネルをプロット（異なる色で表示）
+                % 各チャンネルをプロット
                 legendEntries = cell(1, size(data,1));
                 for ch = 1:size(data,1)
-                    plot(obj.plotHandles.rawData, timeAxis, data(ch,:), ...
+                    plot(obj.plotHandles.rawData, timeAxisEEG, data(ch,:), ...
                         'Color', colors(ch,:), 'LineWidth', 1);
-                    legendEntries{ch} = sprintf('Ch %s', obj.params.device.channels{ch});
+                    legendEntries{ch} = channelNames{ch};
                 end
 
                 % 凡例の追加
@@ -686,51 +709,54 @@ classdef GUIControllerManager < handle
                 % 軸の設定
                 if obj.params.gui.display.visualization.scale.auto
                     axis(obj.plotHandles.rawData, 'auto');
-                    % Y軸の範囲を取得して少し余裕を持たせる
                     yLims = ylim(obj.plotHandles.rawData);
                     yRange = diff(yLims);
                     ylim(obj.plotHandles.rawData, [yLims(1) - 0.1*yRange, yLims(2) + 0.1*yRange]);
                 else
                     ylim(obj.plotHandles.rawData, obj.params.gui.display.visualization.scale.raw);
                 end
-                xlim(obj.plotHandles.rawData, [0 displaySeconds]);
+                xlim(obj.plotHandles.rawData, [0 displaySecondsEEG]);
 
                 % プロットの装飾
                 title(obj.plotHandles.rawData, 'Raw EEG Signal');
                 xlabel(obj.plotHandles.rawData, 'Time (s)');
                 ylabel(obj.plotHandles.rawData, 'Amplitude (μV)');
                 grid(obj.plotHandles.rawData, 'on');
-                
+
                 drawnow limitrate;
 
             catch ME
                 warning(ME.identifier, '%s', ME.message);
             end
         end
-        
+
         function updateEMGPlot(obj, data)
             if ~ishandle(obj.plotHandles.emg) || ~isvalid(obj.plotHandles.emg)
                 return;
             end
             try
+                % 表示チャンネルの選択
+                displayChannels = obj.params.gui.display.visualization.channels.emg.display;
+                data = data(displayChannels, :);
+
                 % 表示用データの準備
-                displaySeconds = obj.params.gui.display.visualization.scale.displaySeconds;
-                timeAxis = (0:size(data,2)-1) / obj.params.device.sampleRate;
+                displaySecondsEMG = obj.params.gui.display.visualization.scale.displaySeconds;
+                timeAxisEMG = (0:size(data,2)-1) / obj.params.acquisition.emg.sampleRate;
 
                 % プロットの更新
                 axes(obj.plotHandles.emg);
                 cla(obj.plotHandles.emg);
                 hold(obj.plotHandles.emg, 'on');
 
-                % カラーマップの生成（EMGチャンネル数に応じた色の配列）
+                % カラーマップの生成
                 colors = lines(size(data,1));
 
-                % EMGチャンネルのプロット（異なる色で表示）
+                % EMGチャンネルのプロット
                 legendEntries = cell(1, size(data,1));
                 for ch = 1:size(data,1)
-                    plot(obj.plotHandles.emg, timeAxis, data(ch,:), ...
+                    plot(obj.plotHandles.emg, timeAxisEMG, data(ch,:), ...
                         'Color', colors(ch,:), 'LineWidth', 1);
-                    legendEntries{ch} = sprintf('EMG Ch%d', ch);
+                    legendEntries{ch} = sprintf('EMG Ch%d', displayChannels(ch));
                 end
 
                 % 凡例の追加
@@ -740,7 +766,6 @@ classdef GUIControllerManager < handle
                 % Y軸の設定
                 if obj.params.gui.display.visualization.scale.auto
                     axis(obj.plotHandles.emg, 'auto');
-                    % Y軸の範囲を取得して少し余裕を持たせる
                     yLims = ylim(obj.plotHandles.emg);
                     yRange = diff(yLims);
                     ylim(obj.plotHandles.emg, [yLims(1) - 0.1*yRange, yLims(2) + 0.1*yRange]);
@@ -749,14 +774,14 @@ classdef GUIControllerManager < handle
                 end
 
                 % X軸の設定
-                xlim(obj.plotHandles.emg, [0 displaySeconds]);
+                xlim(obj.plotHandles.emg, [0 displaySecondsEMG]);
 
                 % プロットの装飾
                 title(obj.plotHandles.emg, 'EMG Signal');
                 xlabel(obj.plotHandles.emg, 'Time (s)');
                 ylabel(obj.plotHandles.emg, 'Amplitude (μV)');
                 grid(obj.plotHandles.emg, 'on');
-                
+
                 drawnow limitrate;
 
             catch ME
