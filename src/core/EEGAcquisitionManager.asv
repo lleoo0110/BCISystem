@@ -99,37 +99,45 @@ classdef EEGAcquisitionManager < handle
         end
         
         function delete(obj)
-            % デストラクタ
             try
                 % タイマーの停止と削除
                 if ~isempty(obj.acquisitionTimer)
-                    if isa(obj.acquisitionTimer, 'timer') && isvalid(obj.acquisitionTimer)
-                        stop(obj.acquisitionTimer);
-                        delete(obj.acquisitionTimer);
+                    % タイマーが実行中かどうかを確認
+                    if isa(obj.acquisitionTimer, 'timer')
+                        if isvalid(obj.acquisitionTimer)
+                            if strcmp(obj.acquisitionTimer.Running, 'on')
+                                stop(obj.acquisitionTimer);
+                                % タイマーが完全に停止するまで待機
+                                while strcmp(obj.acquisitionTimer.Running, 'on')
+                                    pause(0.1);
+                                end
+                            end
+                            delete(obj.acquisitionTimer);
+                        end
                     end
                     obj.acquisitionTimer = [];
-                end
-                if ~isempty(obj.processingTimer)
-                    if isa(obj.processingTimer, 'timer') && isvalid(obj.processingTimer)
-                        stop(obj.processingTimer);
-                        delete(obj.processingTimer);
-                    end
-                    obj.processingTimer = [];
                 end
 
                 % UDPManagerのクリーンアップ
                 if ~isempty(obj.udpManager)
                     delete(obj.udpManager);
+                    obj.udpManager = [];
                 end
 
                 % 一時ファイルの削除
-                for i = 1:length(obj.tempDataFiles)
-                    if exist(obj.tempDataFiles{i}, 'file')
-                        delete(obj.tempDataFiles{i});
+                if ~isempty(obj.tempDataFiles)
+                    for i = 1:length(obj.tempDataFiles)
+                        if exist(obj.tempDataFiles{i}, 'file')
+                            delete(obj.tempDataFiles{i});
+                        end
                     end
+                    obj.tempDataFiles = {};
                 end
+
             catch ME
                 warning(ME.identifier, '%s', ME.message);
+                % エラースタックの表示（デバッグ用）
+                disp(getReport(ME, 'extended'));
             end
         end
         
@@ -156,35 +164,59 @@ classdef EEGAcquisitionManager < handle
         
         function stop(obj)
             if obj.isRunning
-                obj.isRunning = false;
-                obj.isPaused = false;
+                try
+                    % 状態フラグを即座に更新
+                    obj.isRunning = false;
+                    obj.isPaused = false;
 
-                % タイマーの停止を最優先
-                if ~isempty(obj.acquisitionTimer)
-                    stop(obj.acquisitionTimer);
-                end
+                    % タイマーの停止を最優先
+                    if ~isempty(obj.acquisitionTimer)
+                        % タイマーが実行中かどうかを確認
+                        if strcmp(obj.acquisitionTimer.Running, 'on')
+                            stop(obj.acquisitionTimer);
+                            % タイマーが完全に停止するまで待機
+                            while strcmp(obj.acquisitionTimer.Running, 'on')
+                                pause(0.1);
+                            end
+                        end
+                        delete(obj.acquisitionTimer);
+                        obj.acquisitionTimer = [];
+                    end
 
-                % 最後のデータを保存
-                if ~isempty(obj.rawData)
-                    obj.saveTemporaryData();
-                end
+                    % 最後のデータを保存
+                    if ~isempty(obj.rawData)
+                        obj.saveTemporaryData();
+                    end
 
-                obj.mergeAndSaveData();
+                    % データのマージと保存
+                    obj.mergeAndSaveData();
 
-                % GUIの終了前に全てのタイマーが完全に停止したことを確認
-                if ~isempty(obj.acquisitionTimer)
-                    while strcmpi(obj.acquisitionTimer.Running, 'on')
-                        pause(0.1);
+                    % GUIの終了前に全てのタイマーが完全に停止したことを確認
+                    pause(0.2); % 完全な停止を確実にするための短い待機
+
+                    % GUIの終了
+                    if ~isempty(obj.guiController)
+                        obj.guiController.closeAllWindows();
+                    end
+
+                    % 全てのリソースを解放
+                    delete(obj);
+
+                catch ME
+                    warning(ME.identifier, '%s', ME.message);
+                    % エラーが発生しても、リソースのクリーンアップを試みる
+                    try
+                        if ~isempty(obj.acquisitionTimer)
+                            delete(obj.acquisitionTimer);
+                        end
+                        if ~isempty(obj.guiController)
+                            obj.guiController.closeAllWindows();
+                        end
+                        delete(obj);
+                    catch
+                        % クリーンアップ中のエラーは無視
                     end
                 end
-
-                % GUIの終了
-                if ~isempty(obj.guiController)
-                    obj.guiController.closeAllWindows();
-                end
-
-                % 全てのリソースを解放
-                delete(obj);
             end
         end
         
@@ -405,7 +437,7 @@ classdef EEGAcquisitionManager < handle
             % データ収集用タイマーの設定
             updateInterval = 0.15;
             obj.acquisitionTimer = timer(...
-                'ExecutionMode', 'fixedSpace', ...   fixedRate or fi
+                'ExecutionMode', 'fixedRate', ...   fixedRate or fixedSpacing
                 'Period', updateInterval, ...
                 'TimerFcn', @(~,~) obj.acquireData());
         end
@@ -452,37 +484,70 @@ classdef EEGAcquisitionManager < handle
         
         function saveTemporaryData(obj)
             try
-                if ~isempty(obj.rawData) && ~isempty(obj.emgData)
-                    % 一時ファイル名の生成
-                    tempFilename = sprintf('%s_temp_%d.mat', ...
-                        obj.params.acquisition.save.name, obj.fileIndex);
-                    tempFilePath = fullfile(obj.params.acquisition.save.path, tempFilename);
-
-                    % データの構造体作成
-                    tempData = struct();
-                    tempData.rawData = obj.rawData;
-                    tempData.emgData = obj.emgData;
-                    tempData.labels = obj.labels;
-                    tempData.emgLabels = obj.emgLabels;
-
-                    % データの保存
-                    save(tempFilePath, '-struct', 'tempData', '-v7.3');
-                    obj.tempDataFiles{end+1} = tempFilePath;
-
-                    % メモリのクリア
-                    obj.rawData = [];
-                    obj.emgData = [];
-                    obj.labels = [];
-                    obj.emgLabels = [];
-
-                    % カウンタの更新
-                    obj.fileIndex = obj.fileIndex + 1;
-                    obj.lastSaveTime = tic;
-
-                    fprintf('Temporary data saved: %s\n', tempFilename);
+                % データの有無をチェック
+                if isempty(obj.rawData) && isempty(obj.emgData)
+                    fprintf('No new data to save\n');
+                    return;
                 end
+
+                % 最小データ長チェック（例：1秒分のデータ）
+                minSamples = obj.params.device.sampleRate;
+                if size(obj.rawData, 2) < minSamples
+                    fprintf('Insufficient data length for saving (%d < %d samples)\n', ...
+                        size(obj.rawData, 2), minSamples);
+                    return;
+                end
+
+                % 一時ファイル名の生成
+                tempFilename = sprintf('%s_temp_%d.mat', ...
+                    obj.params.acquisition.save.name, obj.fileIndex);
+                tempFilePath = fullfile(obj.params.acquisition.save.path, tempFilename);
+
+                % データの構造体作成
+                tempData = struct();
+
+                % EEGデータの保存
+                if ~isempty(obj.rawData)
+                    tempData.rawData = obj.rawData;
+                    tempData.labels = obj.labels;
+                    fprintf('Saving EEG data: %d samples\n', size(obj.rawData, 2));
+                end
+
+                % EMGデータの保存（EMGが有効な場合）
+                if obj.params.acquisition.emg.enable && ~isempty(obj.emgData)
+                    tempData.emgData = obj.emgData;
+                    tempData.emgLabels = obj.emgLabels;
+                    fprintf('Saving EMG data: %d samples\n', size(obj.emgData, 2));
+                end
+
+                % メタデータの追加
+                tempData.savingInfo = struct(...
+                    'timestamp', datetime('now'), ...
+                    'totalSamples', obj.totalSampleCount + size(obj.rawData, 2), ...
+                    'fileIndex', obj.fileIndex, ...
+                    'sampleRate', obj.params.device.sampleRate);
+
+                % データの保存
+                save(tempFilePath, '-struct', 'tempData', '-v7.3');
+                obj.tempDataFiles{end+1} = tempFilePath;
+
+                % メモリのクリア
+                obj.rawData = [];
+                obj.emgData = [];
+                obj.labels = [];
+                obj.emgLabels = [];
+
+                % カウンタの更新
+                obj.fileIndex = obj.fileIndex + 1;
+                obj.lastSaveTime = tic;
+
+                fprintf('Temporary data saved: %s\n', tempFilename);
+                fprintf('Total temp files: %d\n', length(obj.tempDataFiles));
+
             catch ME
-                warning(ME.identifier, '%s', ME.message);
+                warning(ME.identifier, 'Failed to save temporary data: %s', ME.message);
+                fprintf('Error stack:\n');
+                disp(getReport(ME, 'extended'));
             end
         end
 
@@ -528,7 +593,12 @@ classdef EEGAcquisitionManager < handle
                     if exist(obj.tempDataFiles{i}, 'file')
                         fileInfo = load(obj.tempDataFiles{i});
                         totalEEGSamples = totalEEGSamples + size(fileInfo.rawData, 2);
-                        totalEMGSamples = totalEMGSamples + size(fileInfo.emgData, 2);
+
+                        % EMGデータがある場合のみ計算
+                        if isfield(fileInfo, 'emgData')
+                            totalEMGSamples = totalEMGSamples + size(fileInfo.emgData, 2);
+                        end
+
                         if isfield(fileInfo, 'labels')
                             totalLabels = totalLabels + length(fileInfo.labels);
                         end
@@ -540,7 +610,13 @@ classdef EEGAcquisitionManager < handle
 
                 % 配列の初期化
                 mergedEEG = zeros(obj.params.device.channelCount, totalEEGSamples);
-                mergedEMG = zeros(obj.params.acquisition.emg.channels.count, totalEMGSamples);
+
+                % EMGが有効な場合のみ初期化
+                if obj.params.acquisition.emg.enable
+                    mergedEMG = zeros(obj.params.acquisition.emg.channels.count, totalEMGSamples);
+                else
+                    mergedEMG = [];
+                end
 
                 % ラベル配列の初期化
                 emptyStruct = struct('value', [], 'time', [], 'sample', []);
@@ -557,13 +633,15 @@ classdef EEGAcquisitionManager < handle
                     if exist(obj.tempDataFiles{i}, 'file')
                         fileData = load(obj.tempDataFiles{i});
 
-                        % EEGデータとラベルの統合
+                        % EEGデータの統合
                         eegCount = size(fileData.rawData, 2);
                         mergedEEG(:, currentEEGSample:currentEEGSample+eegCount-1) = fileData.rawData;
 
-                        % EMGデータとラベルの統合
-                        emgCount = size(fileData.emgData, 2);
-                        mergedEMG(:, currentEMGSample:currentEMGSample+emgCount-1) = fileData.emgData;
+                        % EMGデータの統合（EMGが有効で、データが存在する場合）
+                        if obj.params.acquisition.emg.enable && isfield(fileData, 'emgData')
+                            emgCount = size(fileData.emgData, 2);
+                            mergedEMG(:, currentEMGSample:currentEMGSample+emgCount-1) = fileData.emgData;
+                        end
 
                         % ラベルの統合
                         if isfield(fileData, 'labels')
@@ -573,7 +651,8 @@ classdef EEGAcquisitionManager < handle
                             end
                         end
 
-                        if isfield(fileData, 'emgLabels')
+                        % EMGラベルの統合（EMGが有効な場合のみ）
+                        if obj.params.acquisition.emg.enable && isfield(fileData, 'emgLabels')
                             for j = 1:length(fileData.emgLabels)
                                 mergedEMGLabels(emgLabelIndex) = fileData.emgLabels(j);
                                 emgLabelIndex = emgLabelIndex + 1;
@@ -581,8 +660,18 @@ classdef EEGAcquisitionManager < handle
                         end
 
                         currentEEGSample = currentEEGSample + eegCount;
-                        currentEMGSample = currentEMGSample + emgCount;
+                        if obj.params.acquisition.emg.enable && isfield(fileData, 'emgData')
+                            currentEMGSample = currentEMGSample + emgCount;
+                        end
                     end
+                end
+
+                % 未使用部分の削除
+                mergedLabels = mergedLabels(1:labelIndex-1);
+                if obj.params.acquisition.emg.enable
+                    mergedEMGLabels = mergedEMGLabels(1:emgLabelIndex-1);
+                else
+                    mergedEMGLabels = [];
                 end
 
                 fprintf('Data merged successfully:\n');
@@ -599,29 +688,33 @@ classdef EEGAcquisitionManager < handle
         function mergeAndSaveData(obj)
             try
                 fprintf('Merging data files...\n');
-                
+
                 % データの統合
                 [mergedEEG, mergedEMG, mergedLabels, mergedEMGLabels] = obj.mergeTempFiles();
-                
+
                 % 保存データの構造体作成
                 saveData = struct();
                 saveData.params = obj.params;
                 saveData.rawData = mergedEEG;
-                saveData.emgData = mergedEMG;
                 saveData.labels = mergedLabels;
-                saveData.emgLabels = mergedEMGLabels;
-                
+
+                % EMGが有効な場合のみEMGデータを保存
+                if obj.params.acquisition.emg.enable
+                    saveData.emgData = mergedEMG;
+                    saveData.emgLabels = mergedEMGLabels;
+                end
+
                 % データの保存
                 savedFile = obj.dataManager.saveDataset(saveData);
                 fprintf('Final data saved to: %s\n', savedFile);
-                
+
                 % 一時ファイルの削除
                 for i = 1:length(obj.tempDataFiles)
                     if exist(obj.tempDataFiles{i}, 'file')
                         delete(obj.tempDataFiles{i});
                     end
                 end
-                
+
             catch ME
                 error('Failed to save final results: %s', ME.message);
             end
@@ -1113,6 +1206,16 @@ classdef EEGAcquisitionManager < handle
             try
                 % 表示用データの準備
                 displayData = struct();
+                
+                % バンドパスフィルタの設計(1-45Hz)
+                fs = obj.params.device.sampleRate;
+                [b, a] = butter(4, [1 45]/(fs/2), 'bandpass');
+
+                % フィルタリングを各チャンネルに適用
+                filteredData = zeros(size(obj.rawData));
+                for ch = 1:size(obj.rawData, 1)
+                    filteredData(ch,:) = filtfilt(b, a, obj.rawData(ch,:));
+                end
 
                 % EEGデータの表示準備
                 if obj.params.gui.display.visualization.enable.rawData && ~isempty(obj.rawData)
@@ -1120,12 +1223,12 @@ classdef EEGAcquisitionManager < handle
                     displaySamples = round(displaySeconds * obj.params.device.sampleRate);
 
                     if size(obj.rawData, 2) > displaySamples
-                        displayData.rawData = obj.rawData(:, end-displaySamples+1:end);
+                        displayData.rawData = filteredData(:, end-displaySamples+1:end);
                     else
-                        displayData.rawData = obj.rawData;
+                        displayData.rawData = filteredData;
                     end
                 end
-
+                
                 % EMGデータの表示準備（EMGが有効な場合のみ）
                 if obj.params.acquisition.emg.enable && ...
                    obj.params.gui.display.visualization.enable.emgData && ...
@@ -1146,7 +1249,7 @@ classdef EEGAcquisitionManager < handle
                    ~isempty(displayData.rawData)
 
                     % 最新のデータセグメントからスペクトルを計算
-                    [pxx, f] = obj.powerExtractor.calculateSpectrum(displayData.rawData);
+                    [pxx, f] = obj.powerExtractor.calculateSpectrum(filteredData);
 
                     % 表示範囲の制限
                     freqRange = obj.params.gui.display.visualization.scale.freq;
@@ -1163,21 +1266,24 @@ classdef EEGAcquisitionManager < handle
                    isfield(displayData, 'rawData') && ...
                    ~isempty(displayData.rawData)
 
-                    % ERSPの計算
-                    [ersp, times, freqs] = obj.powerExtractor.calculateERSP(displayData.rawData);
+                    % 最小データ長のチェック
+                    minSamples = 2 * obj.params.gui.display.visualization.ersp.numFreqs;
+                    if size(displayData.rawData, 2) >= minSamples
+                        [ersp, times, freqs] = obj.powerExtractor.calculateERSP(displayData.rawData);
+                        if ~isempty(ersp) && ~isempty(times) && ~isempty(freqs)
+                            % 表示範囲の制限
+                            timeRange = obj.params.gui.display.visualization.ersp.time;
+                            freqRange = obj.params.gui.display.visualization.ersp.freqRange;
 
-                    % 表示範囲の制限
-                    timeRange = obj.params.gui.display.visualization.ersp.time;
-                    freqRange = obj.params.gui.display.visualization.ersp.freqRange;
+                            timeIdx = (times >= timeRange(1) & times <= timeRange(2));
+                            freqIdx = (freqs >= freqRange(1) & freqs <= freqRange(2));
 
-                    timeIdx = (times >= timeRange(1) & times <= timeRange(2));
-                    freqIdx = (freqs >= freqRange(1) & freqs <= freqRange(2));
-
-                    % ERSPデータの保存
-                    displayData.ersp = struct(...
-                        'ersp', ersp(freqIdx, timeIdx), ...
-                        'times', times(timeIdx), ...
-                        'freqs', freqs(freqIdx));
+                            displayData.ersp = struct(...
+                                'ersp', ersp(freqIdx, timeIdx), ...
+                                'times', times(timeIdx), ...
+                                'freqs', freqs(freqIdx));
+                        end
+                    end
                 end
 
                 % GUIの更新

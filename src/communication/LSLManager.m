@@ -1,25 +1,37 @@
 classdef LSLManager < handle
+    % LSLManager - Lab Streaming Layer通信を管理するクラス
+    %
+    % このクラスは以下の機能を提供します：
+    % - EEGおよびEMGデータストリームの初期化と管理
+    % - リアルタイムデータの取得
+    % - シミュレーションモードのサポート
+    % - 接続タイムアウト処理
+    
     properties (Access = public)
-        eegInlet
-        emgInlet
+        eegInlet    % EEGデータ用のLSLインレット
+        emgInlet    % EMGデータ用のLSLインレット
     end
     
     properties (Access = private)
-        lib
-        params
-        lastTimestamp
-        simulationStartTime
+        lib         % LSLライブラリインスタンス
+        params      % 設定パラメータ
+        lastTimestamp   % 最後のデータ取得時刻
+        simulationStartTime  % シミュレーション開始時刻
         
         % EMGストリーム用のパラメータ
-        emgStreamInfo
+        emgStreamInfo   % EMGストリーム設定情報
+
+        % LSL接続タイムアウト設定
+        connectionTimeout = 10  % タイムアウト時間(秒)
     end
     
     methods (Access = public)
         function obj = LSLManager(params)
+            % コンストラクタ：LSLManagerの初期化
             obj.validateParams(params);
             obj.params = params;
             obj.lastTimestamp = 0;
-            obj.simulationStartTime = tic;  % シミュレータ開始時間を初期化
+            obj.simulationStartTime = tic;
 
             % EMGストリーム情報の設定
             obj.emgStreamInfo = obj.params.acquisition.emg.lsl;
@@ -32,10 +44,18 @@ classdef LSLManager < handle
         end
 
         function delete(obj)
+            % デストラクタ：リソースの解放
             obj.cleanupResources();
         end
         
         function [eegData, emgData, timestamp] = getData(obj)
+            % データの取得：実データまたはシミュレーションデータを取得
+            %
+            % 出力:
+            %   eegData: EEGデータ配列 [チャンネル数 x サンプル数]
+            %   emgData: EMGデータ配列 [チャンネル数 x サンプル数]
+            %   timestamp: データのタイムスタンプ
+            
             if obj.params.lsl.simulate.enable
                 [eegData, emgData, timestamp] = obj.getSimulatedData();
             else
@@ -51,13 +71,15 @@ classdef LSLManager < handle
     
     methods (Access = private)
         function validateParams(~, params)
+            % パラメータの検証
             required_fields = {'lsl', 'device'};
             if ~all(isfield(params, required_fields))
-                error('Missing required parameter fields');
+                error('必要なパラメータフィールドが不足しています');
             end
         end
         
         function initializeInlets(obj)
+            % LSLインレットの初期化
             try
                 obj.eegInlet = [];
                 obj.emgInlet = [];
@@ -73,57 +95,140 @@ classdef LSLManager < handle
             end
         end
         
-        function handleInitializationError(obj, ME)
-            warning(ME.identifier, '%s', ME.message);
-            obj.cleanupResources();
+        function [eegInlet, emgInlet, lib] = initializeLSL(obj)
+            % LSLストリームの初期化
+            try
+                % LSLライブラリのロード
+                lib = obj.loadLSLLibrary();
+
+                % EEGストリームの解決（タイムアウト付き）
+                fprintf('\nEEGストリーム解決中...\n');
+                startTime = tic;
+                eegResult = [];
+                
+                % タイムアウトまでストリームの検索を試みる
+                while isempty(eegResult) && toc(startTime) < obj.connectionTimeout
+                    eegResult = lsl_resolve_byprop(lib, 'name', obj.params.device.lsl.streamName);
+                    if isempty(eegResult)
+                        pause(0.5);
+                        fprintf('.');
+                    end
+                end
+                fprintf('\n');
+
+                % タイムアウトチェック
+                if isempty(eegResult)
+                    error('LSLManager:ConnectionTimeout', ...
+                        'EEGストリームの接続がタイムアウトしました（%d秒）\nデバイスの接続を確認してください', ...
+                        obj.connectionTimeout);
+                end
+
+                eegInlet = lsl_inlet(eegResult{1});
+                obj.displayStreamInfo(eegInlet, 'EEG');
+
+                % EMGストリームの初期化（EMGが有効な場合のみ）
+                emgInlet = [];
+                if obj.params.acquisition.emg.enable
+                    fprintf('\nEMGストリーム解決中...\n');
+                    startTime = tic;
+                    emgResult = [];
+                    
+                    while isempty(emgResult) && toc(startTime) < obj.connectionTimeout
+                        emgResult = lsl_resolve_byprop(lib, 'name', obj.emgStreamInfo.streamName);
+                        if isempty(emgResult)
+                            pause(0.5);
+                            fprintf('.');
+                        end
+                    end
+                    fprintf('\n');
+
+                    % EMGタイムアウトチェック
+                    if isempty(emgResult)
+                        error('LSLManager:ConnectionTimeout', ...
+                            'EMGストリームの接続がタイムアウトしました（%d秒）\nデバイスの接続を確認してください', ...
+                            obj.connectionTimeout);
+                    end
+
+                    emgInlet = lsl_inlet(emgResult{1});
+                    obj.displayStreamInfo(emgInlet, 'EMG');
+                end
+
+            catch ME
+                % エラーメッセージの詳細化
+                if contains(ME.identifier, 'ConnectionTimeout')
+                    rethrow(ME);
+                else
+                    error('LSLManager:InitializationError', ...
+                        'LSL初期化エラー: %s\nスタックトレース:\n%s', ...
+                        ME.message, getReport(ME, 'extended'));
+                end
+            end
         end
         
-        function cleanupResources(obj)
-            if ~isempty(obj.eegInlet) && ~isstruct(obj.eegInlet)
-                delete(obj.eegInlet);
+        function lib = loadLSLLibrary(~)
+            % LSLライブラリのロード
+            try
+                % まず、環境変数のパスを試す
+                lib = lsl_loadlib(env_translatepath('dependencies:/liblsl-Matlab/bin'));
+            catch
+                % デフォルトのパスを試す
+                lib = lsl_loadlib();
             end
-            if ~isempty(obj.emgInlet) && ~isstruct(obj.emgInlet)
-                delete(obj.emgInlet);
-            end
-            obj.eegInlet = [];
-            obj.emgInlet = [];
-            obj.lib = [];
+        end
+        
+        function [eegInlet, emgInlet] = initializeSimulator(obj)
+            % シミュレーションモードの初期化
+            eegInlet = struct(...
+                'type', 'simulator', ...
+                'sampleRate', obj.params.device.sampleRate, ...
+                'channelCount', obj.params.device.channelCount, ...
+                'getData', @() obj.getSimulatedData());
+            
+            emgInlet = struct(...
+                'type', 'simulator', ...
+                'sampleRate', obj.params.device.sampleRate, ...
+                'channelCount', 2, ...
+                'getData', @() obj.getSimulatedData());
+            
+            fprintf('シミュレーションモードで初期化しました (EEG + EMG)\n');
+            obj.displaySimulatorInfo();
         end
         
         function [eegData, emgData, timestamp] = getLSLData(obj)
+            % 実際のLSLストリームからデータを取得
             try
-                % Initialize return values
+                % 戻り値の初期化
                 eegData = [];
                 emgData = [];
                 timestamp = [];
 
-                % Get EEG data
+                % EEGデータの取得
                 [eegChunk, eegTimestamps] = obj.eegInlet.pull_chunk();
 
-                % Process EEG data if available
+                % EEGデータの処理
                 if ~isempty(eegChunk)
-                    % Channel selection for EEG
                     if ~isempty(obj.params.device.channelNum)
                         eegData = eegChunk(obj.params.device.channelNum, :);
                     else
                         eegData = eegChunk;
                     end
 
-                    % Update timestamp from EEG
                     if ~isempty(eegTimestamps)
                         timestamp = eegTimestamps(end);
                     end
                 end
 
-                % Get EMG data only if EMG is enabled and inlet exists
+                % EMGデータの取得（EMGが有効な場合のみ）
                 if obj.params.acquisition.emg.enable && ~isempty(obj.emgInlet)
                     [emgChunk, emgTimestamps] = obj.emgInlet.pull_chunk();
 
-                    % Process EMG data if available
                     if ~isempty(emgChunk)
-                        emgData = emgChunk;
+                        if ~isempty(obj.params.acquisition.emg.channels.channelNum)
+                            emgData = emgChunk(obj.params.acquisition.emg.channels.channelNum, :);
+                        else
+                            emgData = emgChunk;
+                        end
 
-                        % Update timestamp to latest between EEG and EMG
                         if ~isempty(emgTimestamps)
                             if isempty(timestamp)
                                 timestamp = emgTimestamps(end);
@@ -135,8 +240,8 @@ classdef LSLManager < handle
                 end
 
             catch ME
-                fprintf('LSL data acquisition error: %s\n', ME.message);
-                fprintf('Error details:\n%s\n', getReport(ME, 'extended'));
+                fprintf('LSLデータ取得エラー: %s\n', ME.message);
+                fprintf('エラー詳細:\n%s\n', getReport(ME, 'extended'));
                 eegData = [];
                 emgData = [];
                 timestamp = [];
@@ -144,45 +249,33 @@ classdef LSLManager < handle
         end
         
         function [eegData, emgData, timestamp] = getSimulatedData(obj)
+            % シミュレーションデータの生成
             try
                 % 実際の経過時間に基づいてサンプル数を計算
                 currentTime = toc(obj.simulationStartTime);
                 elapsedTime = currentTime - obj.lastTimestamp;
 
-                % EEGのサンプル数を計算
+                % EEGとEMGのサンプル数を計算
                 eegNumSamples = ceil(elapsedTime * obj.params.device.sampleRate);
-                % EMGのサンプル数を計算（EMGのサンプリングレートを使用）
                 emgNumSamples = ceil(elapsedTime * obj.params.acquisition.emg.sampleRate);
 
                 if eegNumSamples > 0 && emgNumSamples > 0
-                    % EEG時間軸の生成
+                    % 時間軸の生成
                     eegT = (obj.lastTimestamp:(1/obj.params.device.sampleRate):(currentTime));
                     eegT = eegT(1:min(eegNumSamples, length(eegT)));
 
-                    % EMG時間軸の生成
                     emgT = (obj.lastTimestamp:(1/obj.params.acquisition.emg.sampleRate):(currentTime));
                     emgT = emgT(1:min(emgNumSamples, length(emgT)));
 
-                    % EEGデータの生成
+                    % データの生成
                     eegBaseSignal = obj.generateBaseSignal(eegT);
                     eegData = obj.generateChannelData(eegBaseSignal, length(eegT));
 
-                    % EMGデータの生成
                     emgBaseSignal = obj.generateEMGSignal(emgT);
                     emgData = obj.generateEMGChannelData(emgBaseSignal, length(emgT));
 
-                    % タイムスタンプを更新
                     obj.lastTimestamp = currentTime;
                     timestamp = currentTime;
-
-%                     % デバッグ情報（5秒ごとに表示）
-%                     if mod(round(currentTime), 5) == 0
-%                         fprintf('Simulation stats:\n');
-%                         fprintf('  EEG Samples=%d, Rate=%.1fHz\n', ...
-%                             eegNumSamples, eegNumSamples/elapsedTime);
-%                         fprintf('  EMG Samples=%d, Rate=%.1fHz\n', ...
-%                             emgNumSamples, emgNumSamples/elapsedTime);
-%                     end
                 else
                     eegData = [];
                     emgData = [];
@@ -190,281 +283,52 @@ classdef LSLManager < handle
                 end
 
             catch ME
-                fprintf('Simulation data generation error: %s\n', ME.message);
+                fprintf('シミュレーションデータ生成エラー: %s\n', ME.message);
                 eegData = [];
                 emgData = [];
                 timestamp = [];
             end
         end
 
-        
-        function baseSignal = generateBaseSignal(obj, t)
-            % ベースコンポーネントを生成
-            alphaComponent = obj.generateWaveComponent(t, ...
-                obj.params.lsl.simulate.signal.alpha.freq, ...
-                obj.params.lsl.simulate.signal.alpha.amplitude);
-            
-            betaComponent = obj.generateWaveComponent(t, ...
-                obj.params.lsl.simulate.signal.beta.freq, ...
-                obj.params.lsl.simulate.signal.beta.amplitude);
-            
-            % バックグラウンドノイズの発生
-            noiseAmplitude = 2;
-            backgroundNoise = obj.generateGaussianNoise(length(t)) * noiseAmplitude;
-            
-            % 信号と検証の組み合わせ
-            baseSignal = alphaComponent + betaComponent + backgroundNoise;
-            
-            % 出力が有限であり合理的な範囲内にあることを確認
-            baseSignal = obj.validateSignal(baseSignal);
+        function handleInitializationError(obj, ME)
+           % 初期化エラーの処理
+           obj.cleanupResources();
+           % ConnectionTimeoutの場合は処理を停止
+           if contains(ME.identifier, 'ConnectionTimeout')
+               error('LSLManager:Fatal', 'LSL接続エラーのため処理を停止します\n%s', ME.message);
+           else
+               warning(ME.identifier, '%s', ME.message);
+           end
         end
         
-        function wave = generateWaveComponent(~, t, freq, amplitude)
-            % Generate wave with controlled phase
-            phase = 2 * pi * rand();
-            wave = amplitude * sin(2*pi*freq*t + phase);
-            
-            % Ensure wave is finite
-            wave(~isfinite(wave)) = 0;
-        end
-        
-        function noise = generateGaussianNoise(~, n)
-            % 振幅を制御した単純なガウスノイズを発生させる
-            noise = randn(1, n);
-            
-            % 正規化ノイズ
-            noise = noise - mean(noise);
-            noise = noise / (std(noise) + eps);
-        end
-        
-        function signal = validateSignal(~, signal)
-            % 有限でない値をゼロに置き換える
-            signal(~isfinite(signal)) = 0;
-            
-            % 極端な値をクリップして不安定さを防ぐ
-            maxAmplitude = 100; % μV
-            signal = max(min(signal, maxAmplitude), -maxAmplitude);
-        end
-        
-        function data = generateChannelData(obj, baseSignal, numSamples)
-            data = zeros(obj.params.device.channelCount, numSamples);
-            noise = 2 * randn(1, numSamples);
-            
-            for ch = 1:obj.params.device.channelCount
-                data(ch,:) = baseSignal + noise;
-            end
-        end
-        
-        function signal = generateEMGSignal(obj, t)
+        function cleanupResources(obj)
+            % リソースのクリーンアップ
             try
-                % ベクトルの方向を統一（行ベクトルに）
-                t = t(:)';
-
-                % EMGサンプリングレートに基づいてナイキスト周波数を計算
-                nyquistFreq = obj.params.acquisition.emg.sampleRate / 2;
-
-                % EMG信号の主要周波数成分を設定（EMGは20-500Hz程度）
-                freqs = [20, 50, 80, 120, 150];  % EMGの特徴的な周波数
-                amps = [2, 1.5, 1, 0.8, 0.5];    % 各周波数成分の振幅
-
-                % 基本的なEMG信号の生成
-                signal = zeros(size(t));
-                for i = 1:length(freqs)
-                    if freqs(i) < nyquistFreq  % ナイキスト周波数以下の成分のみ使用
-                        signal = signal + amps(i) * sin(2*pi*freqs(i)*t);
+                % EEG Inlet の削除
+                if ~isempty(obj.eegInlet)
+                    if isobject(obj.eegInlet) && isvalid(obj.eegInlet)
+                        delete(obj.eegInlet);
                     end
                 end
 
-                % 高周波ノイズの追加（EMGの特徴的なノイズ）
-                noiseAmplitude = 0.5;
-                noise = obj.generateEMGNoise(length(t), obj.params.acquisition.emg.sampleRate);
-                signal = signal + noiseAmplitude * noise;
-
-                % バースト特性の再現（EMGの特徴的な振幅変調）
-                burstFreq = 2; % バーストの周波数（2Hz = 0.5秒周期）
-                burstEnvelope = 0.5 * (1 + sin(2*pi*burstFreq*t));
-                signal = signal .* burstEnvelope;
-
-                % 振幅の正規化と制限
-                maxAmp = 100; % 最大振幅（μV）
-                signal = signal / max(abs(signal)) * maxAmp;
-                signal = min(max(signal, -maxAmp), maxAmp);
-
-                % DCオフセットの除去
-                signal = signal - mean(signal);
-
-                % NaNやInfのチェックと置換
-                signal(isnan(signal) | isinf(signal)) = 0;
-
-            catch ME
-                warning(ME.identifier, 'EMG signal generation failed: %s', ME.message);
-                signal = zeros(size(t));
-            end
-        end
-
-        function data = generateEMGChannelData(obj, baseSignal, numSamples)
-            try
-                % EMGチャンネル数の取得
-                numChannels = obj.params.acquisition.emg.channels.count;
-
-                % データ配列の初期化
-                data = zeros(numChannels, numSamples);
-
-                % チャンネルごとの特性を考慮したノイズ生成
-                for ch = 1:numChannels
-                    % 基本信号にチャンネル固有のノイズを追加
-                    channelNoise = obj.generateEMGNoise(numSamples, obj.params.acquisition.emg.sampleRate) * 0.2;
-
-                    % チャンネル間の相関を低く保つためにわずかな位相シフトを適用
-                    phaseShift = 2 * pi * rand();
-                    shiftedSignal = circshift(baseSignal, round(phaseShift * numSamples / (2*pi)));
-
-                    % 信号の組み合わせ
-                    data(ch,:) = shiftedSignal + channelNoise;
-
-                    % 振幅スケーリング（チャンネル間でわずかな違いを付ける）
-                    scaleFactor = 0.9 + 0.2 * rand();  % 0.9-1.1の範囲
-                    data(ch,:) = data(ch,:) * scaleFactor;
+                % EMG Inlet の削除
+                if ~isempty(obj.emgInlet)
+                    if isobject(obj.emgInlet) && isvalid(obj.emgInlet)
+                        delete(obj.emgInlet);
+                    end
                 end
 
-                % 全体の振幅を正規化
-                maxAmp = 100; % 最大振幅（μV）
-                data = data / max(abs(data(:))) * maxAmp;
-
+                % ライブラリのリセット
+                obj.eegInlet = [];
+                obj.emgInlet = [];
+                obj.lib = [];
             catch ME
-                warning(ME.identifier, 'EMG channel data generation failed: %s', ME.message);
-                data = zeros(numChannels, numSamples);
+                warning(ME.identifier, '%s', ME.message);
             end
         end
 
-        function noise = generateEMGNoise(~, numSamples, sampleRate)
-            try
-                % 確実に整数のサイズを確保
-                numSamples = round(numSamples);
-
-                % FFTのために必要なサンプル数を計算（2の累乗）
-                nfft = 2^nextpow2(numSamples);
-
-                % 周波数ベクトルの生成
-                f = (1:floor(nfft/2))';
-
-                % ピンクノイズ特性の生成
-                amplitude = 1./sqrt(f + eps);  % 0除算を防ぐためepsを追加
-                phase = 2*pi*rand(length(f), 1);
-
-                % ナイキスト周波数でフィルタリング
-                nyquistFreq = sampleRate / 2;
-                cutoffIdx = round((nyquistFreq / (sampleRate/2)) * length(f));
-                cutoffIdx = min(cutoffIdx, length(amplitude));  % インデックス範囲の確認
-                amplitude(cutoffIdx:end) = 0;
-
-                % スペクトルの構築
-                s = amplitude .* exp(1i*phase);
-                s = [0; s; flipud(conj(s(1:end-1)))];
-
-                % 時間領域に逆変換
-                fullNoise = real(ifft(s));
-
-                % 要求されたサンプル数に切り出し
-                noise = fullNoise(1:numSamples);
-
-                % 正規化
-                noise = noise - mean(noise);
-                noise = noise / (std(noise) + eps);
-
-                % 行ベクトルに変換
-                noise = noise(:)';
-
-            catch ME
-                warning('EMGNoise:GenerationFailed', 'EMG noise generation failed: %s', ME.message);
-                % エラー時はガウシアンノイズを返す
-                noise = randn(1, numSamples);
-            end
-
-            % NaNやInfをチェック
-            if any(isnan(noise)) || any(isinf(noise))
-                warning('EMGNoise:InvalidValues', 'Invalid values detected in noise generation');
-                noise = randn(1, numSamples);
-            end
-        end
-        
-        function [eegInlet, emgInlet] = initializeSimulator(obj)
-            % EEGシミュレータ
-            eegInlet = struct(...
-                'type', 'simulator', ...
-                'sampleRate', obj.params.device.sampleRate, ...
-                'channelCount', obj.params.device.channelCount, ...
-                'getData', @() obj.getSimulatedData());
-            
-            % EMGシミュレータ
-            emgInlet = struct(...
-                'type', 'simulator', ...
-                'sampleRate', obj.params.device.sampleRate, ...
-                'channelCount', 2, ... % EMGは2チャンネル
-                'getData', @() obj.getSimulatedData());
-            
-            fprintf('シミュレーションモードで初期化しました (EEG + EMG)\n');
-            
-            % シミュレータ情報の表示
-            obj.displaySimulatorInfo();
-        end
-        
-        function [eegInlet, emgInlet, lib] = initializeLSL(obj)
-            try
-                % LSLライブラリのロード
-                lib = obj.loadLSLLibrary();
-
-                % EEGストリームの解決
-                fprintf('\nEEGストリーム解決中...\n');
-                eegResult = obj.resolveStream(lib, obj.params.device.lsl.streamName);
-                eegInlet = lsl_inlet(eegResult{1});
-                obj.displayStreamInfo(eegInlet, 'EEG');
-
-                % EMGストリームの初期化（EMGが有効な場合のみ）
-                emgInlet = [];
-                if obj.params.acquisition.emg.enable
-                    fprintf('\nEMGストリーム解決中...\n');
-                    emgResult = obj.resolveStream(lib, obj.emgStreamInfo.streamName);
-                    emgInlet = lsl_inlet(emgResult{1});
-                    obj.displayStreamInfo(emgInlet, 'EMG');
-                end
-
-            catch ME
-                error('LSL initialization failed: %s', ME.message);
-            end
-        end
-        
-        function lib = loadLSLLibrary(~)
-            try
-                % まず、環境変数のパスを試す
-                lib = lsl_loadlib(env_translatepath('dependencies:/liblsl-Matlab/bin'));
-            catch
-                % デフォルトのパスを試す
-                lib = lsl_loadlib();
-            end
-        end
-        
-        function result = resolveStream(~, lib, streamName)
-            fprintf('ストリーム解決中: %s\n', streamName);
-            result = {};
-            timeout = 10;
-            startTime = tic;
-            
-            while isempty(result) && toc(startTime) < timeout
-                result = lsl_resolve_byprop(lib, 'name', streamName);
-                if isempty(result)
-                    pause(0.5);
-                    fprintf('.');
-                end
-            end
-            fprintf('\n');
-            
-            if isempty(result)
-                error('ストリームが見つかりませんでした: %s', streamName);
-            end
-        end
-        
         function displayStreamInfo(~, inlet, streamType)
+            % ストリーム情報の表示
             try
                 inf = inlet.info();
                 fprintf('\n%sストリーム情報:\n', streamType);
@@ -474,7 +338,6 @@ classdef LSLManager < handle
                 fprintf('サンプリングレート: %d Hz\n', inf.nominal_srate());
                 fprintf('ソースID: %s\n', inf.source_id());
                 
-                % チャンネル情報の表示
                 fprintf('\nチャンネル情報:\n');
                 ch = inf.desc().child('channels').child('channel');
                 for k = 1:inf.channel_count()
@@ -488,6 +351,7 @@ classdef LSLManager < handle
         end
         
         function displaySimulatorInfo(obj)
+            % シミュレータ情報の表示
             fprintf('\nシミュレータ情報:\n');
             fprintf('EEGチャンネル数: %d\n', obj.params.device.channelCount);
             fprintf('EMGチャンネル数: 2\n');
@@ -497,10 +361,187 @@ classdef LSLManager < handle
                 obj.params.lsl.simulate.signal.alpha.freq, ...
                 obj.params.lsl.simulate.signal.alpha.amplitude);
             fprintf('  ベータ波: %d Hz (振幅: %d)\n', ...
-                obj.params.lsl.simulate.signal.beta.freq, ...
+                                obj.params.lsl.simulate.signal.beta.freq, ...
                 obj.params.lsl.simulate.signal.beta.amplitude);
             fprintf('  EMGバースト: 20-80 Hz\n');
             fprintf('  ノイズ振幅: 2\n\n');
+        end
+
+        function baseSignal = generateBaseSignal(obj, t)
+            % 基本的な脳波信号の生成
+            % アルファ波とベータ波の重ね合わせにノイズを加える
+            
+            % アルファ波成分の生成
+            alphaComponent = obj.generateWaveComponent(t, ...
+                obj.params.lsl.simulate.signal.alpha.freq, ...
+                obj.params.lsl.simulate.signal.alpha.amplitude);
+            
+            % ベータ波成分の生成
+            betaComponent = obj.generateWaveComponent(t, ...
+                obj.params.lsl.simulate.signal.beta.freq, ...
+                obj.params.lsl.simulate.signal.beta.amplitude);
+            
+            % バックグラウンドノイズの生成
+            noiseAmplitude = 2;
+            backgroundNoise = obj.generateGaussianNoise(length(t)) * noiseAmplitude;
+            
+            % 信号の組み合わせ
+            baseSignal = alphaComponent + betaComponent + backgroundNoise;
+            
+            % 信号の検証と制限
+            baseSignal = obj.validateSignal(baseSignal);
+        end
+        
+        function wave = generateWaveComponent(~, t, freq, amplitude)
+            % 特定の周波数成分の生成
+            % ランダムな位相を持つ正弦波を生成
+            phase = 2 * pi * rand();
+            wave = amplitude * sin(2*pi*freq*t + phase);
+            
+            % 無効な値をチェック
+            wave(~isfinite(wave)) = 0;
+        end
+        
+        function noise = generateGaussianNoise(~, n)
+            % ガウシアンノイズの生成と正規化
+            noise = randn(1, n);
+            noise = noise - mean(noise);
+            noise = noise / (std(noise) + eps);
+        end
+        
+        function signal = validateSignal(~, signal)
+            % 信号の検証と制限
+            % NaNやInfを除去し、振幅を制限する
+            signal(~isfinite(signal)) = 0;
+            maxAmplitude = 100; % μV
+            signal = max(min(signal, maxAmplitude), -maxAmplitude);
+        end
+        
+        function data = generateChannelData(obj, baseSignal, numSamples)
+            % 各チャンネルのデータ生成
+            data = zeros(obj.params.device.channelCount, numSamples);
+            noise = 2 * randn(1, numSamples);
+            
+            % 各チャンネルにノイズを加えた信号を設定
+            for ch = 1:obj.params.device.channelCount
+                data(ch,:) = baseSignal + noise;
+            end
+        end
+        
+        function signal = generateEMGSignal(obj, t)
+            % EMG信号の生成
+            try
+                t = t(:)';  % ベクトルの方向を統一
+
+                % ナイキスト周波数の計算
+                nyquistFreq = obj.params.acquisition.emg.sampleRate / 2;
+
+                % EMG信号の主要周波数成分を設定
+                freqs = [20, 50, 80, 120, 150];  % 特徴的な周波数
+                amps = [2, 1.5, 1, 0.8, 0.5];    % 各周波数の振幅
+
+                % 基本信号の生成
+                signal = zeros(size(t));
+                for i = 1:length(freqs)
+                    if freqs(i) < nyquistFreq
+                        signal = signal + amps(i) * sin(2*pi*freqs(i)*t);
+                    end
+                end
+
+                % 高周波ノイズの追加
+                noiseAmplitude = 0.5;
+                noise = obj.generateEMGNoise(length(t), obj.params.acquisition.emg.sampleRate);
+                signal = signal + noiseAmplitude * noise;
+
+                % バースト特性の追加
+                burstFreq = 2; % バースト周波数（Hz）
+                burstEnvelope = 0.5 * (1 + sin(2*pi*burstFreq*t));
+                signal = signal .* burstEnvelope;
+
+                % 振幅の正規化と制限
+                maxAmp = 100;
+                signal = signal / max(abs(signal)) * maxAmp;
+                signal = min(max(signal, -maxAmp), maxAmp);
+
+                % DCオフセットの除去
+                signal = signal - mean(signal);
+
+                % 無効な値の除去
+                signal(isnan(signal) | isinf(signal)) = 0;
+
+            catch ME
+                warning('EMGSignal:GenerationFailed', 'EMG信号生成エラー: %s', ME.message);
+                signal = zeros(size(t));
+            end
+        end
+
+        function data = generateEMGChannelData(obj, baseSignal, numSamples)
+            % EMGチャンネルデータの生成
+            try
+                numChannels = obj.params.acquisition.emg.channels.count;
+                data = zeros(numChannels, numSamples);
+
+                % 各チャンネルの生成
+                for ch = 1:numChannels
+                    % チャンネル固有のノイズを追加
+                    channelNoise = obj.generateEMGNoise(numSamples, obj.params.acquisition.emg.sampleRate) * 0.2;
+
+                    % 位相シフトの適用
+                    phaseShift = 2 * pi * rand();
+                    shiftedSignal = circshift(baseSignal, round(phaseShift * numSamples / (2*pi)));
+
+                    % 信号の組み合わせ
+                    data(ch,:) = shiftedSignal + channelNoise;
+
+                    % チャンネル間の振幅変動を追加
+                    scaleFactor = 0.9 + 0.2 * rand();
+                    data(ch,:) = data(ch,:) * scaleFactor;
+                end
+
+                % 全体の振幅を正規化
+                maxAmp = 100;
+                data = data / max(abs(data(:))) * maxAmp;
+
+            catch ME
+                warning('EMGChannel:GenerationFailed', 'EMGチャンネルデータ生成エラー: %s', ME.message);
+                data = zeros(numChannels, numSamples);
+            end
+        end
+
+        function noise = generateEMGNoise(~, numSamples, ~)
+            % EMG用のノイズ生成
+            try
+                numSamples = round(numSamples);
+                nfft = 2^nextpow2(numSamples);
+                f = (1:floor(nfft/2))';
+
+                % ピンクノイズ特性の生成
+                amplitude = 1./sqrt(f + eps);
+
+                % 位相のランダム化
+                phase = 2*pi*rand(length(f), 1);
+                s = amplitude .* exp(1i*phase);
+                s = [0; s; flipud(conj(s(1:end-1)))];
+
+                % 時間領域への変換
+                fullNoise = real(ifft(s));
+                noise = fullNoise(1:numSamples);
+
+                % 正規化
+                noise = noise - mean(noise);
+                noise = noise / (std(noise) + eps);
+                noise = noise(:)';  % 行ベクトルに変換
+
+            catch ME
+                warning('EMGNoise:GenerationFailed', 'EMGノイズ生成エラー: %s', ME.message);
+                noise = randn(1, numSamples);
+            end
+
+            % 無効な値のチェック
+            if any(isnan(noise)) || any(isinf(noise))
+                warning('EMGNoise:InvalidValues', 'ノイズ生成で無効な値を検出');
+                noise = randn(1, numSamples);
+            end
         end
     end
 end
