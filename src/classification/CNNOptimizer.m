@@ -1,180 +1,236 @@
 classdef CNNOptimizer < handle
     properties (Access = private)
         params              % パラメータ設定
-        optimizedModel     % 最適化されたCNNモデル
-        cnnClassifier      % CNNClassifier インスタンス
-        bestParams         % 最適パラメータ
-        bestPerformance    % 最良の性能
+        optimizedModel      % 最適化されたモデル
+        bestParams         % 最良パラメータ
+        bestPerformance    % 最良性能値
         searchSpace        % パラメータ探索空間
-        parallelPool       % 並列処理プール
+        optimizationHistory % 最適化履歴
     end
     
     methods (Access = public)
         function obj = CNNOptimizer(params)
             obj.params = params;
-            obj.cnnClassifier = CNNClassifier(params);
             obj.initializeSearchSpace();
             obj.bestPerformance = -inf;
+            obj.optimizationHistory = struct('params', {}, 'performance', {}, 'model', {});
         end
         
         function [optimizedParams, performance, model] = optimize(obj, data, labels)
             try
-                % 並列処理プールの初期化
-                if isempty(gcp('nocreate'))
-                    obj.parallelPool = parpool('local');
+                if ~obj.params.classifier.cnn.optimize
+                    fprintf('CNN最適化は無効です。デフォルトパラメータを使用します。\n');
+                    optimizedParams = []; performance = []; model = [];
+                    return;
                 end
-                
-                % グリッドサーチのパラメータ組み合わせを生成
-                paramCombinations = obj.generateParamCombinations();
-                numCombinations = size(paramCombinations, 1);
-                
-                % 結果保存用の配列
-                results = cell(numCombinations, 1);
-                
-                % 並列処理でパラメータ探索を実行
-                parfor i = 1:numCombinations
-                    results{i} = obj.evaluateParameters(data, labels, paramCombinations(i,:));
+
+                % パラメータセットの生成
+                numSamples = 20;
+                paramSets = obj.generateParameterSets(numSamples);
+                fprintf('パラメータ%dセットで最適化を開始します...\n', size(paramSets, 1));
+
+                results = cell(size(paramSets, 1), 1);
+                baseParams = obj.params;
+
+                % 検索空間のローカルコピーを作成
+                kernelSizeLocal = obj.searchSpace.kernelSize;
+
+                parfor i = 1:size(paramSets, 1)
+                    try
+                        % パラメータの更新（parfor内で安全に使用できる変数のみを使用）
+                        localParams = baseParams;
+                        localParams = obj.updateCNNParameters(localParams, paramSets(i,:), kernelSizeLocal);
+
+                        % CNNの学習と評価
+                        cnn = CNNClassifier(localParams);
+                        trainResults = cnn.trainCNN(data, labels);
+
+                        % 結果の保存
+                        results{i} = struct(...
+                            'params', paramSets(i,:), ...
+                            'performance', trainResults.performance.accuracy, ...
+                            'model', trainResults.model);
+
+                        fprintf('組み合わせ %d/%d: 精度 = %.4f\n', i, size(paramSets, 1), trainResults.performance.accuracy);
+
+                    catch ME
+                        warning('組み合わせ%dでエラー発生: %s', i, ME.message);
+                        results{i} = struct('params', paramSets(i,:), 'performance', -inf, 'model', []);
+                    end
                 end
-                
-                % 最適パラメータの特定
-                [obj.bestPerformance, bestIdx] = max(cellfun(@(x) x.performance, results));
-                obj.bestParams = results{bestIdx}.params;
-                
-                % 結果の整形
-                optimizedParams = obj.bestParams;
-                performance = obj.bestPerformance;
-                
-                % 結果の表示
-                obj.displayOptimizationResults(results);
-                
+
+                [optimizedParams, performance, model] = obj.processFinalResults(results);
+                obj.updateOptimizationHistory(results);
+                obj.displayOptimizationResults();
+
             catch ME
-                error('CNN Parameter optimization failed: %s', ME.message);
+                error('CNN最適化に失敗: %s\n%s', ME.message, getReport(ME, 'extended'));
             end
         end
     end
     
     methods (Access = private)
         function initializeSearchSpace(obj)
-            % パラメータ探索空間の定義
-            obj.searchSpace = struct(...
-                'learningRate', [0.0001, 0.001, 0.01], ...
-                'miniBatchSize', [32, 64, 128], ...
-                'kernelSize', {[3,3], [5,5], [7,7]}, ...
-                'numFilters', [16, 32, 64], ...
-                'dropoutRate', [0.3, 0.4, 0.5], ...
-                'fcUnits', [64, 128, 256]);
+            obj.searchSpace = obj.params.classifier.cnn.optimization.searchSpace;
         end
         
-        function combinations = generateParamCombinations(obj)
-            % グリッドサーチ用のパラメータ組み合わせを生成
-            fields = fieldnames(obj.searchSpace);
-            values = struct2cell(obj.searchSpace);
+        function paramSets = generateParameterSets(obj, numSamples)
+            % Latin Hypercube Sampling
+            lhsPoints = lhsdesign(numSamples, 6);
+
+            % パラメータ空間の初期化
+            paramSets = zeros(numSamples, 6);
+
+            % 学習率（対数スケール）
+            lr_range = obj.searchSpace.learningRate;
+            paramSets(:,1) = 10.^(log10(lr_range(1)) + (log10(lr_range(2)) - log10(lr_range(1))) * lhsPoints(:,1));
+
+            % バッチサイズ
+            bs_range = obj.searchSpace.miniBatchSize;
+            paramSets(:,2) = round(bs_range(1) + (bs_range(2) - bs_range(1)) * lhsPoints(:,2));
+
+            % カーネルサイズインデックス（kernelSizeはセル配列）
+            num_kernel_sizes = numel(obj.searchSpace.kernelSize);
+            paramSets(:,3) = ones(numSamples, 1);  % デフォルト値として1を設定
+            if num_kernel_sizes > 1
+                paramSets(:,3) = round(1 + (num_kernel_sizes - 1) * lhsPoints(:,3));
+            end
+
+            % 残りのパラメータ
+            nf_range = obj.searchSpace.numFilters;
+            paramSets(:,4) = round(nf_range(1) + (nf_range(2) - nf_range(1)) * lhsPoints(:,4));
+
+            do_range = obj.searchSpace.dropoutRate;
+            paramSets(:,5) = do_range(1) + (do_range(2) - do_range(1)) * lhsPoints(:,5);
+
+            fc_range = obj.searchSpace.fcUnits;
+            paramSets(:,6) = round(fc_range(1) + (fc_range(2) - fc_range(1)) * lhsPoints(:,6));
+        end
+
+        function params = updateCNNParameters(~, params, paramSet, ~)
+            % カーネルサイズを固定値に設定
+            kernelSize = [3 3]; % デフォルトのカーネルサイズを使用
+
+            params.classifier.cnn.training.optimizer.learningRate = paramSet(1);
+            params.classifier.cnn.training.miniBatchSize = paramSet(2);
+            params.classifier.cnn.architecture.convLayers.conv1.size = kernelSize;
+            params.classifier.cnn.architecture.convLayers.conv1.filters = paramSet(4);
+            params.classifier.cnn.architecture.dropoutLayers.dropout1 = paramSet(5);
+            params.classifier.cnn.architecture.fullyConnected = [paramSet(6)];
+        end
+
+        function metrics = calculatePerformanceMetrics(~, results)
+            metrics = struct();
             
-            % 全組み合わせの生成
-            [A, B, C, D, E, F] = ndgrid(1:length(values{1}), ...
-                                      1:length(values{2}), ...
-                                      1:length(values{3}), ...
-                                      1:length(values{4}), ...
-                                      1:length(values{5}), ...
-                                      1:length(values{6}));
-            
-            combinations = [A(:), B(:), C(:), D(:), E(:), F(:)];
-            
-            % インデックスを実際の値に変換
-            numCombinations = size(combinations, 1);
-            paramMatrix = zeros(numCombinations, length(fields));
-            
-            for i = 1:length(fields)
-                if iscell(values{i})
-                    paramMatrix(:,i) = combinations(:,i);  % kernel_sizeは特別処理
-                else
-                    paramMatrix(:,i) = values{i}(combinations(:,i));
-                end
+            if isfield(results, 'performance') && isfield(results.performance, 'cvAccuracies')
+                metrics.avgAccuracy = mean(results.performance.cvAccuracies);
+                metrics.stdAccuracy = std(results.performance.cvAccuracies);
+            else
+                metrics.avgAccuracy = results.performance.accuracy;
+                metrics.stdAccuracy = 0;
             end
             
-            combinations = paramMatrix;
+            if isfield(results.performance, 'auc')
+                metrics.auc = results.performance.auc;
+            end
+            
+            if isfield(results.performance, 'f1score')
+                metrics.f1score = results.performance.f1score;
+            end
         end
-        
-        function result = evaluateParameters(obj, data, labels, paramSet)
+
+        function [optimizedParams, performance, model] = processFinalResults(obj, results)
+            validResults = ~cellfun(@isempty, results);
+            performances = cellfun(@(x) x.performance, results(validResults));
+            [obj.bestPerformance, bestIdx] = max(performances);
+            
+            validIndices = find(validResults);
+            bestResult = results{validIndices(bestIdx)};
+            
+            optimizedParams = bestResult.params;
+            performance = bestResult.performance;
+            model = bestResult.model;
+            obj.bestParams = optimizedParams;
+            obj.optimizedModel = model;
+        end
+
+        function updateOptimizationHistory(obj, results)
+            for i = 1:length(results)
+                if ~isempty(results{i})
+                    obj.optimizationHistory(end+1) = struct(...
+                        'params', results{i}.params, ...
+                        'performance', results{i}.performance, ...
+                        'model', results{i}.model);
+                end
+            end
+        end
+
+        function displayOptimizationResults(obj)
+            fprintf('\n=== CNN最適化結果 ===\n');
+            fprintf('最良性能: %.4f\n\n', obj.bestPerformance);
+
+            fprintf('最適パラメータ:\n');
+            fprintf('学習率: %.6f\n', obj.bestParams(1));
+            fprintf('ミニバッチサイズ: %d\n', obj.bestParams(2));
+            fprintf('フィルタ数: %d\n', obj.bestParams(4));
+            fprintf('ドロップアウト率: %.2f\n', obj.bestParams(5));
+            fprintf('全結合層ユニット数: %d\n', obj.bestParams(6));
+
+            % 性能統計の表示
+            performances = [obj.optimizationHistory.performance];
+            validPerfs = performances(isfinite(performances));
+
+            fprintf('\n性能統計:\n');
+            fprintf('平均: %.4f\n', mean(validPerfs));
+            fprintf('標準偏差: %.4f\n', std(validPerfs));
+            fprintf('最小値: %.4f\n', min(validPerfs));
+            fprintf('最大値: %.4f\n', max(validPerfs));
+        end
+
+        function plotOptimizationResults(obj)
             try
-                % パラメータの設定
-                currentParams = obj.params;
-                currentParams.classifier.cnn.training.optimizer.learningRate = paramSet(1);
-                currentParams.classifier.cnn.training.miniBatchSize = paramSet(2);
+                figure('Name', 'CNN最適化結果');
                 
-                if iscell(obj.searchSpace.kernelSize)
-                    kernelSize = obj.searchSpace.kernelSize{paramSet(3)};
-                else
-                    kernelSize = paramSet(3);
+                subplot(2,2,1);
+                performances = [obj.optimizationHistory.performance];
+                plot(performances, '-o');
+                xlabel('反復回数');
+                ylabel('性能');
+                title('最適化履歴');
+                grid on;
+                
+                subplot(2,2,2);
+                params = vertcat(obj.optimizationHistory.params);
+                performances = [obj.optimizationHistory.performance];
+                paramNames = {'学習率', 'バッチ', 'カーネル', 'フィルタ', 'ドロップアウト', '全結合'};
+                
+                correlations = zeros(6,1);
+                for i = 1:6
+                    correlations(i) = corr(params(:,i), performances');
                 end
                 
-                % CNNアーキテクチャの更新
-                currentParams.classifier.cnn.architecture.convLayers.conv1.size = kernelSize;
-                currentParams.classifier.cnn.architecture.convLayers.conv1.filters = paramSet(4);
-                currentParams.classifier.cnn.architecture.dropoutLayers.dropout1 = paramSet(5);
-                currentParams.classifier.cnn.architecture.fullyConnected = [paramSet(6)];
+                bar(correlations);
+                set(gca, 'XTickLabel', paramNames);
+                title('パラメータと性能の相関');
+                ylabel('相関係数');
+                grid on;
                 
-                % CNNの学習と評価
-                cnn = CNNClassifier(currentParams);
-                results = cnn.trainCNN(data, labels);
+                subplot(2,2,3);
+                histogram(performances, 'Normalization', 'probability');
+                xlabel('性能');
+                ylabel('頻度');
+                title('性能分布');
+                grid on;
                 
-                % 結果の保存
-                result = struct();
-                result.params = paramSet;
-                result.performance = results.performance.crossValidation.meanAccuracy;
-                result.confusionMatrix = results.performance.confusionMat;
-                result.detailedMetrics = struct(...
-                    'precision', results.performance.precision, ...
-                    'recall', results.performance.recall, ...
-                    'f1score', results.performance.f1score);
+                subplot(2,2,4);
+                scatter(log10(params(:,1)), performances, 'filled');
+                xlabel('学習率（対数）');
+                ylabel('性能');
+                title('学習率の影響');
+                grid on;
                 
             catch ME
-                warning('Parameter evaluation failed: %s', ME.message);
-                result = struct('params', paramSet, 'performance', -inf);
-            end
-        end
-        
-        function displayOptimizationResults(obj, results)
-            fprintf('\n=== CNN Parameter Optimization Results ===\n');
-            fprintf('Best Performance: %.4f\n\n', obj.bestPerformance);
-            
-            fprintf('Optimal Parameters:\n');
-            fprintf('Learning Rate: %.6f\n', obj.bestParams(1));
-            fprintf('Mini-batch Size: %d\n', obj.bestParams(2));
-            fprintf('Kernel Size: [%d %d]\n', ...
-                obj.searchSpace.kernelSize{obj.bestParams(3)}(1), ...
-                obj.searchSpace.kernelSize{obj.bestParams(3)}(2));
-            fprintf('Number of Filters: %d\n', obj.bestParams(4));
-            fprintf('Dropout Rate: %.2f\n', obj.bestParams(5));
-            fprintf('FC Units: %d\n', obj.bestParams(6));
-            
-            % パラメータの性能比較をプロット
-            obj.plotPerformanceComparison(results);
-        end
-        
-        function plotPerformanceComparison(obj, results)
-            performances = cellfun(@(x) x.performance, results);
-            
-            % 性能分布のヒストグラム
-            figure('Name', 'Performance Distribution');
-            histogram(performances, 20);
-            xlabel('Performance (Accuracy)');
-            ylabel('Frequency');
-            title('Distribution of Performance Across Parameter Combinations');
-            
-            % パラメータと性能の関係を可視化
-            figure('Name', 'Parameter-Performance Relationships');
-            paramNames = {'Learning Rate', 'Batch Size', 'Kernel Size', ...
-                         'Num Filters', 'Dropout Rate', 'FC Units'};
-            
-            for i = 1:length(paramNames)
-                subplot(2, 3, i);
-                paramValues = cellfun(@(x) x.params(i), results);
-                scatter(paramValues, performances, 'filled');
-                xlabel(paramNames{i});
-                ylabel('Performance');
-                title(sprintf('%s vs Performance', paramNames{i}));
-                grid on;
+                warning(ME.identifier, '%s', ME.message);
             end
         end
     end

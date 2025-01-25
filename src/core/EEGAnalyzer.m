@@ -148,7 +148,7 @@ classdef EEGAnalyzer < handle
                     'auc', [], ...
                     'confusionMatrix', [] ...
                 ), ...
-                'trainingInfo', [], ...
+                'trainInfo', [], ...
                 'crossValidation', [], ...
                 'overfitting', [] ...
             );
@@ -310,26 +310,53 @@ classdef EEGAnalyzer < handle
         
         function performClassification(obj)
             try
-                % CSP特徴抽出→SVM特徴分類
                 if ~isempty(obj.results.csp.features)
+                    % SVM分類
                     if obj.params.classifier.svm.enable
                         obj.svm = obj.svmClassifier.trainSVM(...
                             obj.results.csp.features, obj.processedLabel);
                     end
+
+                    % ECOC分類
                     if obj.params.classifier.ecoc.enable
                         obj.ecoc = obj.ecocClassifier.trainECOC(...
                             obj.results.csp.features, obj.processedLabel);
                     end
                 end
-                
-                % CNN特徴分類
+
+                % CNN分類
                 if obj.params.classifier.cnn.enable
-                    obj.cnn = obj.cnnClassifier.trainCNN(...
-                        obj.processedData, obj.processedLabel);
+                    optimizer = CNNOptimizer(obj.params);
+                    [optimizedParams, ~, ~] = optimizer.optimize(obj.processedData, obj.processedLabel);
+
+                    if obj.params.classifier.cnn.optimize && ~isempty(optimizedParams)
+                        % パラメータの更新
+                        updatedParams = obj.params;
+                        updatedParams.classifier.cnn = obj.updateCNNParams(obj.params.classifier.cnn, optimizedParams);
+
+                        % 更新したパラメータでCNNClassifierを再初期化
+                        updatedCnnClassifier = CNNClassifier(updatedParams);
+                        obj.cnn = updatedCnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
+                    else
+                        obj.cnn = obj.cnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
+                    end
                 end
             catch ME
                 error('Classification failed: %s', ME.message);
             end
+        end
+
+        function params = updateCNNParams(~, baseParams, optimizedParams)
+            % CNNパラメータの更新
+            params = baseParams;
+            params.training.optimizer.learningRate = optimizedParams(1);
+            params.training.miniBatchSize = optimizedParams(2);
+
+            % アーキテクチャの更新
+            params.architecture.convLayers.conv1.size = optimizedParams(3);
+            params.architecture.convLayers.conv1.filters = optimizedParams(4);
+            params.architecture.dropoutLayers.dropout1 = optimizedParams(5);
+            params.architecture.fullyConnected = [optimizedParams(6)];
         end
 
         function extractPowerFeatures(obj)
@@ -586,7 +613,7 @@ classdef EEGAnalyzer < handle
                     saveData.classifier.cnn = struct(...
                         'model', obj.cnn.model, ...
                         'performance', obj.cnn.performance, ...
-                        'trainingInfo', obj.cnn.trainingInfo, ...
+                        'trainInfo', obj.cnn.trainInfo, ...
                         'crossValidation', obj.cnn.crossValidation, ...
                         'overfitting', obj.cnn.overfitting ...
                     );
