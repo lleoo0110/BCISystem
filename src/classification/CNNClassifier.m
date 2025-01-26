@@ -177,15 +177,6 @@ classdef CNNClassifier < handle
 
         function [cnnModel, trainInfo] = trainCNNModel(obj, trainData, trainLabels, testData, testLabels)
             try
-                % GPU利用可能性チェック
-                useGPU = (gpuDeviceCount > 0);
-                if useGPU
-                    gpuInfo = gpuDevice(); % gpuDevice()を使用してデバイス情報を取得
-                    fprintf('GPU利用可能: %s\n', gpuInfo.Name); % GPU名を出力
-                else
-                    fprintf('GPUが利用できないため、CPUで実行します\n');
-                end
-
                 % データの準備
                 if ndims(trainData) ~= 4
                     trainData = obj.prepareDataForCNN(trainData);
@@ -195,23 +186,12 @@ classdef CNNClassifier < handle
                 uniqueLabels = unique(trainLabels);
                 trainLabels = categorical(trainLabels, uniqueLabels);
 
-                % GPU転送
-                if useGPU
-                    trainData = gpuArray(trainData);
-                    trainLabels = gpuArray(trainLabels);
-                end
-
                 % テストデータの処理
                 if ~isempty(testData)
                     if ndims(testData) ~= 4
                         testData = obj.prepareDataForCNN(testData);
                     end
                     testLabels = categorical(testLabels, uniqueLabels);
-
-                    if useGPU
-                        testData = gpuArray(testData);
-                        testLabels = gpuArray(testLabels);
-                    end
                 end
 
                 % トレーニング情報の初期化
@@ -224,18 +204,13 @@ classdef CNNClassifier < handle
                 );
 
                 % トレーニングオプションの設定
-                executionEnv = 'cpu';
-                if useGPU
-                    executionEnv = 'gpu';
-                end
-
                 options = trainingOptions(obj.params.classifier.cnn.training.optimizer.type, ...
                     'InitialLearnRate', obj.params.classifier.cnn.training.optimizer.learningRate, ...
                     'MaxEpochs', obj.params.classifier.cnn.training.maxEpochs, ...
                     'MiniBatchSize', obj.params.classifier.cnn.training.miniBatchSize, ...
                     'Plots', 'training-progress', ...
                     'OutputFcn', @(info)obj.trainingOutputFcn(info), ...
-                    'ExecutionEnvironment', executionEnv, ...
+                    'ExecutionEnvironment', 'cpu', ...
                     'Verbose', true);
 
                 % 検証データの設定
@@ -257,11 +232,6 @@ classdef CNNClassifier < handle
                 trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
 
                 fprintf('学習完了: 最終エポック %d\n', trainInfo.FinalEpoch);
-
-                % GPUメモリのクリーンアップ
-                if useGPU
-                    reset(gpuDevice()); % GPUメモリのリセット
-                end
 
             catch ME
                 fprintf('trainCNNModelでエラーが発生: %s\n', ME.message);
