@@ -24,7 +24,7 @@ function [extractedData, extractedLabels] = extractData(varargin)
             end
             fullpath = fullfile(filepath, filename);
         else
-            fullpath = p.Results.filename;
+            fullpath = p.Results.Filename;
         end
 
         % データの読み込み
@@ -39,66 +39,46 @@ function [extractedData, extractedLabels] = extractData(varargin)
         end
 
         % データとラベルの初期化
-        rawData = data.rawData;
-        labels = data.labels;
+        extractedData = data.rawData;  % rawDataは常に全体を保持
+        extractedLabels = data.labels;
 
         % データの基本情報を表示
         fprintf('\nデータファイル: %s\n', fullpath);
-        fprintf('データサイズ: [%d, %d]\n', size(rawData));
-        fprintf('ラベル数: %d\n', length(labels));
+        fprintf('データサイズ: [%d, %d]\n', size(extractedData));
+        fprintf('ラベル数: %d\n', length(extractedLabels));
 
         % 検証モードの場合はここで終了
         if p.Results.ValidateOnly
             fprintf('検証完了\n');
-            extractedData = [];
-            extractedLabels = [];
             return;
         end
 
-        % クラスによる抽出
+        % クラスによる抽出（labelsのみ）
         if ~isempty(p.Results.Classes)
-            validIndices = false(length(labels), 1);
-            for i = 1:length(labels)
-                if ismember(labels(i).value, p.Results.Classes)
+            validIndices = false(length(extractedLabels), 1);
+            for i = 1:length(extractedLabels)
+                if ismember(extractedLabels(i).value, p.Results.Classes)
                     validIndices(i) = true;
                 end
             end
-            % validIndicesを使用してデータとラベルを抽出
+            
             if any(validIndices)
-                % ラベルの抽出
-                extractedLabels = labels(validIndices);
-                
-                % データの抽出（対応するエポックのみ）
-                sampleIndices = [];
-                for i = 1:length(extractedLabels)
-                    sampleIndices = [sampleIndices, extractedLabels(i).sample];
-                end
-                extractedData = rawData(:, sampleIndices);
+                extractedLabels = extractedLabels(validIndices);
             else
                 warning('指定されたクラスのデータが見つかりませんでした。');
-                extractedData = [];
                 extractedLabels = [];
                 return;
             end
-        else
-            extractedData = rawData;
-            extractedLabels = labels;
         end
 
-        % サンプルによる抽出
+        % サンプルによる抽出（labelsのみ）
         if ~isempty(p.Results.Samples)
             validSamples = p.Results.Samples;
             validSamples = validSamples(validSamples <= length(extractedLabels));
             if ~isempty(validSamples)
                 extractedLabels = extractedLabels(validSamples);
-                sampleIndices = [];
-                for i = 1:length(extractedLabels)
-                    sampleIndices = [sampleIndices, extractedLabels(i).sample];
-                end
-                extractedData = extractedData(:, sampleIndices);
             else
                 warning('指定されたサンプル範囲が無効です。');
-                extractedData = [];
                 extractedLabels = [];
                 return;
             end
@@ -106,7 +86,7 @@ function [extractedData, extractedLabels] = extractData(varargin)
 
         % 抽出結果の表示
         fprintf('\n抽出結果:\n');
-        fprintf('抽出されたデータサイズ: [%d, %d]\n', size(extractedData));
+        fprintf('データサイズ: [%d, %d]\n', size(extractedData));
         fprintf('抽出されたラベル数: %d\n', length(extractedLabels));
 
         % クラスごとのサンプル数を表示
@@ -120,7 +100,7 @@ function [extractedData, extractedLabels] = extractData(varargin)
         end
 
         % 抽出データの保存
-        if p.Results.SaveExtracted && ~isempty(extractedData)
+        if p.Results.SaveExtracted && ~isempty(extractedLabels)
             % 保存ファイル名の生成
             [filepath, name, ~] = fileparts(fullpath);
             if ~isempty(p.Results.Classes)
