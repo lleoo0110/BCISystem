@@ -62,22 +62,165 @@ classdef EEGAnalyzer < handle
         
         function analyze(obj)
             try
+                fprintf('\n=== 解析処理開始 ===\n');
                 fprintf('解析対象のデータファイルを選択してください．\n');
-                loadedData = DataLoader.loadDataBrowserWithPrompt('オフライン解析');
-                obj.setData(loadedData);
-                obj.executePreprocessingPipeline();
-                
-                if obj.params.signal.enable && ~isempty(obj.processedData)
-                    obj.extractFeatures();
-                    obj.performClassification();
+
+                % ファイルを選択し、元のファイル名を取得
+                [filenames, filepath] = uigetfile({'*.mat', 'MAT-files (*.mat)'}, ...
+                    'Select a file', 'MultiSelect', 'on');
+
+                if isequal(filenames, 0)
+                    fprintf('データが選択されませんでした。\n');
+                    return;
                 end
 
-                obj.saveResults();
-                
-                % 全てのウィンドウを閉じる
+                % 単一ファイル選択時はセル配列に変換
+                if ~iscell(filenames)
+                    filenames = {filenames};
+                end
+
+                % データの読み込み
+                loadedData = cell(1, length(filenames));
+                for i = 1:length(filenames)
+                    fullpath = fullfile(filepath, filenames{i});
+                    loadedData{i} = load(fullpath);
+                end
+
+                fprintf('データ読み込み完了\n');
+
+                % 複数ファイルの処理
+                if length(loadedData) > 1
+                    fprintf('複数ファイル処理を開始します（%d ファイル）\n', length(loadedData));
+
+                    % 保存モードの選択
+                    saveMode = questdlg('保存モードを選択してください:', ...
+                        '保存モードの選択', '一括保存', '個別保存', 'キャンセル', '個別保存');
+
+                    if strcmp(saveMode, 'キャンセル')
+                        fprintf('処理がキャンセルされました。\n');
+                        return;
+                    end
+
+                    fprintf('選択された保存モード: %s\n', saveMode);
+
+                    % 保存先の設定
+                    saveDir = '';
+                    savePaths = cell(1, length(loadedData));
+
+                    % 一括保存の場合のディレクトリ選択
+                    if strcmp(saveMode, '一括保存')
+                        saveDir = uigetdir('', '保存先のフォルダを選択してください');
+                        if saveDir == 0
+                            fprintf('保存先フォルダの選択がキャンセルされました。\n');
+                            return;
+                        end
+                        fprintf('保存先フォルダ: %s\n', saveDir);
+                    end
+
+                    % 各ファイルの保存パスを設定
+                    for i = 1:length(loadedData)
+                        if ~isempty(loadedData{i})
+                            % 元のファイル名から .mat を除去してタイムスタンプを追加
+                            [~, baseFileName, ~] = fileparts(filenames{i});
+                            timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+                            analysisFileName = [baseFileName '_analysis_' timestamp '.mat'];
+
+                            if strcmp(saveMode, '個別保存')
+                                % 個別保存の場合
+                                [saveName, tempDir] = uiputfile(analysisFileName, ...
+                                    sprintf('データセット %d/%d の保存先を選択', i, length(loadedData)));
+
+                                if saveName == 0
+                                    fprintf('ファイル %d の保存がキャンセルされました。\n', i);
+                                    continue;
+                                end
+
+                                savePaths{i} = fullfile(tempDir, saveName);
+                            else
+                                % 一括保存の場合
+                                savePaths{i} = fullfile(saveDir, analysisFileName);
+                            end
+                            fprintf('保存パス %d: %s\n', i, savePaths{i});
+                        end
+                    end
+
+                    % 解析実行
+                    for i = 1:length(loadedData)
+                        if ~isempty(loadedData{i}) && ~isempty(savePaths{i})
+                            fprintf('\n=== データセット %d/%d の処理開始 ===\n', i, length(loadedData));
+
+                            % データ設定と前処理
+                            fprintf('前処理パイプラインを実行中...\n');
+                            obj.setData(loadedData{i});
+                            obj.executePreprocessingPipeline();
+
+                            % 特徴抽出と分類
+                            if obj.params.signal.enable && ~isempty(obj.processedData)
+                                fprintf('特徴抽出を実行中...\n');
+                                obj.extractFeatures();
+
+                                fprintf('分類処理を実行中...\n');
+                                obj.performClassification();
+                            end
+
+                            % 結果の保存
+                            fprintf('結果を保存中: %s\n', savePaths{i});
+                            obj.saveResults(savePaths{i});
+                            fprintf('=== データセット %d の処理完了 ===\n', i);
+                        end
+                    end
+
+                else
+                    % 単一ファイルの処理
+                    fprintf('\n=== 単一ファイル処理開始 ===\n');
+
+                    % データ設定と前処理
+                    fprintf('前処理パイプラインを実行中...\n');
+                    obj.setData(loadedData{1});
+                    obj.executePreprocessingPipeline();
+
+                    % 特徴抽出と分類
+                    if obj.params.signal.enable && ~isempty(obj.processedData)
+                        fprintf('特徴抽出を実行中...\n');
+                        obj.extractFeatures();
+
+                        fprintf('分類処理を実行中...\n');
+                        obj.performClassification();
+                    end
+
+                    % タイムスタンプ付きのデフォルトファイル名を生成
+                    [~, baseFileName, ~] = fileparts(filenames{1});
+                    timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+                    defaultName = [baseFileName '_analysis_' timestamp '.mat'];
+
+                    % 保存パスの設定
+                    [saveName, saveDir] = uiputfile(defaultName, '保存先を選択してください');
+
+                    if saveName == 0
+                        fprintf('保存がキャンセルされました。\n');
+                        return;
+                    end
+
+                    savePath = fullfile(saveDir, saveName);
+                    fprintf('結果を保存中: %s\n', savePath);
+                    obj.saveResults(savePath);
+                    fprintf('=== 単一ファイル処理完了 ===\n');
+                end
+
+                % 処理完了後のクリーンアップ
                 close all;
+                fprintf('\n=== 解析処理完了 ===\n');
+
             catch ME
-                error('Analysis failed: %s', ME.message);
+                % エラー情報の詳細表示
+                fprintf('\n=== エラー発生 ===\n');
+                fprintf('エラーメッセージ: %s\n', ME.message);
+                fprintf('エラー発生場所:\n');
+                for i = 1:length(ME.stack)
+                    fprintf('  File: %s\n  Line: %d\n  Function: %s\n\n', ...
+                        ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
+                end
+                rethrow(ME);
             end
         end
     end
@@ -148,7 +291,7 @@ classdef EEGAnalyzer < handle
                     'auc', [], ...
                     'confusionMatrix', [] ...
                 ), ...
-                'trainInfo', [], ...
+                'trainingInfo', [], ...
                 'crossValidation', [], ...
                 'overfitting', [] ...
             );
@@ -345,7 +488,7 @@ classdef EEGAnalyzer < handle
                 error('Classification failed: %s', ME.message);
             end
         end
-
+        
         function params = updateCNNParams(~, baseParams, optimizedParams)
             % CNNパラメータの更新
             params = baseParams;
@@ -573,11 +716,10 @@ classdef EEGAnalyzer < handle
                 error('EmotionExtractor:ExtractionFailed', '感情特徴量の抽出に失敗しました: %s', ME.message);
             end
         end
-
-        function saveResults(obj)
+        
+        function saveResults(obj, savePath)
             try
                 saveData = struct();
-
                 % 基本データの保存
                 saveData.params = obj.params;
                 saveData.rawData = obj.rawData;
@@ -585,7 +727,6 @@ classdef EEGAnalyzer < handle
                 saveData.processedData = obj.processedData;
                 saveData.processedLabel = obj.processedLabel;
                 saveData.processingInfo = obj.processingInfo;
-
                 % 特徴抽出結果
                 if ~isempty(obj.results)
                     saveData.results = obj.results;
@@ -593,7 +734,6 @@ classdef EEGAnalyzer < handle
 
                 % 分類器結果の保存
                 saveData.classifier = struct();
-
                 % SVM結果
                 if obj.params.classifier.svm.enable && ~isempty(obj.svm)
                     saveData.classifier.svm = struct(...
@@ -619,8 +759,9 @@ classdef EEGAnalyzer < handle
                     );
                 end
 
-                savedFile = obj.dataManager.saveDataset(saveData);
-                fprintf('Results saved to: %s\n', savedFile);
+                % DataManagerを使用して保存
+                obj.dataManager.saveDataset(saveData, savePath);
+                fprintf('Results saved to: %s\n', savePath);
 
             catch ME
                 error('Failed to save results: %s', ME.message);

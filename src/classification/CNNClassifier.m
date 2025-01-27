@@ -35,16 +35,14 @@ classdef CNNClassifier < handle
 
             try                
                 fprintf('\n=== Starting CNN Training ===\n');
-
                 % データの形状を確認して必要に応じて変換
                 if ndims(processedData) ~= 3
                     [channels, samples] = size(processedData);
                     processedData = reshape(processedData, [channels, samples, 1]);
                 end
-                
+
                 % データ分割（学習用/訓練用）
                 [trainData, trainLabels, testData, testLabels] = obj.splitDataset(processedData, processedLabel);
-                
                 prepTrainData = obj.prepareDataForCNN(trainData{1});
                 prepTestData = obj.prepareDataForCNN(testData{1});
 
@@ -61,14 +59,13 @@ classdef CNNClassifier < handle
 
                 % 性能指標の更新
                 obj.updatePerformanceMetrics(testMetrics);
-                
                 % 交差検証の実行
-                crossValidationResults = [];        
+                crossValidationResults = [];
                 if obj.params.classifier.cnn.training.validation.enable
                     crossValidationResults = obj.performCrossValidation(processedData, processedLabel);
                     fprintf('Cross-validation mean accuracy: %.2f%% (±%.2f%%)\n', ...
-                        crossValidationResults.meanAccuracy * 100, ...
-                        crossValidationResults.stdAccuracy * 100);
+                    crossValidationResults.meanAccuracy * 100, ...
+                    crossValidationResults.stdAccuracy * 100);
                 end
 
                 % 結果の構築
@@ -83,13 +80,16 @@ classdef CNNClassifier < handle
                 % 結果の表示
                 obj.displayResults();
 
+                % すべてのウィンドウを閉じる
+                close all;  % 追加
+
             catch ME
                 fprintf('\n=== Error in CNN Training ===\n');
                 fprintf('Error message: %s\n', ME.message);
                 fprintf('Error stack trace:\n');
                 for i = 1:length(ME.stack)
                     fprintf('  File: %s\n  Line: %d\n  Function: %s\n\n', ...
-                        ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
+                    ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
                 end
                 rethrow(ME);
             end

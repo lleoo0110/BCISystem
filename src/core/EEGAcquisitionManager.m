@@ -1,3 +1,4 @@
+
 classdef EEGAcquisitionManager < handle
     properties (Access = private)
         % 各種マネージャーインスタンス
@@ -98,6 +99,49 @@ classdef EEGAcquisitionManager < handle
             obj.emgSampleCount = 0;
         end
         
+        function delete(obj)
+            try
+                % タイマーの停止と削除
+                if ~isempty(obj.acquisitionTimer)
+                    % タイマーが実行中かどうかを確認
+                    if isa(obj.acquisitionTimer, 'timer')
+                        if isvalid(obj.acquisitionTimer)
+                            if strcmp(obj.acquisitionTimer.Running, 'on')
+                                stop(obj.acquisitionTimer);
+                                % タイマーが完全に停止するまで待機
+                                while strcmp(obj.acquisitionTimer.Running, 'on')
+                                    pause(0.1);
+                                end
+                            end
+                            delete(obj.acquisitionTimer);
+                        end
+                    end
+                    obj.acquisitionTimer = [];
+                end
+
+                % UDPManagerのクリーンアップ
+                if ~isempty(obj.udpManager)
+                    delete(obj.udpManager);
+                    obj.udpManager = [];
+                end
+
+                % 一時ファイルの削除
+                if ~isempty(obj.tempDataFiles)
+                    for i = 1:length(obj.tempDataFiles)
+                        if exist(obj.tempDataFiles{i}, 'file')
+                            delete(obj.tempDataFiles{i});
+                        end
+                    end
+                    obj.tempDataFiles = {};
+                end
+
+            catch ME
+                warning(ME.identifier, '%s', ME.message);
+                % エラースタックの表示（デバッグ用）
+                disp(getReport(ME, 'extended'));
+            end
+        end
+        
         function start(obj)
             if ~obj.isRunning
                 obj.isRunning = true;
@@ -128,14 +172,15 @@ classdef EEGAcquisitionManager < handle
 
                     % タイマーの停止を最優先
                     if ~isempty(obj.acquisitionTimer)
-                        if isa(obj.acquisitionTimer, 'timer') && isvalid(obj.acquisitionTimer)
-                            if strcmp(obj.acquisitionTimer.Running, 'on')
-                                stop(obj.acquisitionTimer);
-                                % タイマーが完全に停止するまで待機
-                                pause(1); % 短時間待機して停止を確認
+                        % タイマーが実行中かどうかを確認
+                        if strcmp(obj.acquisitionTimer.Running, 'on')
+                            stop(obj.acquisitionTimer);
+                            % タイマーが完全に停止するまで待機
+                            while strcmp(obj.acquisitionTimer.Running, 'on')
+                                pause(0.1);
                             end
-                            delete(obj.acquisitionTimer);
                         end
+                        delete(obj.acquisitionTimer);
                         obj.acquisitionTimer = [];
                     end
 
@@ -147,6 +192,9 @@ classdef EEGAcquisitionManager < handle
                     % データのマージと保存
                     obj.mergeAndSaveData();
 
+                    % GUIの終了前に全てのタイマーが完全に停止したことを確認
+                    pause(0.2); % 完全な停止を確実にするための短い待機
+
                     % GUIの終了
                     if ~isempty(obj.guiController)
                         obj.guiController.closeAllWindows();
@@ -157,50 +205,21 @@ classdef EEGAcquisitionManager < handle
 
                 catch ME
                     warning(ME.identifier, '%s', ME.message);
-                    % クリーンアップ中のエラーを処理
-                    if ~isempty(obj.acquisitionTimer) && isvalid(obj.acquisitionTimer)
-                        delete(obj.acquisitionTimer);
+                    % エラーが発生しても、リソースのクリーンアップを試みる
+                    try
+                        if ~isempty(obj.acquisitionTimer)
+                            delete(obj.acquisitionTimer);
+                        end
+                        if ~isempty(obj.guiController)
+                            obj.guiController.closeAllWindows();
+                        end
+                        delete(obj);
+                    catch
+                        % クリーンアップ中のエラーは無視
                     end
-                    if ~isempty(obj.guiController)
-                        obj.guiController.closeAllWindows();
-                    end
-                    delete(obj);
                 end
             end
         end
-
-        function delete(obj)
-            try
-                % タイマーの停止と削除
-                if ~isempty(obj.acquisitionTimer)
-                    if isa(obj.acquisitionTimer, 'timer') && isvalid(obj.acquisitionTimer)
-                        if strcmp(obj.acquisitionTimer.Running, 'on')
-                            stop(obj.acquisitionTimer);
-                            % タイマーが完全に停止するまで待機
-                            pause(0.1); % 停止が完了するまでの短い待機
-                        end
-                        delete(obj.acquisitionTimer);
-                    end
-                    obj.acquisitionTimer = [];
-                end
-
-                % 一時ファイルの削除
-                if ~isempty(obj.tempDataFiles)
-                    for i = 1:length(obj.tempDataFiles)
-                        if exist(obj.tempDataFiles{i}, 'file')
-                            delete(obj.tempDataFiles{i});
-                        end
-                    end
-                    obj.tempDataFiles = {};
-                end
-
-            catch ME
-                warning(ME.identifier, '%s', ME.message);
-                % エラースタックの表示（デバッグ用）
-                disp(getReport(ME, 'extended'));
-            end
-        end
-
         
         function pause(obj)
             if obj.isRunning && ~obj.isPaused
@@ -509,8 +528,8 @@ classdef EEGAcquisitionManager < handle
                     'fileIndex', obj.fileIndex, ...
                     'sampleRate', obj.params.device.sampleRate);
 
-                % データの保存
-                save(tempFilePath, '-struct', 'tempData', '-v7.3');
+                % DataManagerを使用してデータを保存
+                obj.dataManager.saveDataset(tempData, tempFilePath);
                 obj.tempDataFiles{end+1} = tempFilePath;
 
                 % メモリのクリア
@@ -686,7 +705,7 @@ classdef EEGAcquisitionManager < handle
                     saveData.emgLabels = mergedEMGLabels;
                 end
 
-                % データの保存
+                % DataManagerを使用して最終データを保存
                 savedFile = obj.dataManager.saveDataset(saveData);
                 fprintf('Final data saved to: %s\n', savedFile);
 
@@ -705,8 +724,34 @@ classdef EEGAcquisitionManager < handle
         function initializeOnline(obj)
             try
                 % オンライン処理用の学習済みモデル読み込み
-                loadedData = DataLoader.loadDataBrowserWithPrompt('オンライン処理');
-                
+                loadedData = DataLoader.loadDataBrowserWithPrompt('analysis');
+
+                % 複数ファイルが選択された場合は最初のファイルを使用
+                if iscell(loadedData)
+                    if isempty(loadedData)
+                        error('No valid data loaded');
+                    end
+                    loadedData = loadedData{1};
+                end
+
+                % デバイス設定とデータの整合性チェック
+                if size(loadedData.rawData, 1) ~= obj.params.device.channelCount
+                    % チャンネル情報の表示
+                    obj.displayChannelInfo(obj.params, loadedData);
+
+                    errordlg(sprintf(['デバイスとデータの設定が一致しません。\n\n', ...
+                        'デバイス設定: %s (%dチャンネル)\n', ...
+                        'データ: %dチャンネル\n\n', ...
+                        'デバイス設定を確認してください。'], ...
+                        obj.params.device.name, ...
+                        obj.params.device.channelCount, ...
+                        size(loadedData.rawData, 1)), ...
+                        'デバイス設定エラー');
+                    error('DeviceConfig:ChannelMismatch', ...
+                        'デバイス設定(%dch)とデータ(%dch)のチャンネル数が一致しません。', ...
+                        obj.params.device.channelCount, size(loadedData.rawData, 1));
+                end
+
                 % 正規化パラメータの読み込みと検証
                 if obj.params.signal.preprocessing.normalize.enable
                     if isfield(loadedData, 'processingInfo') && ...
@@ -758,6 +803,19 @@ classdef EEGAcquisitionManager < handle
                 obj.stop();
                 rethrow(ME);
             end
+        end
+
+        function displayChannelInfo(~, params, data)
+            fprintf('\nチャンネル情報:\n');
+            fprintf('デバイス設定: %s (%dチャンネル)\n', ...
+                params.device.name, params.device.channelCount);
+            fprintf('設定チャンネル: %s\n', strjoin(params.device.channels, ', '));
+            fprintf('データチャンネル数: %d\n', size(data.rawData, 1));
+
+            if isfield(data, 'channelNames')
+                fprintf('データチャンネル: %s\n', strjoin(data.channelNames, ', '));
+            end
+            fprintf('\n');
         end
         
         function validateNormalizationParams(obj, normParams)
@@ -1190,7 +1248,8 @@ classdef EEGAcquisitionManager < handle
                 displayData = struct();
                 
                 % バンドパスフィルタの設計(1-45Hz)
-                [b, a] = butter(4, [1 45]/(obj.params.device.sampleRate/2), 'bandpass');
+                fs = obj.params.device.sampleRate;
+                [b, a] = butter(4, [1 45]/(fs/2), 'bandpass');
 
                 % フィルタリングを各チャンネルに適用
                 filteredData = zeros(size(obj.rawData));
@@ -1245,7 +1304,7 @@ classdef EEGAcquisitionManager < handle
                 % ERSP表示の準備
                 if obj.params.gui.display.visualization.enable.ersp && ...
                    isfield(displayData, 'rawData') && ...
-                   ~isempty(filteredData)
+                   ~isempty(displayData.rawData)
 
                     % 最小データ長のチェック
                     minSamples = 2 * obj.params.gui.display.visualization.ersp.numFreqs;
