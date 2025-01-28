@@ -174,6 +174,19 @@ classdef EEGAnalyzer < handle
                     % 単一ファイルの処理
                     fprintf('\n=== 単一ファイル処理開始 ===\n');
 
+                    % デフォルトのファイル名を設定
+                    [~, originalName, ~] = fileparts(filenames{1});
+                    timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+                    defaultFileName = sprintf('%s_analysis_%s.mat', originalName, timestamp);
+
+                    % 保存パスの設定
+                    [saveName, saveDir] = uiputfile('*.mat', '保存先を選択してください', defaultFileName);
+                    if saveName == 0
+                        fprintf('保存がキャンセルされました。\n');
+                        return;
+                    end
+                    savePath = fullfile(saveDir, saveName);
+
                     % データ設定と前処理
                     fprintf('前処理パイプラインを実行中...\n');
                     obj.setData(loadedData{1});
@@ -188,20 +201,6 @@ classdef EEGAnalyzer < handle
                         obj.performClassification();
                     end
 
-                    % タイムスタンプ付きのデフォルトファイル名を生成
-                    [~, baseFileName, ~] = fileparts(filenames{1});
-                    timestamp = datestr(now, 'yyyymmdd_HHMMSS');
-                    defaultName = [baseFileName '_analysis_' timestamp '.mat'];
-
-                    % 保存パスの設定
-                    [saveName, saveDir] = uiputfile(defaultName, '保存先を選択してください');
-
-                    if saveName == 0
-                        fprintf('保存がキャンセルされました。\n');
-                        return;
-                    end
-
-                    savePath = fullfile(saveDir, saveName);
                     fprintf('結果を保存中: %s\n', savePath);
                     obj.saveResults(savePath);
                     fprintf('=== 単一ファイル処理完了 ===\n');
