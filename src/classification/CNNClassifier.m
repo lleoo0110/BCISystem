@@ -14,6 +14,9 @@ classdef CNNClassifier < handle
         
         % 過学習監視用
         overfitMetrics     % 過学習メトリクス
+        
+        % GPUを使用するかどうか
+        useGPU = false;
     end
     
     properties (Access = public)
@@ -25,6 +28,7 @@ classdef CNNClassifier < handle
             obj.params = params;
             obj.isEnabled = params.classifier.cnn.enable;
             obj.isInitialized = false;
+            obj.useGPU = params.classifier.cnn.gpu;
             obj.initializeProperties();
         end
         
@@ -61,10 +65,10 @@ classdef CNNClassifier < handle
                 % 性能指標の更新
                 obj.updatePerformanceMetrics(testMetrics);
                 % 交差検証の実行
-                crossValidationResults =[];
+                crossValidationResults = [];
                 if obj.params.classifier.cnn.training.validation.enable
                     crossValidationResults = obj.performCrossValidation(processedData, processedLabel);
-                    fprintf('Cross-validation mean accuracy: %.2f%% (±%.2f%%)\n',...
+                    fprintf('Cross-validation mean accuracy: %.2f%% (\u00b1%.2f%%)\n',...
                     crossValidationResults.meanAccuracy * 100,...
                     crossValidationResults.stdAccuracy * 100);
                 end
@@ -236,7 +240,7 @@ classdef CNNClassifier < handle
                 error('Data splitting failed: %s', ME.message);
             end
         end
-
+        
         function [cnnModel, trainInfo] = trainCNNModel(obj, trainData, trainLabels, testData, testLabels)
             try
                 % データの準備
@@ -265,6 +269,12 @@ classdef CNNClassifier < handle
                     'FinalEpoch', 0 ...
                 );
 
+                % 実行環境の選択
+                executionEnvironment = 'cpu';
+                if obj.useGPU && canUseGPU()
+                    executionEnvironment = 'gpu';
+                end
+
                 % トレーニングオプションの設定
                 options = trainingOptions(obj.params.classifier.cnn.training.optimizer.type, ...
                     'InitialLearnRate', obj.params.classifier.cnn.training.optimizer.learningRate, ...
@@ -272,7 +282,7 @@ classdef CNNClassifier < handle
                     'MiniBatchSize', obj.params.classifier.cnn.training.miniBatchSize, ...
                     'Plots', 'training-progress', ...
                     'OutputFcn', @(info)obj.trainingOutputFcn(info), ...
-                    'ExecutionEnvironment', 'cpu', ...
+                    'ExecutionEnvironment', executionEnvironment, ...
                     'Verbose', true);
 
                 % 検証データの設定
