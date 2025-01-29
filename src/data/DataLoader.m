@@ -1,14 +1,8 @@
 classdef DataLoader
     methods (Static)
-        function loadedData = loadDataBrowserWithPrompt(purpose, options)
-            % 目的に応じたデータ読み込みを行う
-            % 
-            % 入力:
-            %   purpose - 読み込みの目的 ('analysis', 'online', 'normalization' など)
-            %   options - 読み込みオプション (省略可)
-            %
-            % 出力:
-            %   loadedData - 読み込まれたデータ
+        function [loadedData, fileInfo] = loadDataBrowserWithPrompt(purpose, options)
+            % 出力を拡張し、ファイル情報も返すように修正
+            % fileInfo: ファイル名と保存パスの情報を含む構造体
             
             try
                 % デフォルトオプションの設定
@@ -25,6 +19,7 @@ classdef DataLoader
                 
                 if isequal(filenames, 0)
                     loadedData = {};
+                    fileInfo = [];
                     return;
                 end
                 
@@ -38,11 +33,20 @@ classdef DataLoader
                     loadMode = DataLoader.selectLoadMode();
                     if isempty(loadMode)
                         loadedData = {};
+                        fileInfo = [];
                         return;
                     end
                 else
                     loadMode = 'individual';
                 end
+                
+                % ファイル情報の構造体を作成
+                fileInfo = struct();
+                fileInfo.filenames = filenames;
+                fileInfo.filepath = filepath;
+                fileInfo.fullpaths = cellfun(@(f) fullfile(filepath, f), ...
+                    filenames, 'UniformOutput', false);
+                fileInfo.loadMode = loadMode;
                 
                 % データの読み込みと検証
                 switch loadMode
@@ -209,25 +213,62 @@ classdef DataLoader
             % 複数ファイルの統合読み込み
             try
                 fprintf('データ統合読み込みを開始...\n');
-                
+
                 % DataManagerを使用してデータを読み込み
                 dataManager = DataManager(options);
-                loadedData = cell(1, length(filenames));
-                
-                % 各ファイルの読み込みと検証
+
+                % 統合データの初期化
+                integratedData = struct();
+                integratedData.rawData = [];
+                integratedData.labels = [];
+                totalSamples = 0;  % 累積サンプル数の追跡用
+
+                % 各ファイルの読み込みと統合
                 for i = 1:length(filenames)
+                    fprintf('ファイル %d/%d を読み込み中: %s\n', i, length(filenames), filenames{i});
+
+                    % 現在のファイルを読み込み
                     fullpath = fullfile(filepath, filenames{i});
                     currentData = dataManager.loadDataset(fullpath);
                     [currentData, ~] = DataLoader.validateData(currentData, purpose);
-                    loadedData{i} = currentData;
-                    fprintf('読み込み完了 (%d/%d): %s\n', i, length(filenames), filenames{i});
+
+                    % rawDataの統合
+                    if isfield(currentData, 'rawData') && ~isempty(currentData.rawData)
+                        integratedData.rawData = [integratedData.rawData, currentData.rawData];
+
+                        % ラベルの統合とサンプル数の更新
+                        if isfield(currentData, 'labels') && ~isempty(currentData.labels)
+                            currentLabels = currentData.labels;
+
+                            % 各ラベルのサンプル数を累積サンプル数に基づいて更新
+                            for j = 1:length(currentLabels)
+                                currentLabels(j).sample = currentLabels(j).sample + totalSamples;
+                            end
+
+                            % 更新したラベルを統合
+                            integratedData.labels = [integratedData.labels; currentLabels];
+                        end
+
+                        % 累積サンプル数を更新
+                        totalSamples = totalSamples + size(currentData.rawData, 2);
+                    end
+
+                    fprintf('ファイル %d の統合完了\n', i);
                 end
-                
+
+                % 統合結果の表示
+                fprintf('\n統合結果:\n');
+                fprintf('総サンプル数: %d\n', size(integratedData.rawData, 2));
+                fprintf('総ラベル数: %d\n', length(integratedData.labels));
+
+                % 統合データをセル配列の最初の要素として返す
+                loadedData = {integratedData};
+
             catch ME
                 error('DataLoader:BatchLoadError', 'バッチ読み込みエラー: %s', ME.message);
             end
         end
-        
+
         function loadedData = loadIndividualData(filepath, filenames, purpose, options)
             % 個別ファイルの読み込み
             try
