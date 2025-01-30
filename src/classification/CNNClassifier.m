@@ -625,6 +625,11 @@ classdef CNNClassifier < handle
                     cvResults.folds.classwise{i} = metrics.classwise;
 
                     fprintf('Fold %d accuracy: %.2f%%\n', i, cvResults.folds.accuracy(i) * 100);
+
+                    % 各フォールド終了後にGPUメモリを解放
+                    if obj.useGPU
+                        gpuDevice(1);
+                    end
                 end
 
                 % 統計の計算
