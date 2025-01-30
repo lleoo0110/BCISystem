@@ -88,6 +88,11 @@ classdef CNNClassifier < handle
                 % すべてのウィンドウを閉じる
                 close all;  % 追加
 
+                % GPUメモリを解
+                if obj.useGPU
+                    gpuDevice(); % または gpuDevice(1); のように、使用していたGPUデバイスを指定
+                end
+                
             catch ME
                 fprintf('\n=== Error in CNN Training ===\n');
                 fprintf('Error message: %s\n', ME.message);
@@ -304,6 +309,11 @@ classdef CNNClassifier < handle
                 trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
 
                 fprintf('学習完了: 最終エポック %d\n', trainInfo.FinalEpoch);
+
+                % GPUメモリを解
+                if obj.useGPU
+                    gpuDevice(); % または gpuDevice(1); のように、使用していたGPUデバイスを指定
+                end
 
             catch ME
                 fprintf('trainCNNModelでエラーが発生: %s\n', ME.message);
