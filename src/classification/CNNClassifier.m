@@ -87,7 +87,7 @@ classdef CNNClassifier < handle
 
                 % GPUメモリを解放
                 if obj.useGPU
-                    gpuDevice(); % または gpuDevice(1); のように、使用していたGPUデバイスを指定
+                    reset(gpuDevice()); % GPUメモリのリセット
                 end
 
             catch ME
@@ -101,7 +101,7 @@ classdef CNNClassifier < handle
 
                 % GPUメモリを解放
                 if obj.useGPU
-                    gpuDevice(); % または gpuDevice(1); のように、使用していたGPUデバイスを指定
+                    reset(gpuDevice()); % GPUメモリのリセット
                 end
 
                 rethrow(ME);
@@ -189,84 +189,104 @@ classdef CNNClassifier < handle
         end
 
         function [cnnModel, trainInfo] = trainCNNModel(obj, trainData, trainLabels, testData, testLabels)
-            try
-                % データの準備
-                if ndims(trainData) ~= 4
-                    trainData = obj.prepareDataForCNN(trainData);
-                end
+           try
+               % GPU利用可能性チェック 
+               if obj.useGPU
+                   gpuInfo = gpuDevice();
+                   fprintf('GPU利用可能: %s\n', gpuInfo.Name);
+               else
+                   fprintf('GPUが利用できないため、CPUで実行します\n');
+               end
+        
+               % データの形状変換
+               if ndims(trainData) ~= 4
+                   trainData = obj.prepareDataForCNN(trainData);
+               end
+        
+               % ラベルのカテゴリカル変換
+               uniqueLabels = unique(trainLabels);
+               trainLabels = categorical(trainLabels, uniqueLabels);
+        
+               % GPU転送
+               if obj.useGPU
+                   trainData = gpuArray(trainData);
+                   trainLabels = gpuArray(trainLabels);
+               end
+        
+               % テストデータの処理
+               if ~isempty(testData)
+                   if ndims(testData) ~= 4
+                       testData = obj.prepareDataForCNN(testData);
+                   end
+                   testLabels = categorical(testLabels, uniqueLabels);
 
-                % ラベルのカテゴリカル変換
-                uniqueLabels = unique(trainLabels);
-                trainLabels = categorical(trainLabels, uniqueLabels);
-
-                % テストデータの処理
-                if ~isempty(testData)
-                    if ndims(testData) ~= 4
-                        testData = obj.prepareDataForCNN(testData);
-                    end
-                    testLabels = categorical(testLabels, uniqueLabels);
-                end
-
-                % トレーニング情報の初期化
-                trainInfo = struct(...
-                    'TrainingLoss', [], ...
-                    'ValidationLoss', [], ...
-                    'TrainingAccuracy', [], ...
-                    'ValidationAccuracy', [], ...
-                    'FinalEpoch', 0 ...
-                );
-
-                % 実行環境の選択
-                executionEnvironment = 'cpu';
-                if obj.useGPU && canUseGPU()
-                    executionEnvironment = 'gpu';
-                end
-
-                % トレーニングオプションの設定
-                options = trainingOptions(obj.params.classifier.cnn.training.optimizer.type, ...
-                    'InitialLearnRate', obj.params.classifier.cnn.training.optimizer.learningRate, ...
-                    'MaxEpochs', obj.params.classifier.cnn.training.maxEpochs, ...
-                    'MiniBatchSize', obj.params.classifier.cnn.training.miniBatchSize, ...
-                    'Plots', 'none', ...
-                    'OutputFcn', @(info)obj.trainingOutputFcn(info), ...
-                    'ExecutionEnvironment', executionEnvironment, ...
-                    'Verbose', true);
-
-                % 検証データの設定
-                if ~isempty(testData) && ~isempty(testLabels)
-                    options.ValidationData = {testData, testLabels};
-                    options.ValidationFrequency = obj.params.classifier.cnn.training.validation.frequency;
-                    options.ValidationPatience = obj.params.classifier.cnn.training.validation.patience;
-                    fprintf('検証データを使用して学習を開始します\n');
-                else
-                    fprintf('検証データなしで学習を開始します\n');
-                end
-
-                % レイヤーの構築とモデルの学習
-                layers = obj.buildCNNLayers(trainData);
-                [cnnModel, trainHistory] = trainNetwork(trainData, trainLabels, layers, options);
-
-                % 学習履歴の保存
-                trainInfo.History = trainHistory;
-                trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
-
-                fprintf('学習完了: 最終エポック %d\n', trainInfo.FinalEpoch);
-
-                % GPUメモリを解放
-                if obj.useGPU
-                    gpuDevice(); % または gpuDevice(1); のように、使用していたGPUデバイスを指定
-                end
-
-            catch ME
-                fprintf('trainCNNModelでエラーが発生: %s\n', ME.message);
-
-                % GPUメモリを解放
-                if obj.useGPU
-                    gpuDevice(); % または gpuDevice(1); のように、使用していたGPUデバイスを指定
-                end
-                
-                rethrow(ME);
-            end
+                   % GPUにデータ転送
+                   if obj.useGPU
+                       testData = gpuArray(testData);
+                       testLabels = gpuArray(testLabels);
+                   end
+               end
+        
+               % トレーニング情報の初期化
+               trainInfo = struct(...
+                   'TrainingLoss', [], ...
+                   'ValidationLoss', [], ...
+                   'TrainingAccuracy', [], ...
+                   'ValidationAccuracy', [], ...
+                   'FinalEpoch', 0 ...
+               );
+        
+               % 実行環境の選択
+               executionEnvironment = 'cpu';
+               if obj.useGPU
+                   executionEnvironment = 'gpu';
+               end
+        
+               % トレーニングオプションの設定
+               options = trainingOptions(obj.params.classifier.cnn.training.optimizer.type, ...
+                   'InitialLearnRate', obj.params.classifier.cnn.training.optimizer.learningRate, ...
+                   'MaxEpochs', obj.params.classifier.cnn.training.maxEpochs, ...
+                   'MiniBatchSize', obj.params.classifier.cnn.training.miniBatchSize, ...
+                   'Plots', 'none', ...
+                   'OutputFcn', @(info)obj.trainingOutputFcn(info), ...
+                   'ExecutionEnvironment', executionEnvironment, ...
+                   'Verbose', true);
+        
+               % 検証データの設定
+               if ~isempty(testData) && ~isempty(testLabels)
+                   options.ValidationData = {testData, testLabels};
+                   options.ValidationFrequency = obj.params.classifier.cnn.training.validation.frequency;
+                   options.ValidationPatience = obj.params.classifier.cnn.training.validation.patience;
+                   fprintf('検証データを使用して学習を開始します\n');
+               else
+                   fprintf('検証データなしで学習を開始します\n');
+               end
+        
+               % レイヤーの構築とモデルの学習
+               layers = obj.buildCNNLayers(trainData);
+               [cnnModel, trainHistory] = trainNetwork(trainData, trainLabels, layers, options);
+        
+               % 学習履歴の保存
+               trainInfo.History = trainHistory;
+               trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
+        
+               fprintf('学習完了: 最終エポック %d\n', trainInfo.FinalEpoch);
+        
+               % GPUメモリを解放
+               if obj.useGPU
+                   reset(gpuDevice());
+               end
+        
+           catch ME
+               fprintf('trainCNNModelでエラーが発生: %s\n', ME.message);
+        
+               % GPUメモリを解放
+               if obj.useGPU
+                   reset(gpuDevice());
+               end
+        
+               rethrow(ME);
+           end
         end
 
         function layers = buildCNNLayers(obj, data)

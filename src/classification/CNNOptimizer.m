@@ -55,13 +55,13 @@ classdef CNNOptimizer < handle
                         );
 
                         fprintf('組み合わせ %d/%d: 精度 = %.4f\n', i, size(paramSets, 1), trainResults.performance.accuracy);
-
                     catch ME
                         warning('組み合わせ%dでエラー発生: %s', i, ME.message);
                         results{i} = struct('params', paramSets(i,:), 'performance', -inf, 'model', []);
+
                         % GPUメモリを解放
                         if obj.useGPU
-                            gpuDevice(); % または gpuDevice(1); のように、使用していたGPUデバイスを指定
+                            reset(gpuDevice()); % GPUメモリのリセット
                         end
                     end
                 end
