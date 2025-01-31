@@ -402,12 +402,12 @@ function preset = template()
             ), ...
             'optimization', struct(...           % ハイパーパラメータ最適化設定
                 'searchSpace', struct(...
-                    'learningRate', [0.0001, 0.001], ...      % 学習率の探索範囲
+                    'learningRate', [1e-4, 1e-3], ...      % 学習率の探索範囲
                     'miniBatchSize', [32, 64], ...            % バッチサイズの探索範囲
-                    'kernelSize', {[3,3], [5,5]}, ...         % カーネルサイズの選択肢
-                    'numFilters', [32, 64, 128], ...          % フィルタ数の選択肢
+                    'kernelSize', [3, 5], ...         % カーネルサイズの選択肢
+                    'numFilters', [16, 64], ...          % フィルタ数の選択肢
                     'dropoutRate', [0.2, 0.5], ...            % ドロップアウト率の探索範囲
-                    'fcUnits', [128, 256, 512] ...           % 全結合層ユニット数の選択肢
+                    'fcUnits', [64, 256] ...           % 全結合層ユニット数の選択肢
                 ), ...
                 'searchStrategy', struct(...                  % 探索戦略の設定
                     'method', 'bayesian', ...                 % ベイジアン最適化を使用
