@@ -831,9 +831,9 @@ classdef GUIControllerManager < handle
 
                 % カラーマップの設定
                 if obj.params.gui.display.visualization.scale.auto
-                    caxis(obj.plotHandles.ersp, 'auto');
+                    clim(obj.plotHandles.ersp, 'auto');
                 else
-                    caxis(obj.plotHandles.ersp, obj.params.gui.display.visualization.ersp.scale);
+                    clim(obj.plotHandles.ersp, obj.params.gui.display.visualization.ersp.scale);
                 end
 
                 colormap(obj.plotHandles.ersp, obj.params.gui.display.visualization.ersp.colormap.type);

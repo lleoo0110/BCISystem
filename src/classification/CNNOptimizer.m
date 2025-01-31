@@ -1,279 +1,197 @@
 classdef CNNOptimizer < handle
     properties (Access = private)
-        params             % パラメータ設定
+        params              % パラメータ設定
+        optimizedModel      % 最適化されたモデル
+        bestParams         % 最良パラメータ
+        bestPerformance    % 最良性能値
         searchSpace        % パラメータ探索空間
-        bestParams        % 最良パラメータ
-        bestPerformance   % 最良性能値
-        optimizationLogs  % 最適化ログ
-        useGPU           % GPU使用フラグ
+        optimizationHistory % 最適化履歴
+        useGPU            % GPUを使用するかどうか
     end
     
     methods (Access = public)
         function obj = CNNOptimizer(params)
             obj.params = params;
-            obj.useGPU = params.classifier.cnn.gpu;
             obj.initializeSearchSpace();
             obj.bestPerformance = -inf;
-            obj.optimizationLogs = struct('iteration', [], 'params', [], 'performance', []);
+            obj.optimizationHistory = struct('params', {}, 'performance', {}, 'model', {});
+            obj.useGPU = params.classifier.cnn.gpu;
         end
         
-                function [optimizedParams, bestPerformance, finalModel] = optimize(obj, data, labels)
+        function [optimizedParams, performance, model] = optimize(obj, data, labels)
             try
                 if ~obj.params.classifier.cnn.optimize
                     fprintf('CNN最適化は無効です。デフォルトパラメータを使用します。\n');
-                    optimizedParams = [];
-                    bestPerformance = [];
-                    finalModel = [];
+                    optimizedParams = []; performance = []; model = [];
                     return;
                 end
 
-                fprintf('=== CNN最適化開始 ===\n');
-                
-                % 最適化問題の定義
-                optimVars = obj.defineOptimizationVariables();
-                objFcn = @(x) obj.evaluateParameters(x, data, labels);
+                % パラメータセットの生成
+                numSamples = 30;
+                paramSets = obj.generateParameterSets(numSamples);
+                fprintf('パラメータ%dセットで最適化を開始します...\n', size(paramSets, 1));
 
-                % ベイジアン最適化の実行
-                options = obj.configureOptimization();
-                
-                % bayesoptの実行
-                results = bayesopt(objFcn, optimVars, ...
-                    'MaxObjectiveEvaluations', options.MaxObjectiveEvaluations, ...
-                    'UseParallel', options.UseParallel, ...
-                    'AcquisitionFunctionName', options.AcquisitionFunctionName, ...
-                    'Verbose', 1);
+                results = cell(size(paramSets, 1), 1);
+                baseParams = obj.params;
 
-                % 結果を構造体として取得
-                optimizedParams = struct();
-                bestPoint = results.XAtMinObjective;
-                bestPoint = table2struct(bestPoint);
-                
-                % 構造体フィールドの設定
-                optimizedParams.learningRate = bestPoint.learningRate;
-                optimizedParams.miniBatchSize = bestPoint.miniBatchSize;
-                optimizedParams.kernelSize = bestPoint.kernelSize;
-                optimizedParams.numFilters = bestPoint.numFilters;
-                optimizedParams.dropoutRate = bestPoint.dropoutRate;
-                optimizedParams.fcUnits = bestPoint.fcUnits;
-                
-                bestPerformance = -results.MinObjective;
+                % 検索空間のローカルコピーを作成
+                kernelSizeLocal = obj.searchSpace.kernelSize;
 
-                % 最終モデルの学習
-                finalParams = obj.updateParameters(optimizedParams);
-                cnn = CNNClassifier(finalParams);
-                finalResults = cnn.trainCNN(data, labels);
-                finalModel = finalResults.model;
+                parfor i = 1:size(paramSets, 1)
+                    try
+                        % パラメータの更新
+                        localParams = baseParams;
+                        localParams = obj.updateCNNParameters(localParams, paramSets(i,:), kernelSizeLocal);
 
-                % 結果の表示
-                obj.displayResults(optimizedParams, bestPerformance);
+                        % CNNの学習と評価
+                        cnn = CNNClassifier(localParams);
+                        trainResults = cnn.trainCNN(data, labels);
 
-                % GPUメモリのクリーンアップ
-                if obj.useGPU
-                    gpuDevice(1);
+                        % 結果の保存
+                        results{i} = struct(...
+                            'params', paramSets(i,:), ...
+                            'performance', trainResults.performance.accuracy, ...
+                            'model', trainResults.model ...
+                        );
+
+                        fprintf('組み合わせ %d/%d: 精度 = %.4f\n', i, size(paramSets, 1), trainResults.performance.accuracy);
+
+                    catch ME
+                        warning('組み合わせ%dでエラー発生: %s', i, ME.message);
+                        results{i} = struct('params', paramSets(i,:), 'performance', -inf, 'model', []);
+                        % GPUメモリを解放
+                        if obj.useGPU
+                            gpuDevice(); % または gpuDevice(1); のように、使用していたGPUデバイスを指定
+                        end
+                    end
                 end
+
+                [optimizedParams, performance, model] = obj.processFinalResults(results);
+                obj.updateOptimizationHistory(results);
+                obj.displayOptimizationResults();
 
             catch ME
-                obj.handleOptimizationError(ME);
-                rethrow(ME);
-            end
-        end
-
-        function loss = evaluateParameters(obj, x, data, labels)
-            try
-                % パラメータの更新と検証
-                currentParams = obj.updateParameters(x);
-                
-                % K分割交差検証
-                numFolds = currentParams.classifier.cnn.training.validation.kfold;
-                cv = cvpartition(labels, 'KFold', numFolds);
-                
-                performances = zeros(numFolds, 1);
-                
-                % 各フォールドでの評価
-                parfor i = 1:numFolds
-                    [trainIdx, testIdx] = obj.getValidationIndices(cv, i);
-                    performance = obj.evaluateFold(currentParams, data, labels, trainIdx, testIdx);
-                    performances(i) = performance;
-                end
-                
-                % 平均性能の計算（負の値として返す - 最小化問題として解く）
-                loss = -mean(performances);
-                
-                % 過学習チェック
-                if std(performances) > 0.1
-                    warning('高い性能変動を検出: std=%.3f', std(performances));
-                end
-                
-                % ログの更新
-                obj.updateOptimizationLog(x, -loss);
-                
-            catch ME
-                warning(ME.identifier, '%s', ME.message);
-                loss = inf;
+                error('CNN最適化に失敗: %s\n%s', ME.message, getReport(ME, 'extended'));
             end
         end
     end
     
     methods (Access = private)
         function initializeSearchSpace(obj)
-            % テンプレートパラメータから探索空間を設定
-            optParams = obj.params.classifier.cnn.optimization.searchSpace;
-            
-            obj.searchSpace = struct(...
-                'learningRate', optParams.learningRate, ...
-                'miniBatchSize', optParams.miniBatchSize, ...
-                'kernelSize', optParams.kernelSize, ...
-                'numFilters', optParams.numFilters, ...
-                'dropoutRate', optParams.dropoutRate, ...
-                'fcUnits', optParams.fcUnits);
-            
-            % パラメータの検証
-            obj.validateSearchSpace();
+            obj.searchSpace = obj.params.classifier.cnn.optimization.searchSpace;
+        end
+        
+        function paramSets = generateParameterSets(obj, numSamples)
+            % Latin Hypercube Sampling
+            lhsPoints = lhsdesign(numSamples, 6);
+
+            % パラメータ空間の初期化
+            paramSets = zeros(numSamples, 6);
+
+            % 学習率（対数スケール）
+            lr_range = obj.searchSpace.learningRate;
+            paramSets(:,1) = 10.^(log10(lr_range(1)) + (log10(lr_range(2)) - log10(lr_range(1))) * lhsPoints(:,1));
+
+            % バッチサイズ
+            bs_range = obj.searchSpace.miniBatchSize;
+            paramSets(:,2) = round(bs_range(1) + (bs_range(2) - bs_range(1)) * lhsPoints(:,2));
+
+            % カーネルサイズインデックス（kernelSizeはセル配列）
+            num_kernel_sizes = numel(obj.searchSpace.kernelSize);
+            paramSets(:,3) = ones(numSamples, 1);  % デフォルト値として1を設定
+            if num_kernel_sizes > 1
+                paramSets(:,3) = round(1 + (num_kernel_sizes - 1) * lhsPoints(:,3));
+            end
+
+            % 残りのパラメータ
+            nf_range = obj.searchSpace.numFilters;
+            paramSets(:,4) = round(nf_range(1) + (nf_range(2) - nf_range(1)) * lhsPoints(:,4));
+
+            do_range = obj.searchSpace.dropoutRate;
+            paramSets(:,5) = do_range(1) + (do_range(2) - do_range(1)) * lhsPoints(:,5);
+
+            fc_range = obj.searchSpace.fcUnits;
+            paramSets(:,6) = round(fc_range(1) + (fc_range(2) - fc_range(1)) * lhsPoints(:,6));
         end
 
-        function validateSearchSpace(obj)
-            % 探索空間の値を検証
-            fields = fieldnames(obj.searchSpace);
-            for i = 1:length(fields)
-                field = fields{i};
-                value = obj.searchSpace.(field);
-                
-                if ~isempty(value) && (numel(value) ~= 2 || ~isnumeric(value))
-                    error('Invalid search space for %s: Must be a numeric vector of length 2', field);
+        function params = updateCNNParameters(~, params, paramSet, ~)
+            % カーネルサイズを固定値に設定
+            kernelSize = [3 3]; % デフォルトのカーネルサイズを使用
+
+            params.classifier.cnn.training.optimizer.learningRate = paramSet(1);
+            params.classifier.cnn.training.miniBatchSize = paramSet(2);
+            params.classifier.cnn.architecture.convLayers.conv1.size = kernelSize;
+            params.classifier.cnn.architecture.convLayers.conv1.filters = paramSet(4);
+            params.classifier.cnn.architecture.dropoutLayers.dropout1 = paramSet(5);
+            params.classifier.cnn.architecture.fullyConnected = [paramSet(6)];
+        end
+
+        function metrics = calculatePerformanceMetrics(~, results)
+            metrics = struct();
+            
+            if isfield(results, 'performance') && isfield(results.performance, 'cvAccuracies')
+                metrics.avgAccuracy = mean(results.performance.cvAccuracies);
+                metrics.stdAccuracy = std(results.performance.cvAccuracies);
+            else
+                metrics.avgAccuracy = results.performance.accuracy;
+                metrics.stdAccuracy = 0;
+            end
+            
+            if isfield(results.performance, 'auc')
+                metrics.auc = results.performance.auc;
+            end
+            
+            if isfield(results.performance, 'f1score')
+                metrics.f1score = results.performance.f1score;
+            end
+        end
+
+        function [optimizedParams, performance, model] = processFinalResults(obj, results)
+            validResults = ~cellfun(@isempty, results);
+            performances = cellfun(@(x) x.performance, results(validResults));
+            [obj.bestPerformance, bestIdx] = max(performances);
+            
+            validIndices = find(validResults);
+            bestResult = results{validIndices(bestIdx)};
+            
+            optimizedParams = bestResult.params;
+            performance = bestResult.performance;
+            model = bestResult.model;
+            obj.bestParams = optimizedParams;
+            obj.optimizedModel = model;
+        end
+
+        function updateOptimizationHistory(obj, results)
+            for i = 1:length(results)
+                if ~isempty(results{i})
+                    obj.optimizationHistory(end+1) = struct(...
+                        'params', results{i}.params, ...
+                        'performance', results{i}.performance, ...
+                        'model', results{i}.model);
                 end
-                
-                if value(1) >= value(2)
-                    error('Invalid range for %s: First value must be less than second value', field);
-                end
             end
         end
 
-        function optimVars = defineOptimizationVariables(obj)
-            % 最適化変数の定義
-            optimVars = [
-                optimizableVariable('learningRate', [obj.searchSpace.learningRate(1), obj.searchSpace.learningRate(2)], 'Transform', 'log')
-                optimizableVariable('miniBatchSize', [obj.searchSpace.miniBatchSize(1), obj.searchSpace.miniBatchSize(2)], 'Type', 'integer')
-                optimizableVariable('kernelSize', [obj.searchSpace.kernelSize(1), obj.searchSpace.kernelSize(2)], 'Type', 'integer')
-                optimizableVariable('numFilters', [obj.searchSpace.numFilters(1), obj.searchSpace.numFilters(2)], 'Type', 'integer')
-                optimizableVariable('dropoutRate', [obj.searchSpace.dropoutRate(1), obj.searchSpace.dropoutRate(2)])
-                optimizableVariable('fcUnits', [obj.searchSpace.fcUnits(1), obj.searchSpace.fcUnits(2)], 'Type', 'integer')
-            ];
-        end
+        function displayOptimizationResults(obj)
+            fprintf('\n=== CNN最適化結果 ===\n');
+            fprintf('最良性能: %.4f\n\n', obj.bestPerformance);
 
-        function performance = evaluateFold(obj, params, data, labels, trainIdx, testIdx)
-            % 単一フォールドの評価
-            try
-                cnn = CNNClassifier(params);
-                results = cnn.trainCNN(data(:,:,trainIdx), labels(trainIdx));
-                [~, performance] = cnn.predictOnline(data(:,:,testIdx), results.model);
-                
-                if obj.useGPU
-                    gpuDevice(1);
-                end
-                
-            catch ME
-                warning(ME.identifier, '%s', ME.message);
-                performance = 0;
-            end
-        end
-
-        function options = configureOptimization(obj)
-            % ベイジアン最適化の設定
-            options = struct();
-            options.MaxObjectiveEvaluations = obj.params.classifier.cnn.optimization.searchStrategy.numIterations;
-            options.UseParallel = true;
-            options.AcquisitionFunctionName = 'expected-improvement-plus';
-            options.GPActiveSetSize = 300;
-            options.ExplorationRatio = 0.5;
-            options.NumSeedPoints = 4;
-        end
-
-        function [optimizedParams, bestPerformance, finalModel] = runOptimization(obj, objFcn, optimVars, options, data, labels)
-            % 最適化の実行
-            results = bayesopt(objFcn, optimVars, ...
-                'MaxObjectiveEvaluations', options.MaxObjectiveEvaluations, ...
-                'UseParallel', options.UseParallel, ...
-                'AcquisitionFunctionName', options.AcquisitionFunctionName);
-            
-            optimizedParams = results.XAtMinObjective;
-            bestPerformance = -results.MinObjective;
-            
-            % 最終モデルの学習
-            finalParams = obj.updateParameters(optimizedParams);
-            cnn = CNNClassifier(finalParams);
-            finalResults = cnn.trainCNN(data, labels);
-            finalModel = finalResults.model;
-        end
-
-        function params = updateParameters(obj, x)
-            % パラメータの更新をシンプル化
-            params = obj.params;
-            
-            % 基本パラメータの更新（構造体としてアクセス）
-            params.classifier.cnn.training.optimizer.learningRate = x.learningRate;
-            params.classifier.cnn.training.miniBatchSize = x.miniBatchSize;
-            
-            % アーキテクチャパラメータの更新
-            for i = 1:3
-                layerName = sprintf('conv%d', i);
-                params.classifier.cnn.architecture.convLayers.(layerName).filters = ...
-                    x.numFilters * 2^(i-1);
-                params.classifier.cnn.architecture.dropoutLayers.(['dropout' num2str(i)]) = ...
-                    min(x.dropoutRate + 0.1 * (i-1), 0.7);
-            end
-            
-            % 全結合層の更新
-            for i = 1:length(params.classifier.cnn.architecture.fullyConnected)
-                params.classifier.cnn.architecture.fullyConnected(i) = ...
-                    max(round(x.fcUnits / 2^(i-1)), 32);
-            end
-        end
-
-        % getValidationIndicesメソッドの追加
-        function [trainIdx, testIdx] = getValidationIndices(~, cv, fold)
-            trainIdx = cv.training(fold);
-            testIdx = cv.test(fold);
-        end
-
-        function updateOptimizationLog(obj, params, performance)
-            % 最適化ログの更新
-            iteration = length(obj.optimizationLogs.iteration) + 1;
-            obj.optimizationLogs.iteration(iteration) = iteration;
-            obj.optimizationLogs.params{iteration} = params;
-            obj.optimizationLogs.performance(iteration) = performance;
-            
-            % 最良性能の更新
-            if performance > obj.bestPerformance
-                obj.bestPerformance = performance;
-                obj.bestParams = params;
-            end
-        end
-
-        function displayResults(~, params, performance)
-            % 結果の表示
-            fprintf('\n=== 最適化結果 ===\n');
-            fprintf('最良性能: %.4f\n\n', performance);
-            
             fprintf('最適パラメータ:\n');
-            paramFields = fields(params);
-            for i = 1:length(paramFields)
-                fprintf('%s: %g\n', paramFields{i}, params.(paramFields{i}));
-            end
-        end
+            fprintf('学習率: %.6f\n', obj.bestParams(1));
+            fprintf('ミニバッチサイズ: %d\n', obj.bestParams(2));
+            fprintf('フィルタ数: %d\n', obj.bestParams(4));
+            fprintf('ドロップアウト率: %.2f\n', obj.bestParams(5));
+            fprintf('全結合層ユニット数: %d\n', obj.bestParams(6));
 
-        function handleOptimizationError(obj, ME)
-            % エラーハンドリング
-            fprintf('\n=== 最適化エラー ===\n');
-            fprintf('エラーメッセージ: %s\n', ME.message);
-            fprintf('エラー発生箇所:\n');
-            for i = 1:length(ME.stack)
-                fprintf('  File: %s\n  Line: %d\n  Function: %s\n\n', ...
-                    ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
-            end
-            
-            if obj.useGPU
-                gpuDevice(1);
-            end
+            % 性能統計の表示
+            performances = [obj.optimizationHistory.performance];
+            validPerfs = performances(isfinite(performances));
+
+            fprintf('\n性能統計:\n');
+            fprintf('平均: %.4f\n', mean(validPerfs));
+            fprintf('標準偏差: %.4f\n', std(validPerfs));
+            fprintf('最小値: %.4f\n', min(validPerfs));
+            fprintf('最大値: %.4f\n', max(validPerfs));
         end
     end
 end
