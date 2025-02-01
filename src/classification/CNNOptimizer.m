@@ -27,7 +27,7 @@ classdef CNNOptimizer < handle
                 end
 
                 % パラメータセットの生成
-                numSamples = 30;
+                numSamples = 20;
                 paramSets = obj.generateParameterSets(numSamples);
                 fprintf('パラメータ%dセットで最適化を開始します...\n', size(paramSets, 1));
 
@@ -37,7 +37,7 @@ classdef CNNOptimizer < handle
                 % 検索空間のローカルコピーを作成
                 kernelSizeLocal = obj.searchSpace.kernelSize;
 
-                parfor i = 1:size(paramSets, 1)
+                for i = 1:size(paramSets, 1)
                     try
                         % パラメータの更新
                         localParams = baseParams;
@@ -55,14 +55,20 @@ classdef CNNOptimizer < handle
                         );
 
                         fprintf('組み合わせ %d/%d: 精度 = %.4f\n', i, size(paramSets, 1), trainResults.performance.accuracy);
+
+                       % GPUメモリを解放
+                       if obj.useGPU
+                           gpuDevice([]);
+                       end
+
                     catch ME
                         warning('組み合わせ%dでエラー発生: %s', i, ME.message);
                         results{i} = struct('params', paramSets(i,:), 'performance', -inf, 'model', []);
 
                         % GPUメモリを解放
-                        if obj.useGPU
-                            reset(gpuDevice()); % GPUメモリのリセット
-                        end
+                       if obj.useGPU
+                           gpuDevice([]);
+                       end
                     end
                 end
 

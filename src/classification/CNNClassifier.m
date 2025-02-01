@@ -86,9 +86,9 @@ classdef CNNClassifier < handle
                 obj.displayResults();
 
                 % GPUメモリを解放
-                if obj.useGPU
-                    reset(gpuDevice()); % GPUメモリのリセット
-                end
+               if obj.useGPU
+                   gpuDevice([]);
+               end
 
             catch ME
                 fprintf('\n=== Error in CNN Training ===\n');
@@ -100,9 +100,9 @@ classdef CNNClassifier < handle
                 end
 
                 % GPUメモリを解放
-                if obj.useGPU
-                    reset(gpuDevice()); % GPUメモリのリセット
-                end
+               if obj.useGPU
+                   gpuDevice([]);
+               end
 
                 rethrow(ME);
             end
@@ -189,15 +189,7 @@ classdef CNNClassifier < handle
         end
 
         function [cnnModel, trainInfo] = trainCNNModel(obj, trainData, trainLabels, testData, testLabels)
-           try
-               % GPU利用可能性チェック 
-               if obj.useGPU
-                   gpuInfo = gpuDevice();
-                   fprintf('GPU利用可能: %s\n', gpuInfo.Name);
-               else
-                   fprintf('GPUが利用できないため、CPUで実行します\n');
-               end
-        
+           try        
                % データの形状変換
                if ndims(trainData) ~= 4
                    trainData = obj.prepareDataForCNN(trainData);
@@ -210,7 +202,6 @@ classdef CNNClassifier < handle
                % GPU転送
                if obj.useGPU
                    trainData = gpuArray(trainData);
-                   trainLabels = gpuArray(trainLabels);
                end
         
                % テストデータの処理
@@ -223,7 +214,6 @@ classdef CNNClassifier < handle
                    % GPUにデータ転送
                    if obj.useGPU
                        testData = gpuArray(testData);
-                       testLabels = gpuArray(testLabels);
                    end
                end
         
@@ -271,10 +261,10 @@ classdef CNNClassifier < handle
                trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
         
                fprintf('学習完了: 最終エポック %d\n', trainInfo.FinalEpoch);
-        
+
                % GPUメモリを解放
                if obj.useGPU
-                   reset(gpuDevice());
+                   gpuDevice([]);
                end
         
            catch ME
@@ -282,7 +272,7 @@ classdef CNNClassifier < handle
         
                % GPUメモリを解放
                if obj.useGPU
-                   reset(gpuDevice());
+                   gpuDevice([]);
                end
         
                rethrow(ME);
