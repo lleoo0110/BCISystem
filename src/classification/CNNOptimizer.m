@@ -153,28 +153,109 @@ classdef CNNOptimizer < handle
         end
 
         function [optimizedParams, performance, model] = processFinalResults(obj, results)
-            validResults = ~cellfun(@isempty, results);
-            performances = cellfun(@(x) x.performance, results(validResults));
-            [obj.bestPerformance, bestIdx] = max(performances);
-            
-            validIndices = find(validResults);
-            bestResult = results{validIndices(bestIdx)};
-            
-            optimizedParams = bestResult.params;
-            performance = bestResult.performance;
-            model = bestResult.model;
-            obj.bestParams = optimizedParams;
-            obj.optimizedModel = model;
-        end
-
-        function updateOptimizationHistory(obj, results)
-            for i = 1:length(results)
-                if ~isempty(results{i})
-                    obj.optimizationHistory(end+1) = struct(...
-                        'params', results{i}.params, ...
-                        'performance', results{i}.performance, ...
-                        'model', results{i}.model);
+            try
+                fprintf('\n=== パラメータ最適化の結果処理 ===\n');
+                
+                % 有効な結果のみを抽出
+                validResults = ~cellfun(@isempty, results);
+                validResults = results(validResults);
+                
+                % CNNClassifierのインスタンス作成（validateOverfitting用）
+                cnnClassifier = CNNClassifier(obj.params);
+                
+                % 各結果の評価
+                numResults = length(validResults);
+                validScores = zeros(1, numResults);
+                isOverfitFlags = false(1, numResults);
+                
+                fprintf('有効なパラメータセット数: %d\n', numResults);
+                
+                for i = 1:numResults
+                    result = validResults{i};
+                    
+                    if ~isempty(result.model) && ~isempty(result.performance)
+                        % CNNClassifierのvalidateOverfittingを使用して過学習を評価
+                        [isOverfit, overfitMetrics] = cnnClassifier.validateOverfitting(...
+                            result.trainInfo, result.performance);
+                        
+                        % スコアの計算
+                        baseScore = result.performance;
+                        
+                        % 過学習の場合のスコア調整
+                        if isOverfit
+                            % 汎化ギャップ（Generalization Gap）に基づくスコア調整
+                            genGap = overfitMetrics.generalizationGap;
+                            perfGap = overfitMetrics.performanceGap;
+                            
+                            % 実際の性能低下を反映したスコア調整
+                            baseScore = baseScore * (1 - max(genGap, perfGap));
+                        end
+                        
+                        validScores(i) = baseScore;
+                        isOverfitFlags(i) = isOverfit;
+                        
+                        % 結果の表示
+                        fprintf('\nパラメータセット %d の評価結果:\n', i);
+                        fprintf('  基本精度: %.4f\n', result.performance);
+                        fprintf('  調整後スコア: %.4f\n', baseScore);
+                        fprintf('  過学習: %s\n', string(isOverfit));
+                        if isOverfit
+                            fprintf('  Generalization Gap: %.4f\n', overfitMetrics.generalizationGap);
+                            fprintf('  Performance Gap: %.4f\n', overfitMetrics.performanceGap);
+                            fprintf('  重大度: %s\n', overfitMetrics.severity);
+                        end
+                        
+                        % パラメータ値の表示
+                        fprintf('  パラメータ設定:\n');
+                        fprintf('    学習率: %.6f\n', result.params(1));
+                        fprintf('    バッチサイズ: %d\n', result.params(2));
+                        fprintf('    カーネルサイズインデックス: %d\n', result.params(3));
+                        fprintf('    フィルタ数: %d\n', result.params(4));
+                        fprintf('    ドロップアウト率: %.2f\n', result.params(5));
+                        fprintf('    全結合層ユニット数: %d\n', result.params(6));
+                    else
+                        validScores(i) = -inf;
+                        isOverfitFlags(i) = true;
+                        fprintf('\nパラメータセット %d: 評価不能\n', i);
+                    end
                 end
+                
+                % 過学習していないモデルの中から最良のものを選択
+                nonOverfitIndices = find(~isOverfitFlags);
+                
+                if isempty(nonOverfitIndices)
+                    warning('過学習していないモデルが見つかりませんでした。最も高いスコアのモデルを選択します。');
+                    [bestScore, bestIdx] = max(validScores);
+                    fprintf('\n注意: 選択されたモデルは過学習していますが、最も良いスコア（%.4f）を持っています。\n', bestScore);
+                else
+                    % 過学習していないモデルから最良のものを選択
+                    [bestScore, bestLocalIdx] = max(validScores(nonOverfitIndices));
+                    bestIdx = nonOverfitIndices(bestLocalIdx);
+                    fprintf('\n過学習していないモデルから最良のものを選択しました（スコア: %.4f）\n', bestScore);
+                end
+                
+                bestResult = validResults{bestIdx};
+                
+                % 結果の設定
+                optimizedParams = bestResult.params;
+                performance = bestResult.performance;
+                model = bestResult.model;
+                obj.bestParams = optimizedParams;
+                obj.optimizedModel = model;
+                
+                fprintf('\n=== 最終選択モデル（パラメータセット %d）===\n', bestIdx);
+                fprintf('基本精度: %.4f\n', performance);
+                fprintf('調整後スコア: %.4f\n', validScores(bestIdx));
+                fprintf('パラメータ:\n');
+                fprintf('  学習率: %.6f\n', optimizedParams(1));
+                fprintf('  バッチサイズ: %d\n', optimizedParams(2));
+                fprintf('  カーネルサイズインデックス: %d\n', optimizedParams(3));
+                fprintf('  フィルタ数: %d\n', optimizedParams(4));
+                fprintf('  ドロップアウト率: %.2f\n', optimizedParams(5));
+                fprintf('  全結合層ユニット数: %d\n', optimizedParams(6));
+                
+            catch ME
+                error('結果処理中にエラーが発生: %s', ME.message);
             end
         end
 
@@ -198,6 +279,41 @@ classdef CNNOptimizer < handle
             fprintf('標準偏差: %.4f\n', std(validPerfs));
             fprintf('最小値: %.4f\n', min(validPerfs));
             fprintf('最大値: %.4f\n', max(validPerfs));
+        end
+
+        function updateOptimizationHistory(obj, results)
+            try
+                % 有効な結果のみを取得
+                validResults = results(~cellfun(@isempty, results));
+                
+                % 各結果を履歴に追加
+                for i = 1:length(validResults)
+                    result = validResults{i};
+                    if ~isempty(result.model) && ~isempty(result.performance)
+                        newEntry = struct(...
+                            'params', result.params, ...
+                            'performance', result.performance, ...
+                            'model', result.model);
+                        
+                        % 履歴が空の場合は新しい構造体として、そうでない場合は追加
+                        if isempty(obj.optimizationHistory)
+                            obj.optimizationHistory = newEntry;
+                        else
+                            obj.optimizationHistory(end+1) = newEntry;
+                        end
+                    end
+                end
+                
+                % 履歴を性能順にソート
+                [~, sortIdx] = sort([obj.optimizationHistory.performance], 'descend');
+                obj.optimizationHistory = obj.optimizationHistory(sortIdx);
+                
+                fprintf('\n最適化履歴を更新しました（計%d個のモデル）\n', ...
+                    length(obj.optimizationHistory));
+                
+            catch ME
+                warning(ME.identifier, '%s', ME.message);
+            end
         end
     end
 end
