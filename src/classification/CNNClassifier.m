@@ -124,67 +124,107 @@ classdef CNNClassifier < handle
         end
 
         function [isOverfit, metrics] = validateOverfitting(obj, trainInfo, testMetrics)
+            disp('=== validateOverfitting ===');
+            
+            % 初期化
+            isOverfit = false;
+            metrics = struct();
+            
             try
-                disp('=== validateOverfitting ===');
+                % trainInfoの構造を検証
+                if ~isstruct(trainInfo) || ~isfield(trainInfo, 'History')
+                    error('trainInfo must be a struct with History field');
+                end
                 
-                % データ検証
-                if ~isfield(trainInfo, 'History') || ...
-                   ~isfield(trainInfo.History, 'TrainingAccuracy') || ...
-                   ~isfield(trainInfo.History, 'ValidationAccuracy')
-                    error('学習履歴データが不完全です');
+                history = trainInfo.History;
+                if ~isfield(history, 'TrainingAccuracy') || ~isfield(history, 'ValidationAccuracy')
+                    error('History must contain TrainingAccuracy and ValidationAccuracy');
                 end
         
-                trainAcc = trainInfo.History.TrainingAccuracy;
-                valAcc = trainInfo.History.ValidationAccuracy;
-                testAcc = testMetrics.accuracy * 100;    % testMetricsの精度値を0-100のパーセント値に変換
+                % 精度データの取得
+                trainAcc = history.TrainingAccuracy;
+                valAcc = history.ValidationAccuracy;
                 
-                fprintf('Final TrainingAccuracy: %.2f%%\n', trainAcc(end));
-                fprintf('Final ValidationAccuracy: %.2f%%\n', valAcc(end));
+                % testMetricsからテスト精度を取得（0-100のスケールに変換）
+                if isstruct(testMetrics) && isfield(testMetrics, 'accuracy')
+                    testAcc = testMetrics.accuracy * 100;
+                else
+                    error('Invalid testMetrics structure');
+                end
+                
+                fprintf('Training Accuracy: %.2f%%\n', trainAcc(end));
+                fprintf('Validation Accuracy: %.2f%%\n', valAcc(end));
                 fprintf('Test Accuracy: %.2f%%\n', testAcc);
         
-                % Generalization GapとPerformance Gapの計算（パーセント値）
+                % Generalization GapとPerformance Gapの計算
                 genGap = abs(trainAcc(end) - valAcc(end));
                 perfGap = abs(trainAcc(end) - testAcc);
                 
                 fprintf('Generalization Gap: %.2f%%\n', genGap);
                 fprintf('Performance Gap: %.2f%%\n', perfGap);
         
-                % トレンド分析（trainAccとvalAccのみを使用）
+                % トレンド分析
                 [trainTrend, valTrend] = obj.analyzeLearningCurves(trainAcc, valAcc);
-                disp('トレンド分析結果:');
-                disp(trainTrend);
-                disp(valTrend);
-        
-                % 重大度判定
-                severity = obj.determineOverfittingSeverity(genGap, perfGap, valTrend);
-        
+                
+                % 完全な偏りの検出
+                if isfield(testMetrics, 'confusionMat')
+                    cm = testMetrics.confusionMat;
+                    
+                    % 各実際のクラス（行）のサンプル数を確認
+                    missingActual = any(sum(cm, 2) == 0);
+                    % 各予測クラス（列）の予測件数を確認
+                    missingPredicted = any(sum(cm, 1) == 0);
+                    
+                    % いずれかが true ならば、全く現れないクラスがあると判断
+                    isCompletelyBiased = missingActual || missingPredicted;
+                else
+                    isCompletelyBiased = false;
+                end
+                
+                % 学習進行の確認
+                isLearningProgressing = std(diff(trainAcc)) > 0.01;
+                
+                % 過学習の重大度判定
+                severity = obj.determineOverfittingSeverity(genGap, perfGap, isCompletelyBiased, isLearningProgressing);
+                
                 % 最適エポックの検出
                 [optimalEpoch, totalEpochs] = obj.findOptimalEpoch(valAcc);
                 fprintf('Optimal Epoch: %d/%d\n', optimalEpoch, totalEpochs);
-        
-                % Early Stopping分析
-                stoppingEffect = obj.analyzeEarlyStoppingEffect(trainInfo);
-        
+                
                 % メトリクスの構築
                 metrics = struct(...
                     'generalizationGap', genGap, ...
                     'performanceGap', perfGap, ...
-                    'earlyStoppingEffect', stoppingEffect, ...
+                    'isCompletelyBiased', isCompletelyBiased, ...
+                    'isLearningProgressing', isLearningProgressing, ...
                     'validationTrend', valTrend, ...
                     'trainingTrend', trainTrend, ...
-                    'severity', severity);
-        
-                % 過学習判定（moderate以上を過学習とみなす）
-                isOverfit = strcmp(severity, 'severe') || strcmp(severity, 'moderate');
+                    'severity', severity, ...
+                    'optimalEpoch', optimalEpoch, ...
+                    'totalEpochs', totalEpochs);
+                
+                % 過学習判定
+                isOverfit = strcmp(severity, 'critical') || ...
+                           strcmp(severity, 'severe') || ...
+                           strcmp(severity, 'moderate');
+                
                 fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
-        
+                
             catch ME
                 fprintf('エラー発生in validateOverfitting: %s\n', ME.message);
-                fprintf('エラー位置:\n');
-                for i = 1:length(ME.stack)
-                    fprintf('  File: %s\n  Line: %d\n  Function: %s\n\n', ...
-                        ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
-                end
+                fprintf('Error stack:\n');
+                disp(getReport(ME, 'extended'));
+                
+                % エラー時のフォールバック値を設定
+                metrics = struct(...
+                    'generalizationGap', Inf, ...
+                    'performanceGap', Inf, ...
+                    'isCompletelyBiased', true, ...
+                    'isLearningProgressing', false, ...
+                    'severity', 'error', ...
+                    'optimalEpoch', 0, ...
+                    'totalEpochs', 0);
+                isOverfit = true;
             end
         end
 
@@ -292,7 +332,7 @@ classdef CNNClassifier < handle
             end
         end
 
-        function [cnnModel, trainInfo] = trainCNNModel(obj, trainData, trainLabels, testData, testLabels)
+        function [cnnModel, trainInfo] = trainCNNModel(obj, trainData, trainLabels, valData, valLabels)
            try        
                % データの形状変換
                if ndims(trainData) ~= 4
@@ -309,15 +349,15 @@ classdef CNNClassifier < handle
                end
         
                % テストデータの処理
-               if ~isempty(testData)
-                   if ndims(testData) ~= 4
-                       testData = obj.prepareDataForCNN(testData);
+               if ~isempty(valData)
+                   if ndims(valData) ~= 4
+                       valData = obj.prepareDataForCNN(valData);
                    end
-                   testLabels = categorical(testLabels, uniqueLabels);
+                   valLabels = categorical(valLabels, uniqueLabels);
 
                    % GPUにデータ転送
                    if obj.useGPU
-                       testData = gpuArray(testData);
+                       valData = gpuArray(valData);
                    end
                end
         
@@ -347,8 +387,8 @@ classdef CNNClassifier < handle
                    'Verbose', true);
         
                % 検証データの設定
-               if ~isempty(testData) && ~isempty(testLabels)
-                   options.ValidationData = {testData, testLabels};
+               if ~isempty(valData) && ~isempty(valLabels)
+                   options.ValidationData = {valData, valLabels};
                    options.ValidationFrequency = obj.params.classifier.cnn.training.validation.frequency;
                    options.ValidationPatience = obj.params.classifier.cnn.training.validation.patience;
                    fprintf('検証データを使用して学習を開始します\n');
@@ -510,28 +550,63 @@ classdef CNNClassifier < handle
             disp('=== analyzeLearningCurves ===');
             
             try
-                % データの移動平均計算
+                % 入力データの検証
+                if isempty(trainAcc) || isempty(valAcc)
+                    error('学習曲線データが空です');
+                end
+                
+                % NaNチェック
+                trainAcc = trainAcc(~isnan(trainAcc));
+                valAcc = valAcc(~isnan(valAcc));
+                
+                if isempty(trainAcc) || isempty(valAcc)
+                    error('有効なデータがありません（NaN除去後）');
+                end
+        
+                % 移動平均の計算
                 windowSize = min(5, floor(length(trainAcc)/3));
+                if windowSize < 1
+                    windowSize = 1;
+                end
+                
                 trainSmooth = movmean(trainAcc, windowSize);
                 valSmooth = movmean(valAcc, windowSize);
-        
-                % 変化率計算（パーセント値ベース）
+                
+                % 変化率の計算
                 trainDiff = diff(trainSmooth);
                 valDiff = diff(valSmooth);
-        
+                
                 % トレンド指標の計算
                 trainTrend = struct(...
                     'mean_change', mean(trainDiff), ...
                     'volatility', std(trainDiff), ...
                     'increasing_ratio', sum(trainDiff > 0) / length(trainDiff));
-        
+                
                 valTrend = struct(...
                     'mean_change', mean(valDiff), ...
                     'volatility', std(valDiff), ...
                     'increasing_ratio', sum(valDiff > 0) / length(valDiff));
         
+                % 結果の検証
+                if isnan(valTrend.mean_change) || isnan(valTrend.volatility)
+                    warning('計算結果にNaNが含まれています');
+                    fprintf('Training data stats: min=%f, max=%f, length=%d\n', ...
+                        min(trainAcc), max(trainAcc), length(trainAcc));
+                    fprintf('Validation data stats: min=%f, max=%f, length=%d\n', ...
+                        min(valAcc), max(valAcc), length(valAcc));
+                end
+        
             catch ME
                 fprintf('エラー発生in analyzeLearningCurves: %s\n', ME.message);
+                % エラー時のフォールバック値を設定
+                trainTrend = struct(...
+                    'mean_change', 0, ...
+                    'volatility', 0, ...
+                    'increasing_ratio', 0);
+                valTrend = struct(...
+                    'mean_change', 0, ...
+                    'volatility', 0, ...
+                    'increasing_ratio', 0);
                 rethrow(ME);
             end
         end
@@ -547,31 +622,20 @@ classdef CNNClassifier < handle
                 'total_epochs', totalEpochs, ...
                 'stopping_efficiency', minLossEpoch / totalEpochs);
         end
-        
-        function severity = determineOverfittingSeverity(~, genGap, perfGap, valTrend)
-            try
-                % 重大度の判定基準（パーセント値ベース）
-                if genGap > 20 || perfGap > 20
-                    severity = 'severe';
-                elseif genGap > 10 || perfGap > 10
-                    severity = 'moderate';
-                elseif genGap > 5 || perfGap > 5
-                    severity = 'mild';
-                else
-                    severity = 'none';
-                end
-        
-                % バリデーショントレンドによる補正
-                if strcmp(severity, 'mild') && valTrend.mean_change < -0.5
-                    severity = 'moderate';  % トレンドが悪化している場合は重大度を上げる
-                end
-        
-                fprintf('重大度判定 - Gap基準: %s\n', severity);
-                fprintf('Validation mean change: %.4f\n', valTrend.mean_change);
-        
-            catch ME
-                fprintf('エラー発生in determineOverfittingSeverity: %s\n', ME.message);
-                severity = 'error';
+
+        function severity = determineOverfittingSeverity(~, genGap, perfGap, isCompletelyBiased, isLearningProgressing)
+            if isCompletelyBiased
+                severity = 'critical';
+            elseif ~isLearningProgressing
+                severity = 'failed';
+            elseif genGap > 10 || perfGap > 10
+                severity = 'severe';
+            elseif genGap > 5 || perfGap > 5
+                severity = 'moderate';
+            elseif genGap > 3 || perfGap > 3
+                severity = 'mild';
+            else
+                severity = 'none';
             end
         end
         

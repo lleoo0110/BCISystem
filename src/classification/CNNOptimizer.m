@@ -2,11 +2,11 @@ classdef CNNOptimizer < handle
     properties (Access = private)
         params              % パラメータ設定
         optimizedModel      % 最適化されたモデル
-        bestParams         % 最良パラメータ
-        bestPerformance    % 最良性能値
-        searchSpace        % パラメータ探索空間
+        bestParams          % 最良パラメータ
+        bestPerformance     % 最良性能値
+        searchSpace         % パラメータ探索空間
         optimizationHistory % 最適化履歴
-        useGPU            % GPUを使用するかどうか
+        useGPU              % GPUを使用するかどうか
     end
     
     methods (Access = public)
@@ -27,7 +27,7 @@ classdef CNNOptimizer < handle
                 end
 
                 % パラメータセットの生成
-                numSamples = 20;
+                numSamples = 3;
                 paramSets = obj.generateParameterSets(numSamples);
                 fprintf('パラメータ%dセットで最適化を開始します...\n', size(paramSets, 1));
 
@@ -47,28 +47,34 @@ classdef CNNOptimizer < handle
                         cnn = CNNClassifier(localParams);
                         trainResults = cnn.trainCNN(data, labels);
 
-                        % 結果の保存
+                        % 結果の保存（overfitting情報を含む）
                         results{i} = struct(...
                             'params', paramSets(i,:), ...
-                            'performance', trainResults.performance.accuracy, ...
-                            'model', trainResults.model ...
+                            'model', trainResults.model, ...
+                            'performance', trainResults.performance, ...
+                            'trainInfo', trainResults.trainInfo, ...
+                            'overfitting', trainResults.overfitting ...
                         );
 
-                        fprintf('組み合わせ %d/%d: 精度 = %.4f\n', i, size(paramSets, 1), trainResults.performance.accuracy);
+                        fprintf('組み合わせ %d/%d: 精度 = %.4f\n', i, size(paramSets, 1), ...
+                            trainResults.performance.overallAccuracy);
 
-                       % GPUメモリを解放
-                       if obj.useGPU
-                           gpuDevice([]);
-                       end
+                        % GPUメモリを解放
+                        if obj.useGPU
+                            gpuDevice([]);
+                        end
 
                     catch ME
                         warning('組み合わせ%dでエラー発生: %s', i, ME.message);
-                        results{i} = struct('params', paramSets(i,:), 'performance', -inf, 'model', []);
+                        if ~isempty(ME.stack)
+                            warning('エラー位置: %s, 行 %d', ME.stack(1).name, ME.stack(1).line);
+                        end
+                        results{i} = struct('params', paramSets(i,:), 'performance', -inf, 'model', [], 'overfitting', struct('severity','error'));
 
                         % GPUメモリを解放
-                       if obj.useGPU
-                           gpuDevice([]);
-                       end
+                        if obj.useGPU
+                            gpuDevice([]);
+                        end
                     end
                 end
 
@@ -119,19 +125,16 @@ classdef CNNOptimizer < handle
             fc_range = obj.searchSpace.fcUnits;
             paramSets(:,6) = round(fc_range(1) + (fc_range(2) - fc_range(1)) * lhsPoints(:,6));
         end
-
+        
         function params = updateCNNParameters(~, params, paramSet, ~)
-            % カーネルサイズを固定値に設定
-            kernelSize = [3 3]; % デフォルトのカーネルサイズを使用
-
             params.classifier.cnn.training.optimizer.learningRate = paramSet(1);
             params.classifier.cnn.training.miniBatchSize = paramSet(2);
-            params.classifier.cnn.architecture.convLayers.conv1.size = kernelSize;
+            params.classifier.cnn.architecture.convLayers.conv1.size = paramSet(3);
             params.classifier.cnn.architecture.convLayers.conv1.filters = paramSet(4);
             params.classifier.cnn.architecture.dropoutLayers.dropout1 = paramSet(5);
             params.classifier.cnn.architecture.fullyConnected = [paramSet(6)];
         end
-
+        
         function [optimizedParams, performance, model] = processFinalResults(obj, results)
             try
                 fprintf('\n=== パラメータ最適化の結果処理 ===\n');
@@ -140,10 +143,6 @@ classdef CNNOptimizer < handle
                 validResults = ~cellfun(@isempty, results);
                 validResults = results(validResults);
                 
-                % CNNClassifierのインスタンス作成（validateOverfitting用）
-                cnnClassifier = CNNClassifier(obj.params);
-                
-                % 各結果の評価
                 numResults = length(validResults);
                 validScores = zeros(1, numResults);
                 isOverfitFlags = false(1, numResults);
@@ -154,22 +153,23 @@ classdef CNNOptimizer < handle
                     result = validResults{i};
                     
                     if ~isempty(result.model) && ~isempty(result.performance)
-                        % CNNClassifierのvalidateOverfittingを使用して過学習を評価
-                        [isOverfit, overfitMetrics] = cnnClassifier.validateOverfitting(...
-                            result.trainInfo, result.performance);
+                        % 保存されている過学習情報を利用して判定
+                        severity = result.overfitting.severity;
+                        if ismember(severity, {'critical', 'severe', 'moderate'})
+                            isOverfit = true;
+                        else
+                            isOverfit = false;
+                        end
                         
-                        % スコアを性能値そのものに設定
-                        validScores(i) = result.performance;
+                        validScores(i) = result.performance.overallAccuracy;
                         isOverfitFlags(i) = isOverfit;
                         
                         % 結果の表示
                         fprintf('\nパラメータセット %d の評価結果:\n', i);
-                        fprintf('  基本精度: %.4f\n', result.performance);
+                        fprintf('  基本精度: %.4f\n', result.performance.overallAccuracy);
                         fprintf('  過学習: %s\n', string(isOverfit));
                         if isOverfit
-                            fprintf('  Generalization Gap: %.4f\n', overfitMetrics.generalizationGap);
-                            fprintf('  Performance Gap: %.4f\n', overfitMetrics.performanceGap);
-                            fprintf('  重大度: %s\n', overfitMetrics.severity);
+                            fprintf('  重大度: %s\n', severity);
                         end
                         
                         % パラメータ値の表示
@@ -189,13 +189,11 @@ classdef CNNOptimizer < handle
                 
                 % 過学習していないモデルの中から最良のものを選択
                 nonOverfitIndices = find(~isOverfitFlags);
-                
                 if isempty(nonOverfitIndices)
                     warning('過学習していないモデルが見つかりませんでした。最も高いスコアのモデルを選択します。');
                     [bestScore, bestIdx] = max(validScores);
                     fprintf('\n注意: 選択されたモデルは過学習していますが、最も良いスコア（%.4f）を持っています。\n', bestScore);
                 else
-                    % 過学習していないモデルから最良のものを選択
                     [bestScore, bestLocalIdx] = max(validScores(nonOverfitIndices));
                     bestIdx = nonOverfitIndices(bestLocalIdx);
                     fprintf('\n過学習していないモデルから最良のものを選択しました（スコア: %.4f）\n', bestScore);
@@ -203,9 +201,8 @@ classdef CNNOptimizer < handle
                 
                 bestResult = validResults{bestIdx};
                 
-                % 結果の設定
                 optimizedParams = bestResult.params;
-                performance = bestResult.performance;
+                performance = bestResult.performance.overallAccuracy;
                 model = bestResult.model;
                 obj.bestParams = optimizedParams;
                 obj.optimizedModel = model;
@@ -224,7 +221,7 @@ classdef CNNOptimizer < handle
                 error('結果処理中にエラーが発生: %s', ME.message);
             end
         end
-
+        
         function displayOptimizationResults(obj)
             fprintf('\n=== CNN最適化結果 ===\n');
             fprintf('最良性能: %.4f\n\n', obj.bestPerformance);
@@ -236,7 +233,6 @@ classdef CNNOptimizer < handle
             fprintf('ドロップアウト率: %.2f\n', obj.bestParams(5));
             fprintf('全結合層ユニット数: %d\n', obj.bestParams(6));
 
-            % 性能統計の表示
             performances = [obj.optimizationHistory.performance];
             validPerfs = performances(isfinite(performances));
 
@@ -246,22 +242,17 @@ classdef CNNOptimizer < handle
             fprintf('最小値: %.4f\n', min(validPerfs));
             fprintf('最大値: %.4f\n', max(validPerfs));
         end
-
+        
         function updateOptimizationHistory(obj, results)
             try
-                % 有効な結果のみを取得
                 validResults = results(~cellfun(@isempty, results));
-                
-                % 各結果を履歴に追加
                 for i = 1:length(validResults)
                     result = validResults{i};
                     if ~isempty(result.model) && ~isempty(result.performance)
                         newEntry = struct(...
                             'params', result.params, ...
-                            'performance', result.performance, ...
+                            'performance', result.performance.overallAccuracy, ...
                             'model', result.model);
-                        
-                        % 履歴が空の場合は新しい構造体として、そうでない場合は追加
                         if isempty(obj.optimizationHistory)
                             obj.optimizationHistory = newEntry;
                         else
@@ -269,14 +260,12 @@ classdef CNNOptimizer < handle
                         end
                     end
                 end
-                
-                % 履歴を性能順にソート
+
                 [~, sortIdx] = sort([obj.optimizationHistory.performance], 'descend');
                 obj.optimizationHistory = obj.optimizationHistory(sortIdx);
-                
-                fprintf('\n最適化履歴を更新しました（計%d個のモデル）\n', ...
-                    length(obj.optimizationHistory));
-                
+
+                fprintf('\n最適化履歴を更新しました（計%d個のモデル）\n', length(obj.optimizationHistory));
+
             catch ME
                 warning(ME.identifier, '%s', ME.message);
             end
