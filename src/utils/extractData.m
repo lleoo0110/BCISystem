@@ -32,7 +32,7 @@ function [extractedData, extractedLabels] = extractData(varargin)
     % 9. クラス数を均衡にして抽出
     % [data, labels] = extractData('SaveExtracted', true, 'BalanceClasses', true);
 
-    %  入力パーサーの初期化
+    % 入力パーサーの初期化
     p = inputParser;
     addParameter(p, 'Filename', '', @ischar);
     addParameter(p, 'Classes', [], @isnumeric);
@@ -42,7 +42,7 @@ function [extractedData, extractedLabels] = extractData(varargin)
     addParameter(p, 'SaveMode', '', @(x) isempty(x) || ismember(x, {'individual', 'batch'}));
     addParameter(p, 'OutputPath', '', @ischar);
     addParameter(p, 'ClassMap', [], @(x) isempty(x) || (isnumeric(x) && size(x,2)==2));
-    % 各クラスのサンプル数均衡オプション
+    % BalanceClasses オプションを追加
     addParameter(p, 'BalanceClasses', false, @islogical);
     parse(p, varargin{:});
 
@@ -88,7 +88,8 @@ function [extractedData, extractedLabels] = extractData(varargin)
             end
         end
 
-        outputPath = ''; % 初期化（バッチ保存の場合のみ使用）
+        % 複数ファイルの場合でバッチ保存なら保存先を選択
+        outputPath = '';
         if strcmp(saveMode, 'batch') && p.Results.SaveExtracted && length(filenames) > 1
             outputPath = uigetdir(filepath, '保存先フォルダを選択してください');
             if isequal(outputPath, 0)
@@ -109,10 +110,10 @@ function [extractedData, extractedLabels] = extractData(varargin)
                 % データの処理と抽出
                 [currentData, currentLabels] = processFile(fullpath, p.Results);
 
-                % サンプル数の均衡が指定されている場合に実行
+                % BalanceClasses が指定されている場合、ラベルのみを均衡化（rawData は変更せずコピー）
                 if p.Results.BalanceClasses && ~isempty(currentLabels)
                     [currentData, currentLabels] = balanceClasses(currentData, currentLabels);
-                    fprintf('\n各クラスのデータ数を均衡化しました。\n');
+                    fprintf('\n各クラスのラベル数を均衡化しました。（rawData は変更せずコピー）\n');
                     displayExtractionResults(currentData, currentLabels);
                 end
 
@@ -230,77 +231,69 @@ function validateFields(data)
     end
 end
 
-function [extractedData, extractedLabels] = processFile(fullpath, params)
+function [processedData, processedLabels] = processFile(fullpath, params)
     % データの読み込み
     data = load(fullpath);
     validateFields(data);
 
-    % データとラベルの初期化（rawDataは直接代入）
-    extractedData = data.rawData;
-    extractedLabels = data.labels;
+    % rawData はそのままコピー
+    processedData = data.rawData;
+    processedLabels = data.labels;
 
     % データの基本情報を表示
-    displayFileInfo(fullpath, extractedData, extractedLabels);
+    displayFileInfo(fullpath, processedData, processedLabels);
 
     % 検証モードの場合はここで終了
     if params.ValidateOnly
-        extractedData = [];
-        extractedLabels = [];
+        processedData = [];
+        processedLabels = [];
         return;
     end
 
     % クラスによる抽出が指定されている場合のみ実行
     if ~isempty(params.Classes)
-        [extractedData, extractedLabels] = extractByClass(extractedData, extractedLabels, params.Classes);
+        [processedData, processedLabels] = extractByClass(processedData, processedLabels, params.Classes);
     end
 
     % サンプルによる抽出が指定されている場合のみ実行
-    if ~isempty(params.Samples) && ~isempty(extractedData)
-        [extractedData, extractedLabels] = extractBySamples(extractedData, extractedLabels, params.Samples);
+    if ~isempty(params.Samples) && ~isempty(processedData)
+        [processedData, processedLabels] = extractBySamples(processedData, processedLabels, params.Samples);
     end
 
     % クラス番号の変換が指定されている場合のみ実行
     if ~isempty(params.ClassMap)
-        extractedLabels = remapClasses(extractedLabels, params.ClassMap);
+        processedLabels = remapClasses(processedLabels, params.ClassMap);
         fprintf('\nクラス番号の変換を実行しました\n');
         displayClassMapping(params.ClassMap);
     end
 
     % 抽出結果の表示
-    displayExtractionResults(extractedData, extractedLabels);
+    displayExtractionResults(processedData, processedLabels);
 end
 
 function [balancedData, balancedLabels] = balanceClasses(data, labels)
-    % balanceClasses: 各クラスのサンプル数を最小値に合わせてランダムに抽出
-    % data は [特徴数 x サンプル数] の行列、labels は構造体配列と仮定します。
-    %
-    % 各クラスの 'value' フィールドに基づいて処理します。
-    
+    % balanceClasses: ラベルのみを各クラスの最小数に合わせてダウンサンプリングし、
+    % rawData はそのままコピーする（変更しない）
+    balancedData = data;  % rawData はそのままコピー
     classValues = [labels.value];
     uniqueClasses = unique(classValues);
     
-    minCount = inf;
+    % 各クラスのインデックスを取得
     classIndices = cell(size(uniqueClasses));
     for k = 1:length(uniqueClasses)
-        indices = find(classValues == uniqueClasses(k));
-        classIndices{k} = indices;
-        if length(indices) < minCount
-            minCount = length(indices);
-        end
+        classIndices{k} = find(classValues == uniqueClasses(k));
     end
     
-    balancedIndices = [];
+    % 各クラスのサンプル数の最小値
+    minCount = min(cellfun(@length, classIndices));
+    
+    balancedLabels = [];
     for k = 1:length(uniqueClasses)
-        indices = classIndices{k};
-        perm = randperm(length(indices));
-        selected = indices(perm(1:minCount));
-        balancedIndices = [balancedIndices; selected(:)];
+        idx = classIndices{k};
+        perm = randperm(length(idx));
+        selected = idx(perm(1:minCount));
+        balancedLabels = [balancedLabels; labels(selected)];
     end
-    
-    balancedIndices = sort(balancedIndices);
-    
-    balancedData = data(:, balancedIndices);
-    balancedLabels = labels(balancedIndices);
 end
 
 function [extractedData, extractedLabels] = extractByClass(data, labels, targetClasses)
