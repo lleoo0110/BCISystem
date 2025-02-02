@@ -132,26 +132,6 @@ classdef CNNOptimizer < handle
             params.classifier.cnn.architecture.fullyConnected = [paramSet(6)];
         end
 
-        function metrics = calculatePerformanceMetrics(~, results)
-            metrics = struct();
-            
-            if isfield(results, 'performance') && isfield(results.performance, 'cvAccuracies')
-                metrics.avgAccuracy = mean(results.performance.cvAccuracies);
-                metrics.stdAccuracy = std(results.performance.cvAccuracies);
-            else
-                metrics.avgAccuracy = results.performance.accuracy;
-                metrics.stdAccuracy = 0;
-            end
-            
-            if isfield(results.performance, 'auc')
-                metrics.auc = results.performance.auc;
-            end
-            
-            if isfield(results.performance, 'f1score')
-                metrics.f1score = results.performance.f1score;
-            end
-        end
-
         function [optimizedParams, performance, model] = processFinalResults(obj, results)
             try
                 fprintf('\n=== パラメータ最適化の結果処理 ===\n');
@@ -178,26 +158,13 @@ classdef CNNOptimizer < handle
                         [isOverfit, overfitMetrics] = cnnClassifier.validateOverfitting(...
                             result.trainInfo, result.performance);
                         
-                        % スコアの計算
-                        baseScore = result.performance;
-                        
-                        % 過学習の場合のスコア調整
-                        if isOverfit
-                            % 汎化ギャップ（Generalization Gap）に基づくスコア調整
-                            genGap = overfitMetrics.generalizationGap;
-                            perfGap = overfitMetrics.performanceGap;
-                            
-                            % 実際の性能低下を反映したスコア調整
-                            baseScore = baseScore * (1 - max(genGap, perfGap));
-                        end
-                        
-                        validScores(i) = baseScore;
+                        % スコアを性能値そのものに設定
+                        validScores(i) = result.performance;
                         isOverfitFlags(i) = isOverfit;
                         
                         % 結果の表示
                         fprintf('\nパラメータセット %d の評価結果:\n', i);
                         fprintf('  基本精度: %.4f\n', result.performance);
-                        fprintf('  調整後スコア: %.4f\n', baseScore);
                         fprintf('  過学習: %s\n', string(isOverfit));
                         if isOverfit
                             fprintf('  Generalization Gap: %.4f\n', overfitMetrics.generalizationGap);
@@ -244,8 +211,7 @@ classdef CNNOptimizer < handle
                 obj.optimizedModel = model;
                 
                 fprintf('\n=== 最終選択モデル（パラメータセット %d）===\n', bestIdx);
-                fprintf('基本精度: %.4f\n', performance);
-                fprintf('調整後スコア: %.4f\n', validScores(bestIdx));
+                fprintf('精度: %.4f\n', performance);
                 fprintf('パラメータ:\n');
                 fprintf('  学習率: %.6f\n', optimizedParams(1));
                 fprintf('  バッチサイズ: %d\n', optimizedParams(2));
