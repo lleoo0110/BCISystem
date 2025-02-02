@@ -66,7 +66,7 @@ function [extractedData, extractedLabels] = extractData(varargin)
         % 保存モードの確認（SaveExtracted が true の場合）
         saveMode = p.Results.SaveMode;
         if isempty(saveMode) && p.Results.SaveExtracted
-            if isscalar(filenames)
+            if length(filenames) == 1
                 % ファイルが1つの場合は、直接「保存先フォルダ選択」ウィンドウを表示
                 saveMode = 'batch';  % 一括保存モードとして扱い、保存先を指定させる
                 outputPath = uigetdir(filepath, '保存先フォルダを選択してください');
@@ -110,7 +110,7 @@ function [extractedData, extractedLabels] = extractData(varargin)
                 % データの処理と抽出
                 [currentData, currentLabels] = processFile(fullpath, p.Results);
 
-                % BalanceClasses が指定されている場合、ラベルのみを均衡化（rawData は変更せずコピー）
+                % BalanceClasses が指定されている場合、ラベルのみを均衡化（rawData はそのままコピー）
                 if p.Results.BalanceClasses && ~isempty(currentLabels)
                     [currentData, currentLabels] = balanceClasses(currentData, currentLabels);
                     fprintf('\n各クラスのラベル数を均衡化しました。（rawData は変更せずコピー）\n');
@@ -273,26 +273,26 @@ end
 
 function [balancedData, balancedLabels] = balanceClasses(data, labels)
     % balanceClasses: ラベルのみを各クラスの最小数に合わせてダウンサンプリングし、
-    % rawData はそのままコピーする（変更しない）
-    balancedData = data;  % rawData はそのままコピー
+    % rawData はそのままコピーする
+    balancedData = data;  % rawData は変更せずコピー
     classValues = [labels.value];
     uniqueClasses = unique(classValues);
     
     % 各クラスのインデックスを取得
-    classIndices = cell(size(uniqueClasses));
+    balancedLabels = [];  % 空の行ベクトルとして初期化
     for k = 1:length(uniqueClasses)
-        classIndices{k} = find(classValues == uniqueClasses(k));
+        indices = find(classValues == uniqueClasses(k));
+        % 各クラス内のサンプル数
+        counts(k) = length(indices); %#ok<AGROW>
     end
+    minCount = min(counts);
     
-    % 各クラスのサンプル数の最小値
-    minCount = min(cellfun(@length, classIndices));
-    
-    balancedLabels = [];
+    % 各クラスからランダムに minCount 個ずつ選択し、横方向に連結（1×N の構造体配列になる）
     for k = 1:length(uniqueClasses)
-        idx = classIndices{k};
-        perm = randperm(length(idx));
-        selected = idx(perm(1:minCount));
-        balancedLabels = [balancedLabels; labels(selected)];
+        indices = find(classValues == uniqueClasses(k));
+        perm = randperm(length(indices));
+        selected = indices(perm(1:minCount));
+        balancedLabels = [balancedLabels, labels(selected)];  % 横方向に連結
     end
 end
 
