@@ -17,44 +17,96 @@ classdef UDPManager < handle
             trigger = [];
             try
                 if obj.receiveSocket.NumDatagramsAvailable > 0
-                    % 利用可能なバイト数を取得して受信
-                    receivedData = read(obj.receiveSocket,  'uint8');
+                    % データグラムの読み込み
+                    datagram = read(obj.receiveSocket, 1, 'uint8');
+                    receivedData = datagram.Data;
                     
-                    % 受信データを UTF-8 文字列に変換（行列の向きを調整）
-                    receivedStr = native2unicode(receivedData', 'UTF-8');
-                    receivedStr = strtrim(receivedStr);
-                    
-                    % デバッグ用出力
-                    fprintf('Received raw data: %s\n', receivedStr);
-                    
-                    if ~isempty(receivedStr)
-                        % トリガーマッピングから対応する数値を検索
-                        mappings = obj.params.udp.receive.triggers.mappings;
-                        fields = fieldnames(mappings);
-                        triggerValue = obj.params.udp.receive.triggers.defaultValue;
+                    % デバッグ情報
+                    fprintf('Received data size: %d bytes\n', numel(receivedData));
+                    if ~isempty(receivedData)
+                        fprintf('Raw data (first 20 bytes): ');
+                        fprintf('%02X ', receivedData(1:min(20,end)));
+                        fprintf('\n');
+                    end
+        
+                    try
+                        % UTF-8文字列への変換と前後の空白を除去
+                        receivedStr = char(receivedData');  % 直接charに変換
+                        receivedStr = strtrim(receivedStr);
+                        fprintf('Received string: "%s"\n', receivedStr);
+        
+                        if ~isempty(receivedStr)
+                            % トリガーマッピングの処理
+                            mappings = obj.params.udp.receive.triggers.mappings;
+                            fields = fieldnames(mappings);
+                            triggerValue = obj.params.udp.receive.triggers.defaultValue;
+                            
+                            % マッピングの検索
+                            matched = false;
+                            fprintf('Comparing received string with mappings:\n');
+                            
+                            % 文字列比較のデバッグ
+                            fprintf('Received string bytes: ');
+                            fprintf('%02X ', uint8(receivedStr));
+                            fprintf('\n');
+        
+                            for i = 1:length(fields)
+                                mappedText = mappings.(fields{i}).text;
+                                
+                                % マッピングされた文字列のバイト表示
+                                fprintf('Mapping "%s" bytes: ', mappedText);
+                                fprintf('%02X ', uint8(mappedText));
+                                fprintf('\n');
+        
+                                % バイトレベルでの完全一致比較
+                                if isequal(uint8(receivedStr), uint8(mappedText))
+                                    triggerValue = mappings.(fields{i}).value;
+                                    matched = true;
+                                    fprintf('Matched trigger mapping: %s -> %d\n', mappedText, triggerValue);
+                                    break;
+                                end
+                            end
+        
+                            if ~matched
+                                fprintf('No matching trigger found for: "%s"\n', receivedStr);
+                            end
+        
+                            % トリガー構造体の作成
+                            currentTime = toc(obj.startTime);
+                            trigger = struct(...
+                                'value', triggerValue, ...
+                                'time', uint64(currentTime * 1000), ...
+                                'sample', [] ...
+                            );
+                        end
+                    catch ME
+                        % 文字列変換エラーの場合のデバッグ情報
+                        fprintf('String conversion error: %s\n', ME.message);
+                        fprintf('Error stack:\n');
+                        disp(getReport(ME, 'extended'));
                         
-                        for i = 1:length(fields)
-                            if strcmp(mappings.(fields{i}).text, receivedStr)
-                                triggerValue = mappings.(fields{i}).value;
-                                break;
+                        % バイナリデータとしての処理を試みる
+                        if numel(receivedData) >= 4
+                            try
+                                triggerValue = typecast(receivedData(1:4), 'int32');
+                                currentTime = toc(obj.startTime);
+                                trigger = struct(...
+                                    'value', double(triggerValue), ...
+                                    'time', uint64(currentTime * 1000), ...
+                                    'sample', [] ...
+                                );
+                                fprintf('Processed as binary data: %d\n', triggerValue);
+                            catch ME2
+                                warning('Failed to process as binary data: %s', ME2.message);
                             end
                         end
-                        
-                        currentTime = toc(obj.startTime);
-                        trigger = struct(...
-                            'value', triggerValue, ...
-                            'time', uint64(currentTime * 1000), ...
-                            'sample', [] ...
-                        );
-                        
-                        % デバッグ用の出力
-                        fprintf('Mapped trigger: %s -> %d\n', receivedStr, triggerValue);
                     end
-                    
-                    drawnow;
                 end
+        
             catch ME
                 warning(ME.identifier, 'UDP receive error: %s', ME.message);
+                fprintf('Error stack:\n');
+                disp(getReport(ME, 'extended'));
             end
         end
         
