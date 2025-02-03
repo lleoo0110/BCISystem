@@ -3,11 +3,11 @@
 % params = getConfig('epocx', 'preset', 'character');
 % params = getConfig('epocx', 'preset', 'magic');
 
-% 全初期化：clc; clear all; close all; instrreset;
+% 全初期化：clc; clear all; close all;
 % コマンドクリア：clc
 % ワークスペースクリア：clear all
 % ウィンドウ初期化：close all;
-% UDP系エラー初期化：instrreset;
+% UDPポートの初期化：delete(udpportfind)
 
 
 %% パスの設定
@@ -16,7 +16,7 @@ setupPaths(currentDir);
 
 
 %%  指定のパラメータで実行
-params = getConfig('epocflex', 'preset', 'character');
+params = getConfig('epocx', 'preset', 'character');
 manager = EEGAcquisitionManager(params);      % データ計測
 
 

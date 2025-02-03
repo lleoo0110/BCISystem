@@ -1,7 +1,7 @@
 classdef UDPManager < handle
     properties (Access = private)
-        receiveSocket
-        sendSocket
+        receiveSocket  % udpport オブジェクト（受信用）
+        sendSocket     % udpport オブジェクト（送信用）
         params
         startTime
     end
@@ -16,43 +16,42 @@ classdef UDPManager < handle
         function trigger = receiveTrigger(obj)
             trigger = [];
             try
-                if obj.receiveSocket.BytesAvailable > 0
-                    % データを受信
-                    receivedData = fread(obj.receiveSocket, obj.receiveSocket.BytesAvailable, 'uint8');
-                    % UTF8でデコード
+                if obj.receiveSocket.NumDatagramsAvailable > 0
+                    % 利用可能なバイト数を取得して受信
+                    receivedData = read(obj.receiveSocket,  'uint8');
+                    
+                    % 受信データを UTF-8 文字列に変換（行列の向きを調整）
                     receivedStr = native2unicode(receivedData', 'UTF-8');
-                    % 文字列の前後の空白を削除
                     receivedStr = strtrim(receivedStr);
-
+                    
                     % デバッグ用出力
                     fprintf('Received raw data: %s\n', receivedStr);
-
+                    
                     if ~isempty(receivedStr)
                         % トリガーマッピングから対応する数値を検索
                         mappings = obj.params.udp.receive.triggers.mappings;
                         fields = fieldnames(mappings);
                         triggerValue = obj.params.udp.receive.triggers.defaultValue;
-
+                        
                         for i = 1:length(fields)
                             if strcmp(mappings.(fields{i}).text, receivedStr)
                                 triggerValue = mappings.(fields{i}).value;
                                 break;
                             end
                         end
-
+                        
                         currentTime = toc(obj.startTime);
                         trigger = struct(...
                             'value', triggerValue, ...
                             'time', uint64(currentTime * 1000), ...
                             'sample', [] ...
                         );
-
+                        
                         % デバッグ用の出力
                         fprintf('Mapped trigger: %s -> %d\n', receivedStr, triggerValue);
                     end
                     
                     drawnow;
-                    
                 end
             catch ME
                 warning(ME.identifier, 'UDP receive error: %s', ME.message);
@@ -63,38 +62,38 @@ classdef UDPManager < handle
             try
                 fprintf('----------------------------------------\n');
                 if isstruct(trigger)
-                    % 構造体をJSONに変換して送信
+                    % 構造体を JSON に変換して送信
                     jsonStr = jsonencode(trigger);
-
+                    
                     if strlength(jsonStr) > obj.params.udp.send.bufferSize
                         warning('JSON data size exceeds UDP buffer size!');
                         fprintf('JSON content preview: %.100s...\n', jsonStr);
                     end
-
-                    fprintf(obj.sendSocket, jsonStr);
+                    
+                    % 文字列を uint8 配列に変換して送信
+                    data = uint8(jsonStr);
+                    write(obj.sendSocket, data, 'uint8', obj.params.udp.send.address, obj.params.udp.send.port);
                     fprintf('UDP Sent: %s\n', jsonStr);
-
+                    
                 elseif iscategorical(trigger)
-                    % categorical型データの送信
+                    % categorical 型データの送信
                     triggerValue = double(trigger);
                     bytes = typecast(int32(triggerValue), 'uint8');
-
-                    fwrite(obj.sendSocket, bytes, 'uint8');
-
+                    write(obj.sendSocket, bytes, 'uint8', obj.params.udp.send.address, obj.params.udp.send.port);
+                    
                 elseif isnumeric(trigger)
                     if mod(trigger, 1) == 0
                         bytes = typecast(int32(trigger), 'uint8');
                     else
                         bytes = typecast(single(trigger), 'uint8');
                     end
-
-                    fwrite(obj.sendSocket, bytes, 'uint8');
+                    write(obj.sendSocket, bytes, 'uint8', obj.params.udp.send.address, obj.params.udp.send.port);
                 else
                     error('Unsupported trigger data type: %s', class(trigger));
                 end
                 
                 fprintf('----------------------------------------\n');
-
+                
             catch ME
                 warning(ME.identifier, 'UDP send error: %s', ME.message);
                 fprintf('ERROR: Failed to send trigger: %s\n', ME.message);
@@ -113,24 +112,22 @@ classdef UDPManager < handle
         end
         
         function updateReceiveAddress(obj, address, port)
-            % 受信アドレスの動的更新
+            % 受信アドレスの動的更新（udpport ではバインドするローカルIP の指定はできないため port のみ再生成）
             try
                 if nargin < 3
                     port = obj.params.udp.receive.port;
                 end
                 
-                % 既存のソケットをクリーンアップ
+                % 既存のソケットを解放
                 if ~isempty(obj.receiveSocket)
-                    fclose(obj.receiveSocket);
-                    delete(obj.receiveSocket);
+                    obj.receiveSocket = [];
                 end
                 
-                % 新しいソケットの作成
-                obj.receiveSocket = udp(address, ...
+                % 新しい受信用 udpport の作成
+                obj.receiveSocket = udpport('datagram', ...
                     'LocalPort', port, ...
-                    'InputBufferSize', obj.params.udp.receive.bufferSize);
-                fopen(obj.receiveSocket);
-                fprintf('INFO: Receive socket updated to address: %s, port: %d\n', address, port);
+                    'ReceiveBufferSize', obj.params.udp.receive.bufferSize);
+                fprintf('INFO: Receive socket updated to port: %d\n', port);
                 
             catch ME
                 warning(ME.identifier, 'Failed to update receive address: %s', ME.message);
@@ -138,23 +135,19 @@ classdef UDPManager < handle
         end
         
         function updateSendAddress(obj, address, port)
-            % 送信アドレスの動的更新
+            % 送信アドレスの動的更新（udpport の送信時は送信先アドレス・ポートを write() の引数で指定）
             try
                 if nargin < 3
                     port = obj.params.udp.send.port;
                 end
                 
-                % 既存のソケットをクリーンアップ
+                % 既存のソケットを解放
                 if ~isempty(obj.sendSocket)
-                    fclose(obj.sendSocket);
-                    delete(obj.sendSocket);
+                    obj.sendSocket = [];
                 end
                 
-                % 新しいソケットの作成
-                obj.sendSocket = udp(address, ...
-                    'RemotePort', port, ...
-                    'OutputBufferSize', obj.params.udp.send.bufferSize);
-                fopen(obj.sendSocket);
+                % 新しい送信用 udpport の作成（送信用は特にローカルポートをバインドする必要はありません）
+                obj.sendSocket = udpport('datagram');
                 fprintf('INFO: Send socket updated to address: %s, port: %d\n', address, port);
                 
             catch ME
@@ -165,12 +158,10 @@ classdef UDPManager < handle
         function delete(obj)
             try
                 if ~isempty(obj.receiveSocket)
-                    fclose(obj.receiveSocket);
-                    delete(obj.receiveSocket);
+                    obj.receiveSocket = [];
                 end
                 if ~isempty(obj.sendSocket)
-                    fclose(obj.sendSocket);
-                    delete(obj.sendSocket);
+                    obj.sendSocket = [];
                 end
             catch ME
                 warning(ME.identifier, 'UDP cleanup error: %s', ME.message);
@@ -181,25 +172,18 @@ classdef UDPManager < handle
     methods (Access = private)
         function initializeUDP(obj)
             try
-                % UDPの初期化
-                instrreset;
-                
+                % UDP の初期化
                 % 受信用ソケットの設定
                 receiveAddress = obj.params.udp.receive.address;
-                obj.receiveSocket = udp(receiveAddress, ...
-                    'LocalPort', obj.params.udp.receive.port, ...
-                    'InputBufferSize', obj.params.udp.receive.bufferSize);
-                fopen(obj.receiveSocket);
+                obj.receiveSocket = udpport('datagram', ...
+                    'LocalPort', obj.params.udp.receive.port);
                 fprintf('INFO: Receive socket initialized at %s:%d\n', ...
                     receiveAddress, obj.params.udp.receive.port);
                 
                 % 送信用ソケットの設定
                 sendAddress = obj.params.udp.send.address;
-                obj.sendSocket = udp(sendAddress, ...
-                    'RemotePort', obj.params.udp.send.port, ...
-                    'OutputBufferSize', obj.params.udp.send.bufferSize);
-                fopen(obj.sendSocket);
-                fprintf('INFO: Send socket initialized at %s:%d\n', ...
+                obj.sendSocket = udpport('datagram');
+                fprintf('INFO: Send socket initialized for remote address %s:%d\n', ...
                     sendAddress, obj.params.udp.send.port);
                 
             catch ME
@@ -233,12 +217,10 @@ classdef UDPManager < handle
         
         function cleanup(obj)
             if ~isempty(obj.receiveSocket)
-                fclose(obj.receiveSocket);
-                delete(obj.receiveSocket);
+                obj.receiveSocket = [];
             end
             if ~isempty(obj.sendSocket)
-                fclose(obj.sendSocket);
-                delete(obj.sendSocket);
+                obj.sendSocket = [];
             end
         end
     end

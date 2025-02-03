@@ -28,13 +28,11 @@ classdef EOGExtractor < handle
             obj.initializeFilters();
             obj.resetBuffers();
             
-            % 設定情報の表示（デバッグモード時）
-            if params.debug.enable
-                obj.displayConfiguration();
-            end
+            % 設定情報の表示
+            obj.displayConfiguration();
         end
         
-        function [direction, eogSignal] = detectGazeDirection(obj, data)
+        function direction = detectGazeDirection(obj, data)
             try
                 % プライマリペアからのEOG信号抽出
                 eogSignal = obj.extractEOGSignal(data, 'primary');
@@ -55,10 +53,7 @@ classdef EOGExtractor < handle
                 end
                 
                 % 方向検出
-                [direction, confidence] = obj.determineDirection(eogSignal);
-                
-                % 履歴の更新
-                obj.updateDirectionHistory(direction, confidence);
+                direction = obj.determineDirection(eogSignal);
                 
             catch ME
                 warning(ME.identifier, '%s', ME.message);
@@ -118,7 +113,7 @@ classdef EOGExtractor < handle
         function correctedSignal = correctBaseline(obj, signal)
             % ベースライン補正
             windowSize = round(obj.params.device.sampleRate * ...
-                obj.params.acquisition.eog.baseline.windowSize);
+                obj.params.acquisition.eog.baseline);
             baseline = movmean(signal, windowSize);
             correctedSignal = signal - baseline;
         end
@@ -153,22 +148,6 @@ classdef EOGExtractor < handle
             end
             
             obj.lastDirection = direction;
-        end
-        
-        function updateDirectionHistory(obj, direction, confidence)
-            % 方向履歴の更新
-            currentTime = now;
-            obj.directionHistory.time(end+1) = currentTime;
-            obj.directionHistory.direction{end+1} = direction;
-            obj.directionHistory.confidence(end+1) = confidence;
-            
-            % 古いデータの削除（1分以上前）
-            oldDataThreshold = currentTime - 1/24/60;
-            validIdx = obj.directionHistory.time >= oldDataThreshold;
-            
-            obj.directionHistory.time = obj.directionHistory.time(validIdx);
-            obj.directionHistory.direction = obj.directionHistory.direction(validIdx);
-            obj.directionHistory.confidence = obj.directionHistory.confidence(validIdx);
         end
         
         function isBlink = detectBlink(obj, signal)

@@ -66,6 +66,13 @@ classdef EEGAcquisitionManager < handle
         totalSampleCount    % 累積サンプル数
         lastResetSampleCount % 最後のリセット時のサンプル数
         emgSampleCount  % EMG用サンプルカウンタ
+
+        % EOG関連
+        eogExtractor         % EOG解析用インスタンス
+        lastEOGDirection     % 前回の視線方向
+        eogResults          % EOG解析結果の保持用
+        eogBuffer           % EOG信号バッファ
+        eogBufferSize       % バッファサイズ
     end
     
     methods (Access = public)
@@ -97,6 +104,9 @@ classdef EEGAcquisitionManager < handle
             obj.emgData = [];
             obj.emgLabels = [];
             obj.emgSampleCount = 0;
+
+            % EOG関連
+            obj.lastEOGDirection = 'center';
         end
         
         function delete(obj)
@@ -288,7 +298,7 @@ classdef EEGAcquisitionManager < handle
                             % 一時保存の実行
                             obj.saveTemporaryData();
                         end
-
+                        
                         % GUI処理の更新
                         if any([obj.params.gui.display.visualization.enable.rawData, ...
                                 obj.params.gui.display.visualization.enable.emgData, ...
@@ -368,6 +378,7 @@ classdef EEGAcquisitionManager < handle
                 obj.abRatioExtractor = ABRatioExtractor(obj.params);
                 obj.cspExtractor = CSPExtractor(obj.params);
                 obj.emotionExtractor = EmotionExtractor(obj.params);
+                obj.eogExtractor = EOGExtractor(obj.params);
                 
                 % 分類器コンポーネントの初期化
                 obj.svmClassifier = SVMClassifier(obj.params);
@@ -394,12 +405,13 @@ classdef EEGAcquisitionManager < handle
         end
         
         function initializeResults(obj)
+            % 結果構造体の初期化
             obj.results = struct(...
-                'power', [], ...
-                'faa', [], ...
-                'abRatio', [], ...
-                'emotion', [], ...
-                'csp', struct(...
+                'power', [], ...     
+                'faa', [], ...      
+                'abRatio', [], ...  
+                'emotion', [], ...  
+                'csp', struct(...   
                     'filters', [], ...
                     'features', [], ...
                     'parameters', struct(...
@@ -408,7 +420,8 @@ classdef EEGAcquisitionManager < handle
                         'method', 'standard' ...
                     ) ...
                 ), ...
-                'predict', [] ...
+                'predict', [], ...
+                'eog', [] ... % 空の構造体配列として初期化
             );
         end
         
@@ -698,6 +711,7 @@ classdef EEGAcquisitionManager < handle
                 saveData.params = obj.params;
                 saveData.rawData = mergedEEG;
                 saveData.labels = mergedLabels;
+                saveData.results = obj.results;
 
                 % EMGが有効な場合のみEMGデータを保存
                 if obj.params.acquisition.emg.enable
@@ -884,6 +898,13 @@ classdef EEGAcquisitionManager < handle
             if obj.params.acquisition.emg.enable
                 obj.emgBuffer = zeros(obj.params.acquisition.emg.channels.count, 0);
             end
+
+            % EOGが有効な場合
+            if obj.params.acquisition.eog.enable
+                % EOGバッファの初期化
+                obj.eogBufferSize = round(obj.params.device.sampleRate * 1); % 1秒分
+                obj.eogBuffer = zeros(obj.params.device.eog.channelCount, obj.eogBufferSize);
+            end
         end
         
         function updateDataBuffer(obj, eegData)
@@ -927,6 +948,15 @@ classdef EEGAcquisitionManager < handle
                     return;
                 end
 
+                % EOGデータの処理
+                if obj.params.acquisition.eog.enable
+                    % EOGチャンネルの抽出
+                    eogChannels = obj.params.device.eog.pairs.primary.left:obj.params.device.eog.pairs.primary.right;
+                    obj.eogBuffer = obj.dataBuffer(eogChannels, end-obj.eogBufferSize+1:end);
+                    % EOG処理
+                    obj.processEOG(obj.eogBuffer);
+                end
+
                 % 最新の解析ウィンドウを抽出
                 if size(preprocessedSegment, 2) > obj.processingWindow
                     % 最新のobj.processingWindowのデータを抽出
@@ -943,9 +973,7 @@ classdef EEGAcquisitionManager < handle
                 obj.processEmotionFeatures(analysisSegment);
 
                 % CSP特徴量の抽出と分類
-                if obj.params.feature.csp.enable
-                    currentFeatures = obj.processCSPFeatures(analysisSegment);
-                end
+                currentFeatures = obj.processCSPFeatures(analysisSegment);
                 
                 switch obj.params.classifier.activeClassifier
                     case 'svm'
@@ -968,12 +996,11 @@ classdef EEGAcquisitionManager < handle
                         'faa', obj.getLatestFeature(obj.results.faa), ...
                         'abRatio', obj.getLatestFeature(obj.results.abRatio), ...
                         'emotion', obj.getLatestFeature(obj.results.emotion) ...
-                    ) ...
+                    ), ...
+                    'eog', obj.getLatestFeature(obj.results.eog) ...
                 );
 
                 % UDP送信
-                jsonStr = jsonencode(obj.latestResults);
-                fprintf('JSON data size before sending: %d bytes\n', strlength(jsonStr));
                 obj.sendResults(obj.latestResults);
 
             catch ME
@@ -1227,6 +1254,42 @@ classdef EEGAcquisitionManager < handle
             end
         end
 
+        function processEOG(obj, eogData)
+            try
+                if ~obj.params.acquisition.eog.enable || isempty(eogData)
+                    return;
+                end
+                
+                % EOGの解析
+                direction = obj.eogExtractor.detectGazeDirection(eogData);
+        
+                % エラーでない場合のみ結果を処理
+                if ~strcmp(direction, 'error')
+                    % 結果保存
+                    currentTime = toc(obj.processingTimer)*1000;
+                    newEOGResult = struct(...
+                        'direction', direction, ...
+                        'time', currentTime, ...
+                        'sample', obj.currentTotalSamples);
+        
+                    % 結果をresults構造体に追加
+                    if isempty(obj.results.eog)
+                        obj.results.eog = newEOGResult;
+                    else
+                        obj.results.eog(end+1) = newEOGResult;
+                    end
+        
+                    % 最新の結果を保持
+                    obj.latestResults.eog = newEOGResult;
+                end
+                
+            catch ME
+                warning('EOG:ProcessingError', 'Error in EOG processing: %s', ME.message);
+                fprintf('Error stack:\n');
+                disp(getReport(ME, 'extended'));
+            end
+        end
+
         function sendResults(obj, udpData)
             if ~isempty(udpData)
                 obj.udpManager.sendTrigger(udpData);
@@ -1396,11 +1459,6 @@ classdef EEGAcquisitionManager < handle
             if isstruct(data)
                 % 構造体配列の場合、最後の要素を取得
                 latest = data(end);
-
-                % CSP特徴量の特別処理
-                if isfield(latest, 'features')
-                    latest = latest.features;
-                end
             elseif isnumeric(data)
                 % 数値配列の場合、最後の行を取得
                 latest = data(end,:);

@@ -27,7 +27,7 @@ classdef CNNOptimizer < handle
                 end
 
                 % パラメータセットの生成
-                numSamples = 3;
+                numSamples = 30;
                 paramSets = obj.generateParameterSets(numSamples);
                 fprintf('パラメータ%dセットで最適化を開始します...\n', size(paramSets, 1));
 
