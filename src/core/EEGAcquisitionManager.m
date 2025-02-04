@@ -282,7 +282,6 @@ classdef EEGAcquisitionManager < handle
                                 obj.emgLabels = [obj.emgLabels; emgTrigger];
                             end
 
-                            fprintf('Trigger received - Value: %d\n', trigger.value);
                             fprintf('EEG sample: %d\n', currentEEGSamples);
                             if obj.params.acquisition.emg.enable
                                 fprintf('EMG sample: %d\n', currentEMGSamples);
