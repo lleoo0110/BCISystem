@@ -76,7 +76,7 @@ classdef UDPManager < handle
                 end
                 
                 write(obj.sendSocket, data, "uint8", obj.remoteAddress, obj.remotePort);
-                fprintf('UDP Sent to %s:%d\n', obj.remoteAddress, obj.remotePort);
+                fprintf('UDP received - Value: %d\n', trigger);
             catch ME
                 warning(ME.identifier, '%s', ME.message);
                 disp(getReport(ME, 'extended'));
