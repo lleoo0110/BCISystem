@@ -53,12 +53,12 @@ classdef UDPManager < handle
                         trigger = struct('value', triggerValue, 'time', uint64(toc(obj.startTime) * 1000), 'sample', []);
                         fprintf('Trigger received - Value: %d\n', triggerValue);
                     catch ME
-                        warning(ME.identifier, '%s', ME.messge);
+                        warning(ME.identifier, '%s', ME.message);
                         disp(getReport(ME, 'extended'));
                     end
                 end
             catch ME
-                warning(ME.identifier, '%s', ME.messge);
+                warning(ME.identifier, '%s', ME.message);
                 disp(getReport(ME, 'extended'));
             end
         end
@@ -78,7 +78,7 @@ classdef UDPManager < handle
                 write(obj.sendSocket, data, "uint8", obj.remoteAddress, obj.remotePort);
                 fprintf('UDP Sent to %s:%d\n', obj.remoteAddress, obj.remotePort);
             catch ME
-                warning(ME.identifier, '%s', ME.messge);
+                warning(ME.identifier, '%s', ME.message);
                 disp(getReport(ME, 'extended'));
             end
         end
@@ -91,9 +91,9 @@ classdef UDPManager < handle
                 if ~isempty(obj.receiveSocket) && isvalid(obj.receiveSocket)
                     delete(obj.receiveSocket);
                 end
-                obj.receiveSocket = udpport("datagram", "LocalHost", address, "LocalPort", port, "Timeout", obj.TIMEOUT, "EnablePortSharing", true);
+                obj.receiveSocket = udpport("datagram", "LocalHost", address, "LocalPort", port, "EnablePortSharing", true);
             catch ME
-                warning(ME.identifier, '%s', ME.messge);
+                warning(ME.identifier, '%s', ME.message);
                 disp(getReport(ME, 'extended'));
             end
         end
@@ -106,7 +106,7 @@ classdef UDPManager < handle
                 obj.remoteAddress = address;
                 obj.remotePort = port;
             catch ME
-                warning(ME.identifier, '%s', ME.messge);
+                warning(ME.identifier, '%s', ME.message);
                 disp(getReport(ME, 'extended'));
             end
         end
@@ -119,7 +119,7 @@ classdef UDPManager < handle
                     obj.receiveSocket = [];
                 end
             catch ME
-                warning(ME.identifier, '%s', ME.messge);
+                warning(ME.identifier, '%s', ME.message);
             end
             
             try
@@ -128,7 +128,7 @@ classdef UDPManager < handle
                     obj.sendSocket = [];
                 end
             catch ME
-                warning(ME.identifier, '%s', ME.messge);
+                warning(ME.identifier, '%s', ME.message);
             end
         end
     end
@@ -140,7 +140,6 @@ classdef UDPManager < handle
                     obj.receiveSocket = udpport("datagram", ...
                         "LocalHost", obj.params.udp.receive.address, ...
                         "LocalPort", obj.params.udp.receive.port, ...
-                        "Timeout", obj.TIMEOUT, ...
                         "EnablePortSharing", true);
                 end
         
@@ -148,7 +147,7 @@ classdef UDPManager < handle
                     obj.sendSocket = udpport("datagram");
                 end
             catch ME
-                warning(ME.identifier, '%s', ME.messge);
+                warning(ME.identifier, '%s', ME.message);
                 obj.cleanup();
                 rethrow(ME);
             end
@@ -162,7 +161,7 @@ classdef UDPManager < handle
                     obj.receiveSocket = [];
                 end
             catch ME
-                warning(ME.identifier, '%s', ME.messge);
+                warning(ME.identifier, '%s', ME.message);
             end
         
             try
@@ -171,7 +170,7 @@ classdef UDPManager < handle
                     obj.sendSocket = [];
                 end
             catch ME
-                warning(ME.identifier, '%s', ME.messge);
+                warning(ME.identifier, '%s', ME.message);
             end
         end
     end

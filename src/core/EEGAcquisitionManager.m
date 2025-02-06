@@ -377,7 +377,9 @@ classdef EEGAcquisitionManager < handle
                 obj.abRatioExtractor = ABRatioExtractor(obj.params);
                 obj.cspExtractor = CSPExtractor(obj.params);
                 obj.emotionExtractor = EmotionExtractor(obj.params);
-                obj.eogExtractor = EOGExtractor(obj.params);
+                if obj.params.acquisition.eog.enable
+                    obj.eogExtractor = EOGExtractor(obj.params);
+                end
                 
                 % 分類器コンポーネントの初期化
                 obj.svmClassifier = SVMClassifier(obj.params);
