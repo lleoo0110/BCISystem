@@ -71,12 +71,12 @@ classdef UDPManager < handle
                         warning('JSON data size exceeds UDP buffer size!');
                     end
                     data = uint8(jsonStr);
+                    fprintf('UDP Sent: %s\n', jsonStr);
                 else
                     data = uint8(num2str(double(trigger)));
                 end
                 
                 write(obj.sendSocket, data, "uint8", obj.remoteAddress, obj.remotePort);
-                fprintf('UDP received - Value: %d\n', trigger);
             catch ME
                 warning(ME.identifier, '%s', ME.message);
                 disp(getReport(ME, 'extended'));
