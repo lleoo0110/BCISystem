@@ -64,7 +64,7 @@ classdef LSTMOptimizer < handle
                         
                         % GPU使用時はメモリリセット
                         if obj.useGPU
-                            reset(gpuDevice);
+                            gpuDevice([]);
                         end
                         
                     catch ME
@@ -72,7 +72,7 @@ classdef LSTMOptimizer < handle
                         results{i} = struct('params', paramSets(i,:), 'performance', -inf);
                         
                         if obj.useGPU
-                            reset(gpuDevice);
+                            gpuDevice([]);
                         end
                     end
                 end
