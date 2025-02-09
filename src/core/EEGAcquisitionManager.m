@@ -1,3 +1,4 @@
+
 classdef EEGAcquisitionManager < handle
     properties (Access = private)
         % 各種マネージャーインスタンス
@@ -65,6 +66,13 @@ classdef EEGAcquisitionManager < handle
         totalSampleCount    % 累積サンプル数
         lastResetSampleCount % 最後のリセット時のサンプル数
         emgSampleCount  % EMG用サンプルカウンタ
+
+        % EOG関連
+        eogExtractor         % EOG解析用インスタンス
+        lastEOGDirection     % 前回の視線方向
+        eogResults          % EOG解析結果の保持用
+        eogBuffer           % EOG信号バッファ
+        eogBufferSize       % バッファサイズ
     end
     
     methods (Access = public)
@@ -96,6 +104,52 @@ classdef EEGAcquisitionManager < handle
             obj.emgData = [];
             obj.emgLabels = [];
             obj.emgSampleCount = 0;
+
+            % EOG関連
+            obj.lastEOGDirection = 'center';
+        end
+        
+        function delete(obj)
+            try
+                % タイマーの停止と削除
+                if ~isempty(obj.acquisitionTimer)
+                    % タイマーが実行中かどうかを確認
+                    if isa(obj.acquisitionTimer, 'timer')
+                        if isvalid(obj.acquisitionTimer)
+                            if strcmp(obj.acquisitionTimer.Running, 'on')
+                                stop(obj.acquisitionTimer);
+                                % タイマーが完全に停止するまで待機
+                                while strcmp(obj.acquisitionTimer.Running, 'on')
+                                    pause(0.1);
+                                end
+                            end
+                            delete(obj.acquisitionTimer);
+                        end
+                    end
+                    obj.acquisitionTimer = [];
+                end
+
+                % UDPManagerのクリーンアップ
+                if ~isempty(obj.udpManager)
+                    delete(obj.udpManager);
+                    obj.udpManager = [];
+                end
+
+                % 一時ファイルの削除
+                if ~isempty(obj.tempDataFiles)
+                    for i = 1:length(obj.tempDataFiles)
+                        if exist(obj.tempDataFiles{i}, 'file')
+                            delete(obj.tempDataFiles{i});
+                        end
+                    end
+                    obj.tempDataFiles = {};
+                end
+
+            catch ME
+                warning(ME.identifier, '%s', ME.message);
+                % エラースタックの表示（デバッグ用）
+                disp(getReport(ME, 'extended'));
+            end
         end
         
         function start(obj)
@@ -128,14 +182,15 @@ classdef EEGAcquisitionManager < handle
 
                     % タイマーの停止を最優先
                     if ~isempty(obj.acquisitionTimer)
-                        if isa(obj.acquisitionTimer, 'timer') && isvalid(obj.acquisitionTimer)
-                            if strcmp(obj.acquisitionTimer.Running, 'on')
-                                stop(obj.acquisitionTimer);
-                                % タイマーが完全に停止するまで待機
-                                pause(1); % 短時間待機して停止を確認
+                        % タイマーが実行中かどうかを確認
+                        if strcmp(obj.acquisitionTimer.Running, 'on')
+                            stop(obj.acquisitionTimer);
+                            % タイマーが完全に停止するまで待機
+                            while strcmp(obj.acquisitionTimer.Running, 'on')
+                                pause(0.1);
                             end
-                            delete(obj.acquisitionTimer);
                         end
+                        delete(obj.acquisitionTimer);
                         obj.acquisitionTimer = [];
                     end
 
@@ -147,6 +202,9 @@ classdef EEGAcquisitionManager < handle
                     % データのマージと保存
                     obj.mergeAndSaveData();
 
+                    % GUIの終了前に全てのタイマーが完全に停止したことを確認
+                    pause(0.2); % 完全な停止を確実にするための短い待機
+
                     % GUIの終了
                     if ~isempty(obj.guiController)
                         obj.guiController.closeAllWindows();
@@ -157,50 +215,21 @@ classdef EEGAcquisitionManager < handle
 
                 catch ME
                     warning(ME.identifier, '%s', ME.message);
-                    % クリーンアップ中のエラーを処理
-                    if ~isempty(obj.acquisitionTimer) && isvalid(obj.acquisitionTimer)
-                        delete(obj.acquisitionTimer);
+                    % エラーが発生しても、リソースのクリーンアップを試みる
+                    try
+                        if ~isempty(obj.acquisitionTimer)
+                            delete(obj.acquisitionTimer);
+                        end
+                        if ~isempty(obj.guiController)
+                            obj.guiController.closeAllWindows();
+                        end
+                        delete(obj);
+                    catch
+                        % クリーンアップ中のエラーは無視
                     end
-                    if ~isempty(obj.guiController)
-                        obj.guiController.closeAllWindows();
-                    end
-                    delete(obj);
                 end
             end
         end
-
-        function delete(obj)
-            try
-                % タイマーの停止と削除
-                if ~isempty(obj.acquisitionTimer)
-                    if isa(obj.acquisitionTimer, 'timer') && isvalid(obj.acquisitionTimer)
-                        if strcmp(obj.acquisitionTimer.Running, 'on')
-                            stop(obj.acquisitionTimer);
-                            % タイマーが完全に停止するまで待機
-                            pause(0.1); % 停止が完了するまでの短い待機
-                        end
-                        delete(obj.acquisitionTimer);
-                    end
-                    obj.acquisitionTimer = [];
-                end
-
-                % 一時ファイルの削除
-                if ~isempty(obj.tempDataFiles)
-                    for i = 1:length(obj.tempDataFiles)
-                        if exist(obj.tempDataFiles{i}, 'file')
-                            delete(obj.tempDataFiles{i});
-                        end
-                    end
-                    obj.tempDataFiles = {};
-                end
-
-            catch ME
-                warning(ME.identifier, '%s', ME.message);
-                % エラースタックの表示（デバッグ用）
-                disp(getReport(ME, 'extended'));
-            end
-        end
-
         
         function pause(obj)
             if obj.isRunning && ~obj.isPaused
@@ -253,7 +282,6 @@ classdef EEGAcquisitionManager < handle
                                 obj.emgLabels = [obj.emgLabels; emgTrigger];
                             end
 
-                            fprintf('Trigger received - Value: %d\n', trigger.value);
                             fprintf('EEG sample: %d\n', currentEEGSamples);
                             if obj.params.acquisition.emg.enable
                                 fprintf('EMG sample: %d\n', currentEMGSamples);
@@ -269,7 +297,7 @@ classdef EEGAcquisitionManager < handle
                             % 一時保存の実行
                             obj.saveTemporaryData();
                         end
-
+                        
                         % GUI処理の更新
                         if any([obj.params.gui.display.visualization.enable.rawData, ...
                                 obj.params.gui.display.visualization.enable.emgData, ...
@@ -349,6 +377,9 @@ classdef EEGAcquisitionManager < handle
                 obj.abRatioExtractor = ABRatioExtractor(obj.params);
                 obj.cspExtractor = CSPExtractor(obj.params);
                 obj.emotionExtractor = EmotionExtractor(obj.params);
+                if obj.params.acquisition.eog.enable
+                    obj.eogExtractor = EOGExtractor(obj.params);
+                end
                 
                 % 分類器コンポーネントの初期化
                 obj.svmClassifier = SVMClassifier(obj.params);
@@ -375,12 +406,13 @@ classdef EEGAcquisitionManager < handle
         end
         
         function initializeResults(obj)
+            % 結果構造体の初期化
             obj.results = struct(...
-                'power', [], ...
-                'faa', [], ...
-                'abRatio', [], ...
-                'emotion', [], ...
-                'csp', struct(...
+                'power', [], ...     
+                'faa', [], ...      
+                'abRatio', [], ...  
+                'emotion', [], ...  
+                'csp', struct(...   
                     'filters', [], ...
                     'features', [], ...
                     'parameters', struct(...
@@ -389,7 +421,8 @@ classdef EEGAcquisitionManager < handle
                         'method', 'standard' ...
                     ) ...
                 ), ...
-                'predict', [] ...
+                'predict', [], ...
+                'eog', [] ... % 空の構造体配列として初期化
             );
         end
         
@@ -509,8 +542,8 @@ classdef EEGAcquisitionManager < handle
                     'fileIndex', obj.fileIndex, ...
                     'sampleRate', obj.params.device.sampleRate);
 
-                % データの保存
-                save(tempFilePath, '-struct', 'tempData', '-v7.3');
+                % DataManagerを使用してデータを保存
+                obj.dataManager.saveDataset(tempData, tempFilePath);
                 obj.tempDataFiles{end+1} = tempFilePath;
 
                 % メモリのクリア
@@ -679,6 +712,7 @@ classdef EEGAcquisitionManager < handle
                 saveData.params = obj.params;
                 saveData.rawData = mergedEEG;
                 saveData.labels = mergedLabels;
+                saveData.results = obj.results;
 
                 % EMGが有効な場合のみEMGデータを保存
                 if obj.params.acquisition.emg.enable
@@ -686,7 +720,7 @@ classdef EEGAcquisitionManager < handle
                     saveData.emgLabels = mergedEMGLabels;
                 end
 
-                % データの保存
+                % DataManagerを使用して最終データを保存
                 savedFile = obj.dataManager.saveDataset(saveData);
                 fprintf('Final data saved to: %s\n', savedFile);
 
@@ -705,8 +739,34 @@ classdef EEGAcquisitionManager < handle
         function initializeOnline(obj)
             try
                 % オンライン処理用の学習済みモデル読み込み
-                loadedData = DataLoader.loadDataBrowserWithPrompt('オンライン処理');
-                
+                loadedData = DataLoader.loadDataBrowserWithPrompt('analysis');
+
+                % 複数ファイルが選択された場合は最初のファイルを使用
+                if iscell(loadedData)
+                    if isempty(loadedData)
+                        error('No valid data loaded');
+                    end
+                    loadedData = loadedData{1};
+                end
+
+                % デバイス設定とデータの整合性チェック
+                if size(loadedData.rawData, 1) ~= obj.params.device.channelCount
+                    % チャンネル情報の表示
+                    obj.displayChannelInfo(obj.params, loadedData);
+
+                    errordlg(sprintf(['デバイスとデータの設定が一致しません。\n\n', ...
+                        'デバイス設定: %s (%dチャンネル)\n', ...
+                        'データ: %dチャンネル\n\n', ...
+                        'デバイス設定を確認してください。'], ...
+                        obj.params.device.name, ...
+                        obj.params.device.channelCount, ...
+                        size(loadedData.rawData, 1)), ...
+                        'デバイス設定エラー');
+                    error('DeviceConfig:ChannelMismatch', ...
+                        'デバイス設定(%dch)とデータ(%dch)のチャンネル数が一致しません。', ...
+                        obj.params.device.channelCount, size(loadedData.rawData, 1));
+                end
+
                 % 正規化パラメータの読み込みと検証
                 if obj.params.signal.preprocessing.normalize.enable
                     if isfield(loadedData, 'processingInfo') && ...
@@ -758,6 +818,19 @@ classdef EEGAcquisitionManager < handle
                 obj.stop();
                 rethrow(ME);
             end
+        end
+
+        function displayChannelInfo(~, params, data)
+            fprintf('\nチャンネル情報:\n');
+            fprintf('デバイス設定: %s (%dチャンネル)\n', ...
+                params.device.name, params.device.channelCount);
+            fprintf('設定チャンネル: %s\n', strjoin(params.device.channels, ', '));
+            fprintf('データチャンネル数: %d\n', size(data.rawData, 1));
+
+            if isfield(data, 'channelNames')
+                fprintf('データチャンネル: %s\n', strjoin(data.channelNames, ', '));
+            end
+            fprintf('\n');
         end
         
         function validateNormalizationParams(obj, normParams)
@@ -826,6 +899,13 @@ classdef EEGAcquisitionManager < handle
             if obj.params.acquisition.emg.enable
                 obj.emgBuffer = zeros(obj.params.acquisition.emg.channels.count, 0);
             end
+
+            % EOGが有効な場合
+            if obj.params.acquisition.eog.enable
+                % EOGバッファの初期化
+                obj.eogBufferSize = round(obj.params.device.sampleRate * 1); % 1秒分
+                obj.eogBuffer = zeros(obj.params.device.eog.channelCount, obj.eogBufferSize);
+            end
         end
         
         function updateDataBuffer(obj, eegData)
@@ -869,6 +949,15 @@ classdef EEGAcquisitionManager < handle
                     return;
                 end
 
+                % EOGデータの処理
+                if obj.params.acquisition.eog.enable
+                    % EOGチャンネルの抽出
+                    eogChannels = obj.params.device.eog.pairs.primary.left:obj.params.device.eog.pairs.primary.right;
+                    obj.eogBuffer = obj.dataBuffer(eogChannels, end-obj.eogBufferSize+1:end);
+                    % EOG処理
+                    obj.processEOG(obj.eogBuffer);
+                end
+
                 % 最新の解析ウィンドウを抽出
                 if size(preprocessedSegment, 2) > obj.processingWindow
                     % 最新のobj.processingWindowのデータを抽出
@@ -885,9 +974,7 @@ classdef EEGAcquisitionManager < handle
                 obj.processEmotionFeatures(analysisSegment);
 
                 % CSP特徴量の抽出と分類
-                if obj.params.feature.csp.enable
-                    currentFeatures = obj.processCSPFeatures(analysisSegment);
-                end
+                currentFeatures = obj.processCSPFeatures(analysisSegment);
                 
                 switch obj.params.classifier.activeClassifier
                     case 'svm'
@@ -910,12 +997,11 @@ classdef EEGAcquisitionManager < handle
                         'faa', obj.getLatestFeature(obj.results.faa), ...
                         'abRatio', obj.getLatestFeature(obj.results.abRatio), ...
                         'emotion', obj.getLatestFeature(obj.results.emotion) ...
-                    ) ...
+                    ), ...
+                    'eog', obj.getLatestFeature(obj.results.eog) ...
                 );
 
                 % UDP送信
-                jsonStr = jsonencode(obj.latestResults);
-                fprintf('JSON data size before sending: %d bytes\n', strlength(jsonStr));
                 obj.sendResults(obj.latestResults);
 
             catch ME
@@ -1169,6 +1255,42 @@ classdef EEGAcquisitionManager < handle
             end
         end
 
+        function processEOG(obj, eogData)
+            try
+                if ~obj.params.acquisition.eog.enable || isempty(eogData)
+                    return;
+                end
+                
+                % EOGの解析
+                direction = obj.eogExtractor.detectGazeDirection(eogData);
+        
+                % エラーでない場合のみ結果を処理
+                if ~strcmp(direction, 'error')
+                    % 結果保存
+                    currentTime = toc(obj.processingTimer)*1000;
+                    newEOGResult = struct(...
+                        'direction', direction, ...
+                        'time', currentTime, ...
+                        'sample', obj.currentTotalSamples);
+        
+                    % 結果をresults構造体に追加
+                    if isempty(obj.results.eog)
+                        obj.results.eog = newEOGResult;
+                    else
+                        obj.results.eog(end+1) = newEOGResult;
+                    end
+        
+                    % 最新の結果を保持
+                    obj.latestResults.eog = newEOGResult;
+                end
+                
+            catch ME
+                warning('EOG:ProcessingError', 'Error in EOG processing: %s', ME.message);
+                fprintf('Error stack:\n');
+                disp(getReport(ME, 'extended'));
+            end
+        end
+
         function sendResults(obj, udpData)
             if ~isempty(udpData)
                 obj.udpManager.sendTrigger(udpData);
@@ -1190,7 +1312,8 @@ classdef EEGAcquisitionManager < handle
                 displayData = struct();
                 
                 % バンドパスフィルタの設計(1-45Hz)
-                [b, a] = butter(4, [1 45]/(obj.params.device.sampleRate/2), 'bandpass');
+                fs = obj.params.device.sampleRate;
+                [b, a] = butter(4, [1 45]/(fs/2), 'bandpass');
 
                 % フィルタリングを各チャンネルに適用
                 filteredData = zeros(size(obj.rawData));
@@ -1245,7 +1368,7 @@ classdef EEGAcquisitionManager < handle
                 % ERSP表示の準備
                 if obj.params.gui.display.visualization.enable.ersp && ...
                    isfield(displayData, 'rawData') && ...
-                   ~isempty(filteredData)
+                   ~isempty(displayData.rawData)
 
                     % 最小データ長のチェック
                     minSamples = 2 * obj.params.gui.display.visualization.ersp.numFreqs;
@@ -1337,11 +1460,6 @@ classdef EEGAcquisitionManager < handle
             if isstruct(data)
                 % 構造体配列の場合、最後の要素を取得
                 latest = data(end);
-
-                % CSP特徴量の特別処理
-                if isfield(latest, 'features')
-                    latest = latest.features;
-                end
             elseif isnumeric(data)
                 % 数値配列の場合、最後の行を取得
                 latest = data(end,:);

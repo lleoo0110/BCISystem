@@ -7,7 +7,7 @@
 % コマンドクリア：clc
 % ワークスペースクリア：clear all
 % ウィンドウ初期化：close all;
-% UDP系エラー初期化：instrreset;
+% UDPポートの初期化：delete(udpportfind)
 
 
 %% パスの設定
@@ -16,7 +16,7 @@ setupPaths(currentDir);
 
 
 %%  指定のパラメータで実行
-params = getConfig('epocflex', 'preset', 'character');
+params = getConfig('epocx', 'preset', 'character');
 analyzer = EEGAnalyzer(params);     % アナライザーの初期化
 analyzer.analyze();                            % 解析の実行
 

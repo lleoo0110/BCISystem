@@ -11,12 +11,13 @@ classdef EEGAnalyzer < handle
         svm              % SVM分類器の結果
         ecoc             % ECOC分類器の結果
         cnn              % CNN分類器の結果
+        lstm             % LSTM分類器の結果（追加）
         results          % 解析結果
         
         % 前処理コンポーネント
         artifactRemover     % アーティファクト除去
         baselineCorrector   % ベースライン補正
-        dataAugmenter        % データ拡張
+        dataAugmenter      % データ拡張
         downSampler        % ダウンサンプリング
         firFilter          % FIRフィルタ
         notchFilter        % ノッチフィルタ
@@ -34,50 +35,159 @@ classdef EEGAnalyzer < handle
         svmClassifier
         ecocClassifier
         cnnClassifier
+        lstmClassifier      % LSTM分類器を追加
         
-        %  データ管理コンポーネント
+        % データ管理コンポーネント
         dataManager
     end
     
     methods (Access = public)
         function obj = EEGAnalyzer(params)
-            % コンストラクタ
             obj.params = params;
-            
-            % 前処理コンポーネントの初期化
             obj.initializePreprocessors();
-            
-            % 特徴抽出器の初期化
             obj.initializeExtractors();
-            
-            % 特徴分類器の初期化
             obj.initializeClassifiers();
-            
-            % 結果構造体の初期化
             obj.initializeResults();
-            
-            % データ管理の初期化
             obj.dataManager = DataManager(params);
         end
         
         function analyze(obj)
             try
+                fprintf('\n=== 解析処理開始 ===\n');
                 fprintf('解析対象のデータファイルを選択してください．\n');
-                loadedData = DataLoader.loadDataBrowserWithPrompt('オフライン解析');
-                obj.setData(loadedData);
-                obj.executePreprocessingPipeline();
-                
-                if obj.params.signal.enable && ~isempty(obj.processedData)
-                    obj.extractFeatures();
-                    obj.performClassification();
+
+                % DataLoaderを使用してデータを読み込み
+                [loadedData, fileInfo] = DataLoader.loadDataBrowserWithPrompt('analysis');
+
+                if isempty(loadedData)
+                    fprintf('データが選択されませんでした。\n');
+                    return;
                 end
 
-                obj.saveResults();
-                
-                % 全てのウィンドウを閉じる
+                fprintf('データ読み込み完了\n');
+                fprintf('読み込んだファイル:\n');
+                for i = 1:length(fileInfo.filenames)
+                    fprintf('%d: %s\n', i, fileInfo.filenames{i});
+                end
+
+                % 複数ファイルの処理
+                if length(loadedData) > 1
+                    fprintf('複数ファイル処理を開始します（%d ファイル）\n', length(loadedData));
+
+                    % 保存モードの選択
+                    saveMode = questdlg('保存モードを選択してください:', ...
+                        '保存モードの選択', '一括保存', '個別保存', 'キャンセル', '個別保存');
+
+                    if strcmp(saveMode, 'キャンセル')
+                        fprintf('処理がキャンセルされました。\n');
+                        return;
+                    end
+
+                    fprintf('選択された保存モード: %s\n', saveMode);
+                    fprintf('選択された読み込みモード: %s\n', fileInfo.loadMode);
+
+                    % 保存先の設定
+                    savePaths = cell(1, length(loadedData));
+
+                    % 一括保存の場合のディレクトリ選択
+                    if strcmp(saveMode, '一括保存')
+                        saveDir = uigetdir('', '保存先のフォルダを選択してください');
+                        if saveDir == 0
+                            fprintf('保存先フォルダの選択がキャンセルされました。\n');
+                            return;
+                        end
+                        fprintf('保存先フォルダ: %s\n', saveDir);
+                    end
+
+                    % 各ファイルの保存パスを設定
+                    for i = 1:length(loadedData)
+                        if ~isempty(loadedData{i})
+                            % 元のファイル名から .mat を除去してタイムスタンプを追加
+                            [~, baseFileName, ~] = fileparts(fileInfo.filenames{i});
+                            timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+                            analysisFileName = [baseFileName '_analysis_' timestamp '.mat'];
+
+                            if strcmp(saveMode, '個別保存')
+                                [saveName, tempDir] = uiputfile(analysisFileName, ...
+                                    sprintf('データセット %d/%d の保存先を選択', i, length(loadedData)));
+
+                                if saveName == 0
+                                    fprintf('ファイル %d の保存がキャンセルされました。\n', i);
+                                    continue;
+                                end
+                                savePaths{i} = fullfile(tempDir, saveName);
+                            else
+                                savePaths{i} = fullfile(saveDir, analysisFileName);
+                            end
+                            fprintf('保存パス %d: %s\n', i, savePaths{i});
+                        end
+                    end
+
+                    % データの処理
+                    if strcmp(fileInfo.loadMode, 'batch')
+                        % 統合データの処理
+                        fprintf('\n=== 統合データの処理開始 ===\n');
+                        obj.setData(loadedData{1}); % 統合データは最初の要素に格納されている
+                        obj.executePreprocessingPipeline();
+                        if obj.params.signal.enable && ~isempty(obj.processedData)
+                            obj.extractFeatures();
+                            obj.performClassification();
+                        end
+                        obj.saveResults(savePaths{1});
+                    else
+                        % 個別データの処理
+                        for i = 1:length(loadedData)
+                            if ~isempty(loadedData{i}) && ~isempty(savePaths{i})
+                                fprintf('\n=== データセット %d/%d (%s) の処理開始 ===\n', ...
+                                    i, length(loadedData), fileInfo.filenames{i});
+                                obj.setData(loadedData{i});
+                                obj.executePreprocessingPipeline();
+                                if obj.params.signal.enable && ~isempty(obj.processedData)
+                                    obj.extractFeatures();
+                                    obj.performClassification();
+                                end
+                                obj.saveResults(savePaths{i});
+                            end
+                        end
+                    end
+
+                else
+                    % 単一ファイルの処理
+                    fprintf('\n=== 単一ファイル処理開始 ===\n');
+                    fprintf('処理対象: %s\n', fileInfo.filenames{1});
+
+                    [~, originalName, ~] = fileparts(fileInfo.filenames{1});
+                    timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+                    defaultFileName = sprintf('%s_analysis_%s.mat', originalName, timestamp);
+
+                    [saveName, saveDir] = uiputfile('*.mat', '保存先を選択してください', defaultFileName);
+                    if saveName == 0
+                        fprintf('保存がキャンセルされました。\n');
+                        return;
+                    end
+                    savePath = fullfile(saveDir, saveName);
+
+                    obj.setData(loadedData{1});
+                    obj.executePreprocessingPipeline();
+                    if obj.params.signal.enable && ~isempty(obj.processedData)
+                        obj.extractFeatures();
+                        obj.performClassification();
+                    end
+                    obj.saveResults(savePath);
+                end
+
                 close all;
+                fprintf('\n=== 解析処理完了 ===\n');
+
             catch ME
-                error('Analysis failed: %s', ME.message);
+                fprintf('\n=== エラー発生 ===\n');
+                fprintf('エラーメッセージ: %s\n', ME.message);
+                fprintf('エラー発生場所:\n');
+                for i = 1:length(ME.stack)
+                    fprintf('  File: %s\n  Line: %d\n  Function: %s\n\n', ...
+                        ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
+                end
+                rethrow(ME);
             end
         end
     end
@@ -108,6 +218,7 @@ classdef EEGAnalyzer < handle
             obj.svmClassifier = SVMClassifier(obj.params);
             obj.ecocClassifier = ECOCClassifier(obj.params);
             obj.cnnClassifier = CNNClassifier(obj.params);
+            obj.lstmClassifier = LSTMClassifier(obj.params);
         end
         
         function initializeResults(obj)
@@ -133,7 +244,7 @@ classdef EEGAnalyzer < handle
         end
         
         function initializeClassifierResults(obj)
-            % 分類器結果構造体の基本構造
+            % 基本の分類器結果構造体
             classifierStruct = struct(...
                 'model', [], ...
                 'performance', struct(...
@@ -310,26 +421,96 @@ classdef EEGAnalyzer < handle
         
         function performClassification(obj)
             try
-                % CSP特徴抽出→SVM特徴分類
                 if ~isempty(obj.results.csp.features)
+                    % SVM分類
                     if obj.params.classifier.svm.enable
                         obj.svm = obj.svmClassifier.trainSVM(...
                             obj.results.csp.features, obj.processedLabel);
                     end
+
+                    % ECOC分類
                     if obj.params.classifier.ecoc.enable
                         obj.ecoc = obj.ecocClassifier.trainECOC(...
                             obj.results.csp.features, obj.processedLabel);
                     end
                 end
-                
-                % CNN特徴分類
+
+                % CNN分類
                 if obj.params.classifier.cnn.enable
-                    obj.cnn = obj.cnnClassifier.trainCNN(...
-                        obj.processedData, obj.processedLabel);
+                    optimizer = CNNOptimizer(obj.params);
+                    [optimizedParams, ~, ~] = optimizer.optimize(obj.processedData, obj.processedLabel);
+
+                    if obj.params.classifier.cnn.optimize && ~isempty(optimizedParams)
+                        updatedParams = obj.params;
+                        updatedParams.classifier.cnn = obj.updateCNNParams(obj.params.classifier.cnn, optimizedParams);
+                        updatedCnnClassifier = CNNClassifier(updatedParams);
+                        obj.cnn = updatedCnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
+                    else
+                        obj.cnn = obj.cnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
+                    end
                 end
+
+                % LSTM分類
+                if obj.params.classifier.lstm.enable
+                    optimizer = LSTMOptimizer(obj.params);
+                    [optimizedParams, ~, ~] = optimizer.optimize(obj.processedData, obj.processedLabel);
+
+                    if obj.params.classifier.lstm.optimize && ~isempty(optimizedParams)
+                        updatedParams = obj.params;
+                        updatedParams.classifier.lstm = obj.updateLSTMParams(obj.params.classifier.lstm, optimizedParams);
+                        updatedLstmClassifier = LSTMClassifier(updatedParams);
+                        obj.lstm = updatedLstmClassifier.trainLSTM(obj.processedData, obj.processedLabel);
+                    else
+                        obj.lstm = obj.lstmClassifier.trainLSTM(obj.processedData, obj.processedLabel);
+                    end
+                end
+                
             catch ME
                 error('Classification failed: %s', ME.message);
             end
+        end
+        
+        function params = updateCNNParams(~, baseParams, optimizedParams)
+            % CNNパラメータの更新
+            params = baseParams;
+            params.training.optimizer.learningRate = optimizedParams(1);
+            params.training.miniBatchSize = optimizedParams(2);
+
+            % アーキテクチャの更新
+            params.architecture.convLayers.conv1.size = optimizedParams(3);
+            params.architecture.convLayers.conv1.filters = optimizedParams(4);
+            params.architecture.dropoutLayers.dropout1 = optimizedParams(5);
+            params.architecture.fullyConnected = [optimizedParams(6)];
+        end
+
+        function params = updateLSTMParams(~, baseParams, optimizedParams)
+            % LSTMパラメータの更新
+            params = baseParams;
+            params.training.optimizer.learningRate = optimizedParams(1);
+            params.training.miniBatchSize = optimizedParams(2);
+
+            % アーキテクチャの更新
+            numLayers = optimizedParams(4);
+            lstmLayers = struct();
+            for i = 1:numLayers
+                layerName = sprintf('lstm%d', i);
+                lstmLayers.(layerName) = struct(...
+                    'numHiddenUnits', optimizedParams(3), ...
+                    'OutputMode', 'last' ...
+                );
+            end
+            params.architecture.lstmLayers = lstmLayers;
+
+            % ドロップアウトレイヤーの更新
+            dropoutLayers = struct();
+            for i = 1:numLayers
+                dropoutName = sprintf('dropout%d', i);
+                dropoutLayers.(dropoutName) = optimizedParams(5);
+            end
+            params.architecture.dropoutLayers = dropoutLayers;
+
+            % 全結合層の更新
+            params.architecture.fullyConnected = [optimizedParams(6)];
         end
 
         function extractPowerFeatures(obj)
@@ -546,11 +727,10 @@ classdef EEGAnalyzer < handle
                 error('EmotionExtractor:ExtractionFailed', '感情特徴量の抽出に失敗しました: %s', ME.message);
             end
         end
-
-        function saveResults(obj)
+        
+        function saveResults(obj, savePath)
             try
                 saveData = struct();
-
                 % 基本データの保存
                 saveData.params = obj.params;
                 saveData.rawData = obj.rawData;
@@ -558,7 +738,6 @@ classdef EEGAnalyzer < handle
                 saveData.processedData = obj.processedData;
                 saveData.processedLabel = obj.processedLabel;
                 saveData.processingInfo = obj.processingInfo;
-
                 % 特徴抽出結果
                 if ~isempty(obj.results)
                     saveData.results = obj.results;
@@ -566,7 +745,7 @@ classdef EEGAnalyzer < handle
 
                 % 分類器結果の保存
                 saveData.classifier = struct();
-
+                
                 % SVM結果
                 if obj.params.classifier.svm.enable && ~isempty(obj.svm)
                     saveData.classifier.svm = struct(...
@@ -586,14 +765,24 @@ classdef EEGAnalyzer < handle
                     saveData.classifier.cnn = struct(...
                         'model', obj.cnn.model, ...
                         'performance', obj.cnn.performance, ...
-                        'trainingInfo', obj.cnn.trainingInfo, ...
-                        'crossValidation', obj.cnn.crossValidation, ...
+                        'trainInfo', obj.cnn.trainInfo, ...
                         'overfitting', obj.cnn.overfitting ...
                     );
                 end
 
-                savedFile = obj.dataManager.saveDataset(saveData);
-                fprintf('Results saved to: %s\n', savedFile);
+                % LSTM結果（追加）
+                if obj.params.classifier.lstm.enable && ~isempty(obj.lstm)
+                    saveData.classifier.lstm = struct(...
+                        'model', obj.lstm.model, ...
+                        'performance', obj.lstm.performance, ...
+                        'trainInfo', obj.lstm.trainInfo, ...
+                        'overfitting', obj.lstm.overfitting ...
+                    );
+                end
+
+                % DataManagerを使用して保存
+                obj.dataManager.saveDataset(saveData, savePath);
+                fprintf('Results saved to: %s\n', savePath);
 
             catch ME
                 error('Failed to save results: %s', ME.message);

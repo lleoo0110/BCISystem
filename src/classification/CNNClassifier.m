@@ -4,6 +4,7 @@ classdef CNNClassifier < handle
         net                 % CNNネットワーク
         isEnabled          % 有効/無効フラグ
         isInitialized      % 初期化フラグ
+        useGPU            % GPUを使用するかどうか
         
         % 学習進捗の追跡用
         trainingHistory    % 学習履歴
@@ -26,6 +27,7 @@ classdef CNNClassifier < handle
             obj.isEnabled = params.classifier.cnn.enable;
             obj.isInitialized = false;
             obj.initializeProperties();
+            obj.useGPU = params.classifier.cnn.gpu;
         end
 
         function results = trainCNN(obj, processedData, processedLabel)
@@ -42,20 +44,24 @@ classdef CNNClassifier < handle
                     processedData = reshape(processedData, [channels, samples, 1]);
                 end
                 
-                % データ分割（学習用/訓練用）
-                [trainData, trainLabels, testData, testLabels] = obj.splitDataset(processedData, processedLabel);
+                % データを3セットに分割
+                [trainData, trainLabels, valData, valLabels, testData, testLabels] = ...
+                    obj.splitDataset(processedData, processedLabel);
                 
-                prepTrainData = obj.prepareDataForCNN(trainData{1});
-                prepTestData = obj.prepareDataForCNN(testData{1});
-
-                % CNNモデルの構築と学習
-                fprintf('\nTraining final model...\n');
-                [cnnModel, trainInfo] = obj.trainCNNModel(prepTrainData, trainLabels{1}, prepTestData, testLabels{1});
-                obj.net = cnnModel;
-                testMetrics = obj.evaluateModel(cnnModel, prepTestData, testLabels{1});
-
-                % 過学習の検出と評価
+                % 各データの準備
+                prepTrainData = obj.prepareDataForCNN(trainData);
+                prepValData = obj.prepareDataForCNN(valData);
+                prepTestData = obj.prepareDataForCNN(testData);
+                
+                % モデルの学習（検証データを使用）
+                [cnnModel, trainInfo] = obj.trainCNNModel(prepTrainData, trainLabels, prepValData, valLabels);
+                
+                % テストデータでの最終評価
+                testMetrics = obj.evaluateModel(cnnModel, prepTestData, testLabels);
+                
+                % 過学習の検証（訓練・検証・テストの3つのデータセットを使用）
                 [isOverfit, obj.overfitMetrics] = obj.validateOverfitting(trainInfo, testMetrics);
+    
                 if isOverfit
                     warning('Overfitting detected: %s severity', obj.overfitMetrics.severity);
                 end
@@ -63,8 +69,8 @@ classdef CNNClassifier < handle
                 % 性能指標の更新
                 obj.updatePerformanceMetrics(testMetrics);
                 
-                % 交差検証の実行    
-                crossValidationResults = [];        % クロスバリデーション結果の初期化
+                crossValidationResults = struct('meanAccuracy', [], 'stdAccuracy', []);
+                % 交差検証の実行     
                 if obj.params.classifier.cnn.training.validation.enable
                     crossValidationResults = obj.performCrossValidation(processedData, processedLabel);
                     fprintf('Cross-validation mean accuracy: %.2f%% (±%.2f%%)\n', ...
@@ -72,17 +78,32 @@ classdef CNNClassifier < handle
                         crossValidationResults.stdAccuracy * 100);
                 end
 
-                % 結果の構築
+                % 結果構造体の構築
                 results = struct(...
                     'model', cnnModel, ...
-                    'performance', obj.performance, ...
-                    'trainingInfo', trainInfo, ...
-                    'crossValidation', crossValidationResults, ...
+                    'performance', struct(...
+                        'overallAccuracy', testMetrics.accuracy, ...
+                        'crossValidation', struct(...
+                            'accuracy', crossValidationResults.meanAccuracy, ...
+                            'std', crossValidationResults.stdAccuracy ...
+                        ), ...
+                        'precision', testMetrics.classwise(1).precision, ...
+                        'recall', testMetrics.classwise(1).recall, ...
+                        'f1score', testMetrics.classwise(1).f1score, ...
+                        'auc', testMetrics.auc, ...
+                        'confusionMatrix', testMetrics.confusionMat ...
+                    ), ...
+                    'trainInfo', trainInfo, ...
                     'overfitting', obj.overfitMetrics ...
                 );
 
                 % 結果の表示
                 obj.displayResults();
+
+                % GPUメモリを解放
+               if obj.useGPU
+                   gpuDevice([]);
+               end
 
             catch ME
                 fprintf('\n=== Error in CNN Training ===\n');
@@ -92,7 +113,118 @@ classdef CNNClassifier < handle
                     fprintf('  File: %s\n  Line: %d\n  Function: %s\n\n', ...
                         ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
                 end
+
+                % GPUメモリを解放
+               if obj.useGPU
+                   gpuDevice([]);
+               end
+
                 rethrow(ME);
+            end
+        end
+
+        function [isOverfit, metrics] = validateOverfitting(obj, trainInfo, testMetrics)
+            disp('=== validateOverfitting ===');
+            
+            % 初期化
+            isOverfit = false;
+            metrics = struct();
+            
+            try
+                % trainInfoの構造を検証
+                if ~isstruct(trainInfo) || ~isfield(trainInfo, 'History')
+                    error('trainInfo must be a struct with History field');
+                end
+                
+                history = trainInfo.History;
+                if ~isfield(history, 'TrainingAccuracy') || ~isfield(history, 'ValidationAccuracy')
+                    error('History must contain TrainingAccuracy and ValidationAccuracy');
+                end
+        
+                % 精度データの取得
+                trainAcc = history.TrainingAccuracy;
+                valAcc = history.ValidationAccuracy;
+                
+                % testMetricsからテスト精度を取得（0-100のスケールに変換）
+                if isstruct(testMetrics) && isfield(testMetrics, 'accuracy')
+                    testAcc = testMetrics.accuracy * 100;
+                else
+                    error('Invalid testMetrics structure');
+                end
+                
+                fprintf('Training Accuracy: %.2f%%\n', trainAcc(end));
+                fprintf('Validation Accuracy: %.2f%%\n', valAcc(end));
+                fprintf('Test Accuracy: %.2f%%\n', testAcc);
+        
+                % Generalization GapとPerformance Gapの計算
+                genGap = abs(trainAcc(end) - valAcc(end));
+                perfGap = abs(trainAcc(end) - testAcc);
+                
+                fprintf('Generalization Gap: %.2f%%\n', genGap);
+                fprintf('Performance Gap: %.2f%%\n', perfGap);
+        
+                % トレンド分析
+                [trainTrend, valTrend] = obj.analyzeLearningCurves(trainAcc, valAcc);
+                
+                % 完全な偏りの検出
+                if isfield(testMetrics, 'confusionMat')
+                    cm = testMetrics.confusionMat;
+                    
+                    % 各実際のクラス（行）のサンプル数を確認
+                    missingActual = any(sum(cm, 2) == 0);
+                    % 各予測クラス（列）の予測件数を確認
+                    missingPredicted = any(sum(cm, 1) == 0);
+                    
+                    % いずれかが true ならば、全く現れないクラスがあると判断
+                    isCompletelyBiased = missingActual || missingPredicted;
+                else
+                    isCompletelyBiased = false;
+                end
+                
+                % 学習進行の確認
+                isLearningProgressing = std(diff(trainAcc)) > 0.01;
+                
+                % 過学習の重大度判定
+                severity = obj.determineOverfittingSeverity(genGap, perfGap, isCompletelyBiased, isLearningProgressing);
+                
+                % 最適エポックの検出
+                [optimalEpoch, totalEpochs] = obj.findOptimalEpoch(valAcc);
+                fprintf('Optimal Epoch: %d/%d\n', optimalEpoch, totalEpochs);
+                
+                % メトリクスの構築
+                metrics = struct(...
+                    'generalizationGap', genGap, ...
+                    'performanceGap', perfGap, ...
+                    'isCompletelyBiased', isCompletelyBiased, ...
+                    'isLearningProgressing', isLearningProgressing, ...
+                    'validationTrend', valTrend, ...
+                    'trainingTrend', trainTrend, ...
+                    'severity', severity, ...
+                    'optimalEpoch', optimalEpoch, ...
+                    'totalEpochs', totalEpochs);
+                
+                % 過学習判定
+                isOverfit = strcmp(severity, 'critical') || ...
+                           strcmp(severity, 'severe') || ...
+                           strcmp(severity, 'moderate');
+                
+                fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
+                
+            catch ME
+                fprintf('エラー発生in validateOverfitting: %s\n', ME.message);
+                fprintf('Error stack:\n');
+                disp(getReport(ME, 'extended'));
+                
+                % エラー時のフォールバック値を設定
+                metrics = struct(...
+                    'generalizationGap', Inf, ...
+                    'performanceGap', Inf, ...
+                    'isCompletelyBiased', true, ...
+                    'isLearningProgressing', false, ...
+                    'severity', 'error', ...
+                    'optimalEpoch', 0, ...
+                    'totalEpochs', 0);
+                isOverfit = true;
             end
         end
 
@@ -128,171 +260,172 @@ classdef CNNClassifier < handle
             obj.overfitMetrics = struct();
         end
         
-        function [trainData, trainLabels, testData, testLabels] = splitDataset(obj, data, labels)
+        function [trainData, trainLabels, valData, valLabels, testData, testLabels] = splitDataset(obj, data, labels)
             try
-                % データサイズの取得と表示
+                % 分割数の取得
+                k = obj.params.classifier.evaluation.kfold;
+                
+                % データサイズの取得
                 [~, ~, numEpochs] = size(data);
                 fprintf('Total epochs: %d\n', numEpochs);
-
-                % データとラベルのインデックスをシャッフル
+        
+                % インデックスのシャッフル
                 rng('default'); % 再現性のため
                 shuffledIdx = randperm(numEpochs);
-
-                % k値の計算
-                k = round(1 / obj.params.classifier.cnn.training.validation.holdout);
-                fprintf('Number of folds (k): %d\n', k);
-
-                % 各フォールドのサイズを計算
-                foldSize = floor(numEpochs / k);
-
-                % データの分割
-                trainData = cell(k, 1);
-                testData = cell(k, 1);
-                trainLabels = cell(k, 1);
-                testLabels = cell(k, 1);
-
-                for i = 1:k
-                    % テストデータのインデックス範囲を計算
-                    testStartIdx = (i-1) * foldSize + 1;
-                    testEndIdx = min(i * foldSize, numEpochs);
-                    testIdx = shuffledIdx(testStartIdx:testEndIdx);
-
-                    % 訓練データのインデックスを取得
-                    trainIdx = shuffledIdx(setdiff(1:numEpochs, testStartIdx:testEndIdx));
-
-                    % データを分割して保存
-                    testData{i} = data(:,:,testIdx);
-                    trainData{i} = data(:,:,trainIdx);
-                    testLabels{i} = labels(testIdx);
-                    trainLabels{i} = labels(trainIdx);
-
-                    % 分割状況の出力
-                    fprintf('Fold %d - Train: %d samples, Test: %d samples\n', ...
-                        i, length(trainIdx), length(testIdx));
-                end
-
-            catch ME
-                error('Data splitting failed: %s', ME.message);
-            end
-        end
-
-        function cvResults = performCrossValidation(obj, data, labels)
-            try
-                % クロスバリデーションのパラメータ取得
-                k = round(1 / obj.params.classifier.cnn.training.validation.holdout);
-
-                % cvResultsの初期化を修正
-                cvResults = struct();
-                cvResults.meanAccuracy = 0;
-                cvResults.stdAccuracy = 0;
-                cvResults.folds = struct();
-                cvResults.folds.accuracy = zeros(1, k);
-                cvResults.folds.confusionMat = cell(1, k);
-                cvResults.folds.classwise = cell(1, k);
-
-                % データの分割（学習・テスト用）
-                [trainData, trainLabels, testData, testLabels] = obj.splitDataset(data, labels);
-
-                for i = 1:k
-                    fprintf('Fold %d/%d...\n', i, k);
-
-                    % データの準備
-                    prepTrainData = obj.prepareDataForCNN(trainData{i});
-                    prepTestData = obj.prepareDataForCNN(testData{i});
-
-                    % モデルの学習
-                    [model, ~] = obj.trainCNNModel(prepTrainData, trainLabels{i}, prepTestData, testLabels{i});
-
-                    % テストデータでの評価
-                    metrics = obj.evaluateModel(model, prepTestData, testLabels{i});
-
-                    cvResults.folds.accuracy(i) = metrics.accuracy;
-                    cvResults.folds.confusionMat{i} = metrics.confusionMat;
-                    cvResults.folds.classwise{i} = metrics.classwise;
-
-                    fprintf('Fold %d accuracy: %.2f%%\n', i, cvResults.folds.accuracy(i) * 100);
-                end
-
-                % 統計の計算
-                cvResults.meanAccuracy = mean(cvResults.folds.accuracy);
-                cvResults.stdAccuracy = std(cvResults.folds.accuracy);
-
-                fprintf('\nCross-validation Results:\n');
-                fprintf('Mean Accuracy: %.2f%% (±%.2f%%)\n', ...
-                    cvResults.meanAccuracy * 100, cvResults.stdAccuracy * 100);
-
-            catch ME
-                fprintf('Cross-validation failed: %s\n', ME.message);
-                fprintf('Error details:\n');
-                disp(ME.stack);
-                rethrow(ME);
-            end
-        end
-
-        function [cnnModel, trainInfo] = trainCNNModel(obj, trainData, trainLabels, testData, testLabels)
-            try
-                % トレーニング情報の保存用構造体を初期化
-                trainInfo = struct(...
-                    'TrainingLoss', [], ...
-                    'ValidationLoss', [], ...
-                    'TrainingAccuracy', [], ...
-                    'ValidationAccuracy', [], ...
-                    'FinalEpoch', 0 ...
-                );
-
-                % データの準備
-                if ndims(trainData) ~= 4
-                    trainData = obj.prepareDataForCNN(trainData);
-                    if ~isempty(testData)
-                        testData = obj.prepareDataForCNN(testData);
-                    end
-                end
-
-                % ラベルの整形
-                trainLabels = categorical(trainLabels(:));
-                if ~isempty(testLabels)
-                    testLabels = categorical(testLabels(:));
-                end
+        
+                % 分割比率の計算
+                trainRatio = (k-1)/k;  % 1-k/k
+                valRatio = 1/(2*k);    % k/2k
+                testRatio = 1/(2*k);   % k/2k
+        
+                % データ数の計算
+                numTrain = floor(numEpochs * trainRatio);
+                numVal = floor(numEpochs * valRatio);
                 
-                % トレーニングオプションの設定
-                options = trainingOptions(obj.params.classifier.cnn.training.optimizer.type, ...
-                    'InitialLearnRate', obj.params.classifier.cnn.training.optimizer.learningRate, ...
-                    'MaxEpochs', obj.params.classifier.cnn.training.maxEpochs, ...
-                    'MiniBatchSize', obj.params.classifier.cnn.training.miniBatchSize, ...
-                    'Plots', 'training-progress', ...
-                    'OutputFcn', @(info)obj.trainingOutputFcn(info, trainInfo), ...
-                    'Verbose', true);
-
-                % 検証データの設定
-                if ~isempty(testData) && ~isempty(testLabels)
-                    options.ValidationData = {testData, testLabels};
-                    options.ValidationFrequency = obj.params.classifier.cnn.training.validation.frequency;
-                    options.ValidationPatience = obj.params.classifier.cnn.training.validation.patience;
-                    fprintf('検証データを使用して学習を開始します\n');
-                else
-                    fprintf('検証データなしで学習を開始します\n');
+                % インデックスの分割
+                trainIdx = shuffledIdx(1:numTrain);
+                valIdx = shuffledIdx(numTrain+1:numTrain+numVal);
+                testIdx = shuffledIdx(numTrain+numVal+1:end);
+        
+                % データの分割
+                trainData = data(:,:,trainIdx);
+                trainLabels = labels(trainIdx);
+                
+                valData = data(:,:,valIdx);
+                valLabels = labels(valIdx);
+                
+                testData = data(:,:,testIdx);
+                testLabels = labels(testIdx);
+        
+                % 分割情報の表示
+                fprintf('データ分割 (k=%d):\n', k);
+                fprintf('  訓練データ: %d サンプル (%.1f%%)\n', ...
+                    length(trainIdx), (length(trainIdx)/numEpochs)*100);
+                fprintf('  検証データ: %d サンプル (%.1f%%)\n', ...
+                    length(valIdx), (length(valIdx)/numEpochs)*100);
+                fprintf('  テストデータ: %d サンプル (%.1f%%)\n', ...
+                    length(testIdx), (length(testIdx)/numEpochs)*100);
+        
+                % データの検証
+                if isempty(trainData) || isempty(valData) || isempty(testData)
+                    error('一つ以上のデータセットが空です');
                 end
-
-                % レイヤーの構築とモデルの学習
-                layers = obj.buildCNNLayers(trainData);
-                [cnnModel, trainHistory] = trainNetwork(trainData, trainLabels, layers, options);
-
-                % 学習履歴の保存
-                trainInfo.History = trainHistory;
-                trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
-
-                fprintf('学習完了: 最終エポック %d\n', trainInfo.FinalEpoch);
-
+        
+                % クラスの分布を確認
+                obj.checkClassDistribution('訓練', trainLabels);
+                obj.checkClassDistribution('検証', valLabels);
+                obj.checkClassDistribution('テスト', testLabels);
+        
             catch ME
-                fprintf('trainCNNModelでエラーが発生: %s\n', ME.message);
-                rethrow(ME);
+                error('データ分割に失敗: %s', ME.message);
             end
+        end
+        
+        % クラスの分布を確認するヘルパーメソッド
+        function checkClassDistribution(~, setName, labels)
+            uniqueLabels = unique(labels);
+            fprintf('\n%sデータのクラス分布:\n', setName);
+            for i = 1:length(uniqueLabels)
+                count = sum(labels == uniqueLabels(i));
+                fprintf('  クラス %d: %d サンプル (%.1f%%)\n', ...
+                    uniqueLabels(i), count, (count/length(labels))*100);
+            end
+        end
+
+        function [cnnModel, trainInfo] = trainCNNModel(obj, trainData, trainLabels, valData, valLabels)
+           try        
+               % データの形状変換
+               if ndims(trainData) ~= 4
+                   trainData = obj.prepareDataForCNN(trainData);
+               end
+        
+               % ラベルのカテゴリカル変換
+               uniqueLabels = unique(trainLabels);
+               trainLabels = categorical(trainLabels, uniqueLabels);
+        
+               % GPU転送
+               if obj.useGPU
+                   trainData = gpuArray(trainData);
+               end
+        
+               % テストデータの処理
+               if ~isempty(valData)
+                   if ndims(valData) ~= 4
+                       valData = obj.prepareDataForCNN(valData);
+                   end
+                   valLabels = categorical(valLabels, uniqueLabels);
+
+                   % GPUにデータ転送
+                   if obj.useGPU
+                       valData = gpuArray(valData);
+                   end
+               end
+        
+               % トレーニング情報の初期化
+               trainInfo = struct(...
+                   'TrainingLoss', [], ...
+                   'ValidationLoss', [], ...
+                   'TrainingAccuracy', [], ...
+                   'ValidationAccuracy', [], ...
+                   'FinalEpoch', 0 ...
+               );
+        
+               % 実行環境の選択
+               executionEnvironment = 'cpu';
+               if obj.useGPU
+                   executionEnvironment = 'gpu';
+               end
+        
+               % トレーニングオプションの設定
+               options = trainingOptions(obj.params.classifier.cnn.training.optimizer.type, ...
+                   'InitialLearnRate', obj.params.classifier.cnn.training.optimizer.learningRate, ...
+                   'MaxEpochs', obj.params.classifier.cnn.training.maxEpochs, ...
+                   'MiniBatchSize', obj.params.classifier.cnn.training.miniBatchSize, ...
+                   'Plots', 'none', ...
+                   'OutputFcn', @(info)obj.trainingOutputFcn(info), ...
+                   'ExecutionEnvironment', executionEnvironment, ...
+                   'Verbose', true);
+        
+               % 検証データの設定
+               if ~isempty(valData) && ~isempty(valLabels)
+                   options.ValidationData = {valData, valLabels};
+                   options.ValidationFrequency = obj.params.classifier.cnn.training.validation.frequency;
+                   options.ValidationPatience = obj.params.classifier.cnn.training.validation.patience;
+                   fprintf('検証データを使用して学習を開始します\n');
+               else
+                   fprintf('検証データなしで学習を開始します\n');
+               end
+        
+               % レイヤーの構築とモデルの学習
+               layers = obj.buildCNNLayers(trainData);
+               [cnnModel, trainHistory] = trainNetwork(trainData, trainLabels, layers, options);
+        
+               % 学習履歴の保存
+               trainInfo.History = trainHistory;
+               trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
+        
+               fprintf('学習完了: 最終エポック %d\n', trainInfo.FinalEpoch);
+
+               % GPUメモリを解放
+               if obj.useGPU
+                   gpuDevice([]);
+               end
+        
+           catch ME
+               fprintf('trainCNNModelでエラーが発生: %s\n', ME.message);
+        
+               % GPUメモリを解放
+               if obj.useGPU
+                   gpuDevice([]);
+               end
+        
+               rethrow(ME);
+           end
         end
 
         function layers = buildCNNLayers(obj, data)
-           % 入力サイズの取得と表示
+            % 入力サイズの取得
             inputSize = size(data);
-            fprintf('Building network with input size: [%s]\n', mat2str(inputSize));
 
             % CNNの入力サイズを設定 [height width channels]
             layerInputSize = [inputSize(1), inputSize(2), 1];
@@ -300,10 +433,18 @@ classdef CNNClassifier < handle
             % アーキテクチャパラメータの取得
             arch = obj.params.classifier.cnn.architecture;
 
-            % 入力層の設定
-            layers = [
-                imageInputLayer(layerInputSize, 'Normalization', 'none', 'Name', 'input')
-            ];
+            % レイヤー数の計算
+            numConvLayers = 3;
+            numFCLayers = length(arch.fullyConnected);
+            totalLayers = numConvLayers * 5 + numFCLayers * 2 + 4; % 各畳み込み層に5つ、FC層に2つ、その他4つ
+
+            % レイヤー配列の事前割り当て
+            layers = cell(totalLayers, 1);
+            layerIdx = 1;
+
+            % 入力層
+            layers{layerIdx} = imageInputLayer(layerInputSize, 'Normalization', 'none', 'Name', 'input');
+            layerIdx = layerIdx + 1;
 
             % 畳み込み層、プーリング層、ドロップアウト層の追加
             convLayers = {'conv1', 'conv2', 'conv3'};
@@ -312,84 +453,45 @@ classdef CNNClassifier < handle
                 convParams = arch.convLayers.(convName);
                 poolParams = arch.poolLayers.(['pool' num2str(i)]);
                 dropoutRate = arch.dropoutLayers.(['dropout' num2str(i)]);
-                
-                layers = [layers
-                    convolution2dLayer(convParams.size, convParams.filters, ...
-                        'Stride', convParams.stride, ...
-                        'Padding', convParams.padding, ...
-                        'Name', ['conv' num2str(i)])
-                ];
-                
+
+                layers{layerIdx} = convolution2dLayer(convParams.size, convParams.filters, ...
+                    'Stride', convParams.stride, 'Padding', convParams.padding, ...
+                    'Name', ['conv' num2str(i)]);
+                layerIdx = layerIdx + 1;
+
                 if arch.batchNorm
-                    layers = [layers
-                        batchNormalizationLayer('Name', ['bn' num2str(i)])
-                    ];
+                    layers{layerIdx} = batchNormalizationLayer('Name', ['bn' num2str(i)]);
+                    layerIdx = layerIdx + 1;
                 end
-                
-                layers = [layers
-                    reluLayer('Name', ['relu' num2str(i)])
-                    maxPooling2dLayer(poolParams.size, ...
-                        'Stride', poolParams.stride, ...
-                        'Name', ['pool' num2str(i)])
-                    dropoutLayer(dropoutRate, 'Name', ['dropout' num2str(i)])
-                ];
+
+                layers{layerIdx} = reluLayer('Name', ['relu' num2str(i)]);
+                layerIdx = layerIdx + 1;
+                layers{layerIdx} = maxPooling2dLayer(poolParams.size, 'Stride', poolParams.stride, ...
+                    'Name', ['pool' num2str(i)]);
+                layerIdx = layerIdx + 1;
+                layers{layerIdx} = dropoutLayer(dropoutRate, 'Name', ['dropout' num2str(i)]);
+                layerIdx = layerIdx + 1;
             end
 
             % 全結合層の追加
             for i = 1:length(arch.fullyConnected)
-                layers = [layers
-                    fullyConnectedLayer(arch.fullyConnected(i), ...
-                        'Name', ['fc' num2str(i)])
-                    reluLayer('Name', ['relu_fc' num2str(i)])
-                ];
+                layers{layerIdx} = fullyConnectedLayer(arch.fullyConnected(i), ...
+                    'Name', ['fc' num2str(i)]);
+                layerIdx = layerIdx + 1;
+                layers{layerIdx} = reluLayer('Name', ['relu_fc' num2str(i)]);
+                layerIdx = layerIdx + 1;
             end
 
             % 出力層の追加
-            layers = [layers
-                fullyConnectedLayer(arch.numClasses, 'Name', 'fc_output')
-                softmaxLayer('Name', 'softmax')
-                classificationLayer('Name', 'output')
-            ];
-        end
+            layers{layerIdx} = fullyConnectedLayer(arch.numClasses, 'Name', 'fc_output');
+            layerIdx = layerIdx + 1;
+            layers{layerIdx} = softmaxLayer('Name', 'softmax');
+            layerIdx = layerIdx + 1;
+            layers{layerIdx} = classificationLayer('Name', 'output');
 
-        function stop = trainingOutputFcn(obj, info, savedInfo)
-            % 初期化
-            if info.State == "start"
-                obj.trainingHistory = struct('loss', [], 'accuracy', []);
-                obj.validationHistory = struct('loss', [], 'accuracy', []);
-                obj.bestValAccuracy = 0;
-                obj.patienceCounter = 0;
-                obj.currentEpoch = 0;
-            end
-
-            stop = false;
-            obj.currentEpoch = obj.currentEpoch + 1;
-
-            % 学習情報の保存
-            if ~isempty(info.TrainingLoss)
-                savedInfo.TrainingLoss(obj.currentEpoch) = info.TrainingLoss;
-                savedInfo.TrainingAccuracy(obj.currentEpoch) = info.TrainingAccuracy;
-            end
-
-            if ~isempty(info.ValidationLoss)
-                savedInfo.ValidationLoss(obj.currentEpoch) = info.ValidationLoss;
-                savedInfo.ValidationAccuracy(obj.currentEpoch) = info.ValidationAccuracy;
-                currentAccuracy = info.ValidationAccuracy;
-
-                % Early Stopping判定
-                if currentAccuracy > obj.bestValAccuracy
-                    obj.bestValAccuracy = currentAccuracy;
-                    obj.patienceCounter = 0;
-                else
-                    obj.patienceCounter = obj.patienceCounter + 1;
-                    if obj.patienceCounter >= obj.params.classifier.cnn.training.validation.patience
-                        fprintf('\nEarly stopping triggered at epoch %d\n', obj.currentEpoch);
-                        stop = true;
-                    end
-                end
-            elseif mod(obj.currentEpoch, 10) == 0
-                fprintf('\n');
-            end
+            % セル配列を層配列に変換
+            layers = layers(~cellfun('isempty', layers));
+            layers = cat(1, layers{:});
         end
 
         function metrics = evaluateModel(~, model, testData, testLabels)
@@ -444,137 +546,75 @@ classdef CNNClassifier < handle
            end
         end
         
-        function [isOverfit, metrics] = validateOverfitting(obj, trainInfo, testMetrics)
-            try
-                % trainInfoの内容確認
-                disp('=== validateOverfitting: 入力データ確認 ===');
-                disp('trainInfo構造体のフィールド:');
-                disp(fieldnames(trainInfo));
-
-                if isfield(trainInfo, 'History')
-                    disp('History構造体のフィールド:');
-                    disp(fieldnames(trainInfo.History));
-                end
-
-                % データ検証
-                if ~isfield(trainInfo, 'History') || ...
-                   ~isfield(trainInfo.History, 'TrainingAccuracy') || ...
-                   ~isfield(trainInfo.History, 'ValidationAccuracy')
-                    error('学習履歴データが不完全です');
-                end
-
-                trainAcc = trainInfo.History.TrainingAccuracy;
-                valAcc = trainInfo.History.ValidationAccuracy;
-
-                % データ形状の確認
-                fprintf('TrainingAccuracy: サイズ=%s, 型=%s\n', mat2str(size(trainAcc)), class(trainAcc));
-                fprintf('ValidationAccuracy: サイズ=%s, 型=%s\n', mat2str(size(valAcc)), class(valAcc));
-
-                % 計算前の値確認
-                fprintf('最終TrainingAccuracy: %.4f\n', trainAcc(end));
-                fprintf('最終ValidationAccuracy: %.4f\n', valAcc(end));
-
-                genGap = trainAcc(end) - valAcc(end);
-                fprintf('計算されたGeneralization Gap: %.4f\n', genGap);
-
-                % トレンド分析
-                [trainTrend, valTrend] = obj.analyzeLearningCurves(trainAcc, valAcc);
-                disp('トレンド分析結果:');
-                disp(trainTrend);
-                disp(valTrend);
-
-                % 性能ギャップ
-                if ~isfield(testMetrics, 'accuracy')
-                    error('testMetricsにaccuracyフィールドがありません');
-                end
-                fprintf('TestMetrics accuracy: %.4f\n', testMetrics.accuracy);
-
-                perfGap = abs(trainAcc(end) - testMetrics.accuracy);
-                fprintf('計算されたPerformance Gap: %.4f\n', perfGap);
-
-                % Early Stopping分析
-                [optimalEpoch, totalEpochs] = obj.findOptimalEpoch(valAcc);
-                fprintf('Optimal Epoch: %d/%d\n', optimalEpoch, totalEpochs);
-
-                % 重大度判定
-                severity = obj.determineOverfittingSeverity(genGap, perfGap, valTrend);
-                fprintf('判定された重大度: %s\n', severity);
-
-                % メトリクスの構築と確認
-                metrics = struct(...
-                    'generalizationGap', genGap, ...
-                    'performanceGap', perfGap, ...
-                    'earlyStoppingEffect', struct(...
-                        'optimal_epoch', optimalEpoch, ...
-                        'total_epochs', totalEpochs, ...
-                        'stopping_efficiency', optimalEpoch/totalEpochs), ...
-                    'validationTrend', valTrend, ...
-                    'trainingTrend', trainTrend, ...
-                    'severity', severity);
-
-                disp('=== 生成されたメトリクス ===');
-                disp(metrics);
-
-                isOverfit = strcmp(severity, 'severe') || strcmp(severity, 'moderate');
-                fprintf('過学習判定: %s\n', mat2str(isOverfit));
-
-            catch ME
-                fprintf('エラー発生in validateOverfitting: %s\n', ME.message);
-                fprintf('エラー位置:\n');
-                for i = 1:length(ME.stack)
-                    fprintf('  File: %s, Line: %d, Function: %s\n', ...
-                        ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
-                end
-                metrics = obj.createDefaultMetrics();
-                isOverfit = false;
-            end
-        end
-        
         function [trainTrend, valTrend] = analyzeLearningCurves(~, trainAcc, valAcc)
-            disp('=== analyzeLearningCurves: 入力データ確認 ===');
-            fprintf('trainAcc: サイズ=%s\n', mat2str(size(trainAcc)));
-            fprintf('valAcc: サイズ=%s\n', mat2str(size(valAcc)));
-
+            disp('=== analyzeLearningCurves ===');
+            
             try
-                % データの移動平均計算
+                % 入力データの検証
+                if isempty(trainAcc) || isempty(valAcc)
+                    error('学習曲線データが空です');
+                end
+                
+                % NaNチェック
+                trainAcc = trainAcc(~isnan(trainAcc));
+                valAcc = valAcc(~isnan(valAcc));
+                
+                if isempty(trainAcc) || isempty(valAcc)
+                    error('有効なデータがありません（NaN除去後）');
+                end
+        
+                % 移動平均の計算
                 windowSize = min(5, floor(length(trainAcc)/3));
-                fprintf('使用する窓サイズ: %d\n', windowSize);
-
+                if windowSize < 1
+                    windowSize = 1;
+                end
+                
                 trainSmooth = movmean(trainAcc, windowSize);
                 valSmooth = movmean(valAcc, windowSize);
-
-                % 変化率計算
+                
+                % 変化率の計算
                 trainDiff = diff(trainSmooth);
                 valDiff = diff(valSmooth);
-
-                fprintf('差分データのサイズ - Train: %s, Val: %s\n', ...
-                    mat2str(size(trainDiff)), mat2str(size(valDiff)));
-
+                
                 % トレンド指標の計算
                 trainTrend = struct(...
                     'mean_change', mean(trainDiff), ...
                     'volatility', std(trainDiff), ...
                     'increasing_ratio', sum(trainDiff > 0) / length(trainDiff));
-
+                
                 valTrend = struct(...
                     'mean_change', mean(valDiff), ...
                     'volatility', std(valDiff), ...
                     'increasing_ratio', sum(valDiff > 0) / length(valDiff));
-
-                disp('計算されたトレンド指標:');
-                disp(trainTrend);
-                disp(valTrend);
-
+        
+                % 結果の検証
+                if isnan(valTrend.mean_change) || isnan(valTrend.volatility)
+                    warning('計算結果にNaNが含まれています');
+                    fprintf('Training data stats: min=%f, max=%f, length=%d\n', ...
+                        min(trainAcc), max(trainAcc), length(trainAcc));
+                    fprintf('Validation data stats: min=%f, max=%f, length=%d\n', ...
+                        min(valAcc), max(valAcc), length(valAcc));
+                end
+        
             catch ME
                 fprintf('エラー発生in analyzeLearningCurves: %s\n', ME.message);
+                % エラー時のフォールバック値を設定
+                trainTrend = struct(...
+                    'mean_change', 0, ...
+                    'volatility', 0, ...
+                    'increasing_ratio', 0);
+                valTrend = struct(...
+                    'mean_change', 0, ...
+                    'volatility', 0, ...
+                    'increasing_ratio', 0);
                 rethrow(ME);
             end
         end
         
         function effect = analyzeEarlyStoppingEffect(~, trainInfo)
             % Early Stoppingの効果分析
-            valLoss = trainInfo.ValidationLoss;
-            minLossEpoch = find(valLoss == min(valLoss), 1);
+            valLoss = trainInfo.History.ValidationLoss;
+            [~, minLossEpoch] = min(valLoss);
             totalEpochs = length(valLoss);
             
             effect = struct(...
@@ -582,87 +622,211 @@ classdef CNNClassifier < handle
                 'total_epochs', totalEpochs, ...
                 'stopping_efficiency', minLossEpoch / totalEpochs);
         end
-        
-        function severity = determineOverfittingSeverity(~, genGap, perfGap, valTrend)
-            disp('=== determineOverfittingSeverity: 入力値確認 ===');
-            fprintf('generalizationGap: %.4f\n', genGap);
-            fprintf('performanceGap: %.4f\n', perfGap);
-            disp('validationTrend:');
-            disp(valTrend);
 
-            try
-                if genGap > 0.2 && (valTrend.mean_change < -0.01 || perfGap > 0.2)
-                    severity = 'severe';
-                elseif genGap > 0.1 && (valTrend.mean_change < -0.005 || perfGap > 0.1)
-                    severity = 'moderate';
-                elseif genGap > 0.05 || perfGap > 0.05
-                    severity = 'mild';
-                else
-                    severity = 'none';
-                end
-
-                fprintf('判定された重大度: %s\n', severity);
-
-            catch ME
-                fprintf('エラー発生in determineOverfittingSeverity: %s\n', ME.message);
-                severity = 'error';
+        function severity = determineOverfittingSeverity(~, genGap, perfGap, isCompletelyBiased, isLearningProgressing)
+            if isCompletelyBiased
+                severity = 'critical';
+            elseif ~isLearningProgressing
+                severity = 'failed';
+            elseif genGap > 10 || perfGap > 10
+                severity = 'severe';
+            elseif genGap > 5 || perfGap > 5
+                severity = 'moderate';
+            elseif genGap > 3 || perfGap > 3
+                severity = 'mild';
+            else
+                severity = 'none';
             end
         end
         
         function [optimalEpoch, totalEpochs] = findOptimalEpoch(~, valAcc)
-            disp('=== findOptimalEpoch: 入力データ確認 ===');
-            fprintf('valAcc: サイズ=%s\n', mat2str(size(valAcc)));
-
             try
                 totalEpochs = length(valAcc);
                 [~, optimalEpoch] = max(valAcc);
-
-                fprintf('検出された最適エポック: %d/%d\n', optimalEpoch, totalEpochs);
-
+                
+                % 最適エポックが最後のエポックの場合、まだ改善の余地があるかもしれない
+                if optimalEpoch == totalEpochs
+                    fprintf('Warning: 最適エポックが最終エポックと一致。より長い学習が必要かもしれません。\n');
+                end
+        
             catch ME
                 fprintf('エラー発生in findOptimalEpoch: %s\n', ME.message);
                 optimalEpoch = 0;
                 totalEpochs = 0;
             end
         end
-
-        function metrics = createDefaultMetrics(~)
-            metrics = struct(...
-                'generalizationGap', 0, ...
-                'performanceGap', 0, ...
-                'earlyStoppingEffect', struct(...
-                    'optimal_epoch', 0, ...
-                    'total_epochs', 0, ...
-                    'stopping_efficiency', 0), ...
-                'validationTrend', struct(...
-                    'mean_change', 0, ...
-                    'volatility', 0, ...
-                    'increasing_ratio', 0), ...
-                'trainingTrend', struct(...
-                    'mean_change', 0, ...
-                    'volatility', 0, ...
-                    'increasing_ratio', 0), ...
-                'severity', 'unknown');
-        end
         
         function preparedData = prepareDataForCNN(~, data)
             try
-                % データ変換の過程を追跡
                 if ndims(data) == 3
-                    [channels, samples, epochs] = size(data);
                     preparedData = permute(data, [2 1 4 3]);
-
                 elseif ismatrix(data)
-                    [channels, samples] = size(data);
+                    [~, samples] = size(data);
                     preparedData = permute(data, [2 1 3]);
-                    preparedData = reshape(preparedData, [samples, channels, 1, 1]);
-
+                    preparedData = reshape(preparedData, [samples, size(data,1), 1, 1]);
                 else
                     error('Unsupported data dimension: %d', ndims(data));
                 end
-
             catch ME
                 fprintf('\nError in prepareDataForCNN: %s\n', ME.message);
+                rethrow(ME);
+            end
+        end
+        
+        function stop = trainingOutputFcn(obj, info)
+            % 初期化
+            stop = false;
+
+            if info.State == "start"
+                obj.currentEpoch = 0;
+                return;
+            end
+
+            % 学習情報の更新
+            obj.currentEpoch = obj.currentEpoch + 1;
+
+            % 検証データがある場合のEarly Stopping
+            if ~isempty(info.ValidationLoss)
+                currentAccuracy = info.ValidationAccuracy;
+
+                if currentAccuracy > obj.bestValAccuracy
+                    obj.bestValAccuracy = currentAccuracy;
+                    obj.patienceCounter = 0;
+                else
+                    obj.patienceCounter = obj.patienceCounter + 1;
+                    if obj.patienceCounter >= obj.params.classifier.cnn.training.validation.patience
+                        fprintf('\nEarly stopping triggered at epoch %d\n', obj.currentEpoch);
+                        stop = true;
+                    end
+                end
+            end
+        end
+        
+        function cvResults = performCrossValidation(obj, data, labels)
+            try
+                % k-fold cross validationのパラメータ取得
+                k = obj.params.classifier.evaluation.kfold;
+                fprintf('\nStarting %d-fold Cross-validation\n', k);
+        
+                % cvResultsの初期化
+                cvResults = struct();
+                cvResults.folds = struct(...
+                    'accuracy', zeros(1, k), ...
+                    'confusionMat', cell(1, k), ...
+                    'classwise', cell(1, k), ...
+                    'validation_curve', cell(1, k) ...
+                );
+        
+                % データの分割（学習・テスト・検証用）
+                [trainData, trainLabels, valData, valLabels, testData, testLabels] = ...
+                    obj.splitDataset(data, labels);
+        
+                for i = 1:k
+                    fprintf('\nFold %d/%d\n', i, k);
+        
+                    % データの準備
+                    prepTrainData = obj.prepareDataForCNN(trainData{i});
+                    prepValData = obj.prepareDataForCNN(valData{i});
+                    prepTestData = obj.prepareDataForCNN(testData{i});
+        
+                    try
+                        % モデルの学習（検証データを使用）
+                        [model, trainInfo] = obj.trainCNNModel(...
+                            prepTrainData, trainLabels{i}, prepValData, valLabels{i});
+        
+                        % テストデータでの評価
+                        metrics = obj.evaluateModel(model, prepTestData, testLabels{i});
+        
+                        % 結果の保存
+                        cvResults.folds.accuracy(i) = metrics.accuracy;
+                        cvResults.folds.confusionMat{i} = metrics.confusionMat;
+                        cvResults.folds.classwise{i} = metrics.classwise;
+                        
+                        % 学習曲線の保存
+                        cvResults.folds.validation_curve{i} = struct(...
+                            'train_accuracy', trainInfo.History.TrainingAccuracy, ...
+                            'val_accuracy', trainInfo.History.ValidationAccuracy, ...
+                            'train_loss', trainInfo.History.TrainingLoss, ...
+                            'val_loss', trainInfo.History.ValidationLoss ...
+                        );
+        
+                        fprintf('Fold %d - Accuracy: %.2f%%\n', ...
+                            i, cvResults.folds.accuracy(i) * 100);
+        
+                    catch ME
+                        warning('Error in fold %d: %s', i, ME.message);
+                        % エラーが発生したフォールドは精度0として記録
+                        cvResults.folds.accuracy(i) = 0;
+                        cvResults.folds.confusionMat{i} = [];
+                        cvResults.folds.classwise{i} = [];
+                        cvResults.folds.validation_curve{i} = [];
+                    end
+                end
+        
+                % 統計量の計算
+                validFolds = cvResults.folds.accuracy > 0;
+                if any(validFolds)
+                    cvResults.meanAccuracy = mean(cvResults.folds.accuracy(validFolds));
+                    cvResults.stdAccuracy = std(cvResults.folds.accuracy(validFolds));
+                    cvResults.minAccuracy = min(cvResults.folds.accuracy(validFolds));
+                    cvResults.maxAccuracy = max(cvResults.folds.accuracy(validFolds));
+                else
+                    cvResults.meanAccuracy = 0;
+                    cvResults.stdAccuracy = 0;
+                    cvResults.minAccuracy = 0;
+                    cvResults.maxAccuracy = 0;
+                end
+        
+                % クラスごとの平均性能
+                if ~isempty(cvResults.folds.classwise{1})
+                    numClasses = length(cvResults.folds.classwise{1});
+                    cvResults.classwise_mean = struct(...
+                        'precision', zeros(1, numClasses), ...
+                        'recall', zeros(1, numClasses), ...
+                        'f1score', zeros(1, numClasses) ...
+                    );
+        
+                    for class = 1:numClasses
+                        validClassMetrics = cellfun(@(x) ~isempty(x), cvResults.folds.classwise);
+                        precision_values = cellfun(@(x) x(class).precision, ...
+                            cvResults.folds.classwise(validClassMetrics));
+                        recall_values = cellfun(@(x) x(class).recall, ...
+                            cvResults.folds.classwise(validClassMetrics));
+                        f1_values = cellfun(@(x) x(class).f1score, ...
+                            cvResults.folds.classwise(validClassMetrics));
+        
+                        cvResults.classwise_mean.precision(class) = mean(precision_values);
+                        cvResults.classwise_mean.recall(class) = mean(recall_values);
+                        cvResults.classwise_mean.f1score(class) = mean(f1_values);
+                    end
+                end
+        
+                % 結果の表示
+                fprintf('\nCross-validation Results:\n');
+                fprintf('Mean Accuracy: %.2f%% (±%.2f%%)\n', ...
+                    cvResults.meanAccuracy * 100, cvResults.stdAccuracy * 100);
+                fprintf('Min Accuracy: %.2f%%\n', cvResults.minAccuracy * 100);
+                fprintf('Max Accuracy: %.2f%%\n', cvResults.maxAccuracy * 100);
+                fprintf('Successfully completed folds: %d/%d\n', ...
+                    sum(validFolds), k);
+        
+                if isfield(cvResults, 'classwise_mean')
+                    fprintf('\nClass-wise Average Performance:\n');
+                    for class = 1:numClasses
+                        fprintf('Class %d:\n', class);
+                        fprintf('  Precision: %.2f%%\n', ...
+                            cvResults.classwise_mean.precision(class) * 100);
+                        fprintf('  Recall: %.2f%%\n', ...
+                            cvResults.classwise_mean.recall(class) * 100);
+                        fprintf('  F1-Score: %.2f%%\n', ...
+                            cvResults.classwise_mean.f1score(class) * 100);
+                    end
+                end
+        
+            catch ME
+                fprintf('Cross-validation failed: %s\n', ME.message);
+                fprintf('Error details:\n');
+                disp(getReport(ME, 'extended'));
                 rethrow(ME);
             end
         end

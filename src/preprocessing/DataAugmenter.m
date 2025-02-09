@@ -105,17 +105,20 @@ classdef DataAugmenter < handle
             augParams = obj.params.signal.preprocessing.augmentation;
             availableMethods = {'noise', 'scaling', 'timeshift', 'mirror', 'channelSwap'};
             methods = {};
-            
-            numMethods = randi(obj.rng, augParams.combinationLimit);
-            
-            enabledMethods = availableMethods(cellfun(@(m) ...
-                augParams.methods.(m).enable, availableMethods));
-            if ~isempty(enabledMethods)
-                shuffledMethods = enabledMethods(randperm(obj.rng, length(enabledMethods)));
-                for i = 1:min(numMethods, length(shuffledMethods))
-                    method = shuffledMethods{i};
-                    if obj.shouldApplyMethod(method)
-                        methods{end+1} = method;
+
+            % 必ず1つ以上の拡張手法を適用
+            numMethods = randi(obj.rng, augParams.combinationLimit, 1);
+            while isempty(methods)
+                methods = {};
+                enabledMethods = availableMethods(cellfun(@(m) ...
+                    augParams.methods.(m).enable, availableMethods));
+                if ~isempty(enabledMethods)
+                    shuffledMethods = enabledMethods(randperm(obj.rng, length(enabledMethods)));
+                    for i = 1:min(numMethods, length(shuffledMethods))
+                        method = shuffledMethods{i};
+                        if obj.shouldApplyMethod(method)
+                            methods{end+1} = method;
+                        end
                     end
                 end
             end

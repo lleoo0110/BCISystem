@@ -756,7 +756,7 @@ classdef GUIControllerManager < handle
                 for ch = 1:size(data,1)
                     plot(obj.plotHandles.emg, timeAxisEMG, data(ch,:), ...
                         'Color', colors(ch,:), 'LineWidth', 1);
-                    legendEntries{ch} = sprintf('EMG Ch%d', displayChannels(ch));
+                    legendEntries{ch} = obj.params.acquisition.emg.channels.names{displayChannels(ch)};
                 end
 
                 % 凡例の追加
