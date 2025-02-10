@@ -291,9 +291,9 @@ classdef LSTMClassifier < handle
                 % データ分割情報の表示
                 fprintf('データ分割 (k=%d):\n', k);
                 fprintf('  訓練データ: %d サンプル (%.1f%%)\n', ...
-                    length(trainIdx), (length(trainIdx)/numTrials));
+                    length(trainIdx), (length(trainIdx)/numTrials)*100);
                 fprintf('  検証データ: %d サンプル (%.1f%%)\n', ...
-                    length(valIdx), (length(valIdx)/numTrials));
+                    length(valIdx), (length(valIdx)/numTrials)*100);
                 fprintf('  テストデータ: %d サンプル (%.1f%%)\n', ...
                     length(testIdx), (length(testIdx)/numTrials)*100);
         
