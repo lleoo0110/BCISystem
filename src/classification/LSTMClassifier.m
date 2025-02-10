@@ -257,7 +257,6 @@ classdef LSTMClassifier < handle
                 
                 % データサイズの取得
                 [~, ~, numTrials] = size(data);
-                fprintf('\n=== Starting LSTM Training ===\n');
                 fprintf('Total epochs: %d\n', numTrials);
         
                 % インデックスのシャッフル（再現性のため固定シード）
