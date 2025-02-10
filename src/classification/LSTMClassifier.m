@@ -723,13 +723,11 @@ classdef LSTMClassifier < handle
 
         %% 過学習の重症度判定
         function severity = determineOverfittingSeverity(~, genGap, perfGap)
-            if genGap > 0.2 || perfGap > 0.2
-                severity = 'critical';
-            elseif genGap > 0.15 || perfGap > 0.15
+            if genGap > 10 || perfGap > 10
                 severity = 'severe';
-            elseif genGap > 0.1 || perfGap > 0.1
+            elseif genGap > 5 || perfGap > 5
                 severity = 'moderate';
-            elseif genGap > 0.05 || perfGap > 0.05
+            elseif genGap > 3 || perfGap > 3
                 severity = 'mild';
             else
                 severity = 'none';
