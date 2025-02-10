@@ -295,7 +295,7 @@ classdef LSTMOptimizer < handle
                     fprintf('%s:\n', paramNames{i});
                     fprintf('  平均: %.6f\n', mean(paramsMat(:,i)));
                     fprintf('  標準偏差: %.6f\n', std(paramsMat(:,i)));
-                    fprintf('  最小値: %.6f\n', min(parmsMat(:,i)));
+                    fprintf('  最小値: %.6f\n', min(paramsMat(:,i)));
                     fprintf('  最大値: %.6f\n', max(paramsMat(:,i)));
                     fprintf('\n');
                 end

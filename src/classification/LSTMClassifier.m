@@ -187,7 +187,7 @@ classdef LSTMClassifier < handle
             else
                 execEnv = 'cpu';
             end
-
+        
             options = trainingOptions(training.optimizer.type, ...
                 'InitialLearnRate', training.optimizer.learningRate, ...
                 'MaxEpochs', training.maxEpochs, ...
@@ -196,13 +196,56 @@ classdef LSTMClassifier < handle
                 'Shuffle', training.shuffle, ...
                 'Plots', 'none', ...
                 'ExecutionEnvironment', execEnv, ...
-                'Verbose', true);
+                'Verbose', true, ...
+                'OutputFcn', @(info)obj.trainingOutputFcn(info));
 
-            % 検証データが提供され、検証が有効な場合のみ設定
-            if training.validation.enable && ~isempty(valData) && ~isempty(valLabels)
-                options.ValidationData = {valData, categorical(valLabels)};
-                options.ValidationFrequency = training.validation.frequency;
-                options.ValidationPatience = training.validation.patience;
+            % 検証データの設定
+            options.ValidationData = {valData, categorical(valLabels)};
+            options.ValidationFrequency = training.validation.frequency;
+            options.ValidationPatience = training.validation.patience;
+        end
+
+        %% トレーニング進捗のコールバック関数
+        function stop = trainingOutputFcn(obj, info)
+            stop = false;
+            
+            if info.State == "start"
+                obj.currentEpoch = 0;
+                return;
+            end
+            
+            % 学習情報の更新
+            obj.currentEpoch = obj.currentEpoch + 1;
+            
+            % 学習履歴の更新
+            if isfield(info, 'TrainingLoss')
+                obj.trainingHistory.loss(end+1) = info.TrainingLoss;
+            end
+            if isfield(info, 'TrainingAccuracy')
+                obj.trainingHistory.accuracy(end+1) = info.TrainingAccuracy;
+            end
+            
+            % 検証データがある場合の処理
+            if ~isempty(info.ValidationLoss)
+                currentAccuracy = info.ValidationAccuracy;
+                
+                % 検証履歴の更新
+                obj.validationHistory.loss(end+1) = info.ValidationLoss;
+                obj.validationHistory.accuracy(end+1) = info.ValidationAccuracy;
+                
+                % Early Stopping判定
+                if currentAccuracy > obj.bestValAccuracy
+                    obj.bestValAccuracy = currentAccuracy;
+                    obj.patienceCounter = 0;
+                else
+                    obj.patienceCounter = obj.patienceCounter + 1;
+                    if obj.patienceCounter >= obj.params.classifier.lstm.training.validation.patience
+                        fprintf('\nEarly stopping: エポック %d で学習を終了\n', obj.currentEpoch);
+                        fprintf('最良検証精度 %.2f%% を %d エポック更新できず\n', ...
+                            obj.bestValAccuracy * 100, obj.patienceCounter);
+                        stop = true;
+                    end
+                end
             end
         end
 
@@ -401,7 +444,8 @@ classdef LSTMClassifier < handle
                     'ValidationLoss', [], ...
                     'TrainingAccuracy', [], ...
                     'ValidationAccuracy', [], ...
-                    'FinalEpoch', 0 ...
+                    'FinalEpoch', 0, ...
+                    'History', [] ...
                 );
         
                 % 学習パラメータの表示
@@ -416,12 +460,18 @@ classdef LSTMClassifier < handle
                 [lstmModel, trainHistory] = trainNetwork(trainData, trainLabels, layers, options);
                 
                 % 学習履歴の保存
-                trainInfo.History = trainHistory;
-                trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
+                if isfield(trainHistory, 'TrainingLoss')
+                    trainInfo.History.TrainingLoss = trainHistory.TrainingLoss;
+                    trainInfo.History.ValidationLoss = trainHistory.ValidationLoss;
+                    trainInfo.History.TrainingAccuracy = trainHistory.TrainingAccuracy;
+                    trainInfo.History.ValidationAccuracy = trainHistory.ValidationAccuracy;
+                    trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
+                end
                 
-                fprintf('\n学習完了: %dエポック\n', trainInfo.FinalEpoch);
-                % 修正：既にパーセンテージになっているため *100 を削除
-                fprintf('最終トレーニング精度: %.2f%%\n', trainHistory.TrainingAccuracy(end));
+                fprintf('\n学習完了: %d反復\n', trainInfo.FinalEpoch);
+                if isfield(trainHistory, 'TrainingAccuracy')
+                    fprintf('最終トレーニング精度: %.2f%%\n', trainHistory.TrainingAccuracy(end));
+                end
                 if isfield(trainHistory, 'ValidationAccuracy')
                     fprintf('最終検証精度: %.2f%%\n', trainHistory.ValidationAccuracy(end));
                 end
@@ -583,7 +633,7 @@ classdef LSTMClassifier < handle
                     metrics = struct(...
                         'generalizationGap', NaN, ...
                         'performanceGap', NaN, ...
-                        'severity', 'error', ...
+                        'severity', 'unknown', ...
                         'optimalEpoch', 0, ...
                         'totalEpochs', 0);
                     isOverfit = false;
@@ -611,11 +661,10 @@ classdef LSTMClassifier < handle
                 
                 % 最適エポックの検出
                 [optimalEpoch, totalEpochs] = obj.findOptimalEpoch(valAcc);
-                fprintf('最適エポック: %d/%d\n', optimalEpoch, totalEpochs);
+                fprintf('Optimal Epoch: %d/%d\n', optimalEpoch, totalEpochs);
         
                 % 過学習の重大度判定
                 severity = obj.determineOverfittingSeverity(genGap, perfGap);
-                fprintf('過学習の重大度: %s\n', severity);
         
                 % メトリクスの構築
                 metrics = struct(...
@@ -628,6 +677,7 @@ classdef LSTMClassifier < handle
                     'totalEpochs', totalEpochs);
                 
                 isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
+                fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
         
             catch ME
                 fprintf('\n=== 過学習検証中にエラーが発生 ===\n');
@@ -643,6 +693,32 @@ classdef LSTMClassifier < handle
                     'totalEpochs', 0);
                 isOverfit = true;
             end
+        end
+
+        function [trainTrend, valTrend] = analyzeLearningCurves(~, trainAcc, valAcc)
+            % 学習曲線の変化率（傾き）とボラティリティ（変動性）を計算する
+            if length(trainAcc) < 2 || length(valAcc) < 2
+                trainTrend = struct('mean_change', NaN, 'volatility', NaN);
+                valTrend = struct('mean_change', NaN, 'volatility', NaN);
+                return;
+            end
+            
+            % 各エポック間の変化量を計算
+            trainDiff = diff(trainAcc);
+            valDiff = diff(valAcc);
+            
+            % 平均変化量と標準偏差（ボラティリティ）を算出
+            trainTrend.mean_change = mean(trainDiff);
+            trainTrend.volatility = std(trainDiff);
+            
+            valTrend.mean_change = mean(valDiff);
+            valTrend.volatility = std(valDiff);
+        end
+    
+        function [optimalEpoch, totalEpochs] = findOptimalEpoch(~, valAcc)
+            % 検証精度が最大となるエポックを最適エポックとして返す
+            totalEpochs = length(valAcc);
+            [~, optimalEpoch] = max(valAcc);
         end
 
         %% 過学習の重症度判定
