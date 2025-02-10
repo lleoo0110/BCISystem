@@ -633,6 +633,8 @@ classdef LSTMClassifier < handle
                     metrics = struct(...
                         'generalizationGap', NaN, ...
                         'performanceGap', NaN, ...
+                        'isCompletelyBiased', true, ...
+                        'isLearningProgressing', false, ...
                         'severity', 'unknown', ...
                         'optimalEpoch', 0, ...
                         'totalEpochs', 0);
@@ -656,6 +658,37 @@ classdef LSTMClassifier < handle
                 fprintf('\nGeneralization Gap: %.2f%%\n', genGap);
                 fprintf('Performance Gap: %.2f%%\n', perfGap);
         
+                % 完全な偏りの検出
+                if isfield(testMetrics, 'confusionMat')
+                    cm = testMetrics.confusionMat;
+                    % 各実際のクラス（行）のサンプル数を確認
+                    missingActual = any(sum(cm, 2) == 0);
+                    % 各予測クラス（列）の予測件数を確認
+                    missingPredicted = any(sum(cm, 1) == 0);
+                    % いずれかが true ならば、全く現れないクラスがあると判断
+                    isCompletelyBiased = missingActual || missingPredicted;
+                    
+                    if isCompletelyBiased
+                        fprintf('警告: 予測が特定のクラスに偏っています\n');
+                        if missingActual
+                            fprintf('  - 出現しない実際のクラスが存在\n');
+                        end
+                        if missingPredicted
+                            fprintf('  - 予測されないクラスが存在\n');
+                        end
+                    end
+                else
+                    isCompletelyBiased = false;
+                end
+        
+                % 学習進行の確認
+                trainDiff = diff(trainAcc);
+                isLearningProgressing = std(trainDiff) > 0.01;
+                if ~isLearningProgressing
+                    fprintf('警告: 学習が十分に進行していない可能性があります\n');
+                    fprintf('  - 訓練精度の変化の標準偏差: %.4f\n', std(trainDiff));
+                end
+        
                 % トレンド分析
                 [trainTrend, valTrend] = obj.analyzeLearningCurves(trainAcc, valAcc);
                 
@@ -664,20 +697,55 @@ classdef LSTMClassifier < handle
                 fprintf('Optimal Epoch: %d/%d\n', optimalEpoch, totalEpochs);
         
                 % 過学習の重大度判定
-                severity = obj.determineOverfittingSeverity(genGap, perfGap);
+                severity = obj.determineOverfittingSeverity(genGap, perfGap, isCompletelyBiased, isLearningProgressing);
         
                 % メトリクスの構築
                 metrics = struct(...
                     'generalizationGap', genGap, ...
                     'performanceGap', perfGap, ...
+                    'isCompletelyBiased', isCompletelyBiased, ...
+                    'isLearningProgressing', isLearningProgressing, ...
                     'validationTrend', valTrend, ...
                     'trainingTrend', trainTrend, ...
                     'severity', severity, ...
                     'optimalEpoch', optimalEpoch, ...
                     'totalEpochs', totalEpochs);
                 
+                % 過学習判定
                 isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
                 fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
+        
+                % 詳細な分析結果の表示
+                if isOverfit
+                    fprintf('\n=== 詳細な過学習分析 ===\n');
+                    fprintf('1. 汎化性能:\n');
+                    fprintf('  - Generalization Gap: %.2f%%\n', genGap);
+                    fprintf('  - Performance Gap: %.2f%%\n', perfGap);
+                    
+                    fprintf('\n2. 学習の進行状況:\n');
+                    fprintf('  - 訓練傾向の平均変化: %.4f\n', trainTrend.mean_change);
+                    fprintf('  - 検証傾向の平均変化: %.4f\n', valTrend.mean_change);
+                    fprintf('  - 訓練のボラティリティ: %.4f\n', trainTrend.volatility);
+                    fprintf('  - 検証のボラティリティ: %.4f\n', valTrend.volatility);
+                    
+                    fprintf('\n3. モデルの偏り:\n');
+                    fprintf('  - 完全な偏りが存在: %s\n', mat2str(isCompletelyBiased));
+                    fprintf('  - 学習の進行: %s\n', mat2str(isLearningProgressing));
+                    
+                    fprintf('\n推奨される対策:\n');
+                    if genGap > 5
+                        fprintf('- 正則化の強化を検討\n');
+                        fprintf('- ドロップアウト率の調整\n');
+                    end
+                    if ~isLearningProgressing
+                        fprintf('- 学習率の調整\n');
+                        fprintf('- モデル容量の見直し\n');
+                    end
+                    if isCompletelyBiased
+                        fprintf('- データバランスの改善\n');
+                        fprintf('- クラス重み付けの導入\n');
+                    end
+                end
         
             catch ME
                 fprintf('\n=== 過学習検証中にエラーが発生 ===\n');
@@ -688,6 +756,8 @@ classdef LSTMClassifier < handle
                 metrics = struct(...
                     'generalizationGap', Inf, ...
                     'performanceGap', Inf, ...
+                    'isCompletelyBiased', true, ...
+                    'isLearningProgressing', false, ...
                     'severity', 'error', ...
                     'optimalEpoch', 0, ...
                     'totalEpochs', 0);
@@ -722,8 +792,12 @@ classdef LSTMClassifier < handle
         end
 
         %% 過学習の重症度判定
-        function severity = determineOverfittingSeverity(~, genGap, perfGap)
-            if genGap > 10 || perfGap > 10
+        function severity = determineOverfittingSeverity(~, genGap, perfGap, isCompletelyBiased, isLearningProgressing)
+            if isCompletelyBiased
+                severity = 'critical';
+            elseif ~isLearningProgressing
+                severity = 'failed';
+            elseif genGap > 10 || perfGap > 10
                 severity = 'severe';
             elseif genGap > 5 || perfGap > 5
                 severity = 'moderate';
