@@ -117,6 +117,37 @@ classdef LSTMClassifier < handle
             end
         end
 
+        function [label, score] = predictOnline(obj, data, lstmModel)
+            if ~obj.isEnabled
+                error('LSTM is disabled');
+            end
+
+            try
+                % データの整形（時系列データ用）
+                prepData = obj.prepareDataForLSTM(data);
+                
+                % モデルの存在確認
+                if isempty(lstmModel)
+                    error('LSTM model is not available');
+                end
+                
+                % 予測の実行
+                [label, scores] = classify(lstmModel, prepData);
+                
+                % クラス1（安静状態）の確率を取得
+                score = scores(:,1);
+                
+                % デバッグ情報
+                fprintf('LSTM Prediction - Label: %d, Score: %.4f\n', label, score);
+
+            catch ME
+                fprintf('Error in LSTM online prediction: %s\n', ME.message);
+                fprintf('Error details:\n');
+                disp(getReport(ME, 'extended'));
+                rethrow(ME);
+            end
+        end
+
         %% LSTM層の構築
         function layers = buildLSTMLayers(obj, inputSize)
             % アーキテクチャパラメータの取得

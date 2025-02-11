@@ -26,6 +26,7 @@ classdef EEGAcquisitionManager < handle
         svmClassifier
         ecocClassifier
         cnnClassifier
+        lstmClassifier 
         
         % 設定とデータ管理
         params
@@ -73,6 +74,9 @@ classdef EEGAcquisitionManager < handle
         eogResults          % EOG解析結果の保持用
         eogBuffer           % EOG信号バッファ
         eogBufferSize       % バッファサイズ
+
+        % オブジェクト破棄フラグを追加
+        isDestroying = false;
     end
     
     methods (Access = public)
@@ -80,8 +84,9 @@ classdef EEGAcquisitionManager < handle
             obj.params = params;
             obj.isRunning = false;
             obj.isPaused = false;
+            obj.isDestroying = false;
             
-            % 初期化
+            % 初期化処理
             obj.initializeDataBuffers();
             obj.initializeResults();
             obj.initializeManagers();
@@ -96,26 +101,23 @@ classdef EEGAcquisitionManager < handle
             obj.tempDataFiles = {};
             obj.fileIndex = 1;
             
-            % サンプル数カウンタの初期化
+            % カウンタの初期化
             obj.totalSampleCount = 0;
             obj.lastResetSampleCount = 0;
-            
-            % EMG関連の初期化を追加
-            obj.emgData = [];
-            obj.emgLabels = [];
             obj.emgSampleCount = 0;
-
-            % EOG関連
             obj.lastEOGDirection = 'center';
         end
         
         function delete(obj)
             try
+                % 破棄フラグを設定
+                obj.isDestroying = true;
+                
                 % タイマーの停止と削除
                 if ~isempty(obj.acquisitionTimer)
-                    % タイマーが実行中かどうかを確認
                     if isa(obj.acquisitionTimer, 'timer')
                         if isvalid(obj.acquisitionTimer)
+                            % タイマーが実行中なら停止
                             if strcmp(obj.acquisitionTimer.Running, 'on')
                                 stop(obj.acquisitionTimer);
                                 % タイマーが完全に停止するまで待機
@@ -123,10 +125,17 @@ classdef EEGAcquisitionManager < handle
                                     pause(0.1);
                                 end
                             end
+                            % タイマーの削除
                             delete(obj.acquisitionTimer);
                         end
                     end
                     obj.acquisitionTimer = [];
+                end
+
+                % GUIの終了
+                if ~isempty(obj.guiController)
+                    obj.guiController.closeAllWindows();
+                    obj.guiController = [];
                 end
 
                 % UDPManagerのクリーンアップ
@@ -135,19 +144,17 @@ classdef EEGAcquisitionManager < handle
                     obj.udpManager = [];
                 end
 
-                % 一時ファイルの削除
-                if ~isempty(obj.tempDataFiles)
-                    for i = 1:length(obj.tempDataFiles)
-                        if exist(obj.tempDataFiles{i}, 'file')
-                            delete(obj.tempDataFiles{i});
-                        end
-                    end
-                    obj.tempDataFiles = {};
+                % LSLManagerのクリーンアップ
+                if ~isempty(obj.lslManager)
+                    delete(obj.lslManager);
+                    obj.lslManager = [];
                 end
+
+                % 一時ファイルの削除
+                obj.cleanupTempFiles();
 
             catch ME
                 warning(ME.identifier, '%s', ME.message);
-                % エラースタックの表示（デバッグ用）
                 disp(getReport(ME, 'extended'));
             end
         end
@@ -246,6 +253,10 @@ classdef EEGAcquisitionManager < handle
         end
         
         function acquireData(obj)
+            if ~isvalid(obj)
+                return;
+            end
+
             try
                 if obj.isRunning && ~obj.isPaused
                     % データの取得
@@ -385,12 +396,14 @@ classdef EEGAcquisitionManager < handle
                 obj.svmClassifier = SVMClassifier(obj.params);
                 obj.ecocClassifier = ECOCClassifier(obj.params);
                 obj.cnnClassifier = CNNClassifier(obj.params);
+                obj.lstmClassifier = LSTMClassifier(obj.params);
                 
                 % classifiersストラクチャの初期化
                 obj.classifiers = struct(...
                     'svm', [], ...
                     'ecoc', [], ...
-                    'cnn', [] ...
+                    'cnn', [], ...
+                    'lstm', [] ...
                 );
                 
                 % GUIコールバック
@@ -440,21 +453,69 @@ classdef EEGAcquisitionManager < handle
         end
         
         function setupTimers(obj)
-            % 既存のタイマーが存在する場合は削除
-            if ~isempty(obj.acquisitionTimer)
-                if isa(obj.acquisitionTimer, 'timer') && isvalid(obj.acquisitionTimer)
-                    stop(obj.acquisitionTimer);
-                    delete(obj.acquisitionTimer);
+            try
+                % 既存のタイマーが存在する場合は停止・削除
+                if ~isempty(obj.acquisitionTimer)
+                    if isa(obj.acquisitionTimer, 'timer') && isvalid(obj.acquisitionTimer)
+                        if strcmp(obj.acquisitionTimer.Running, 'on')
+                            stop(obj.acquisitionTimer);
+                        end
+                        delete(obj.acquisitionTimer);
+                    end
+                    obj.acquisitionTimer = [];
                 end
-                obj.acquisitionTimer = [];
-            end
 
-            % データ収集用タイマーの設定
-            updateInterval = 0.15;
-            obj.acquisitionTimer = timer(...
-                'ExecutionMode', 'fixedRate', ...   fixedRate or fixedSpacing
-                'Period', updateInterval, ...
-                'TimerFcn', @(~,~) obj.acquireData());
+                % データ収集用タイマーの設定
+                updateInterval = 0.15;
+                obj.acquisitionTimer = timer(...
+                    'ExecutionMode', 'fixedRate', ...
+                    'Period', updateInterval, ...
+                    'TimerFcn', @(src, event) obj.safeAcquireData(), ...
+                    'ErrorFcn', @(src, event) obj.handleTimerError(event));
+            catch ME
+                warning(ME.identifier, '%s', ME.message);
+                disp(getReport(ME, 'extended'));
+            end
+        end
+
+        function handleTimerError(obj, event)
+            try
+                if ~isvalid(obj) || obj.isDestroying
+                    return;
+                end
+                
+                fprintf('Timer error occurred: %s\n', event.Data.message);
+                disp(getReport(event.Data, 'extended'));
+                
+                % 重大なエラーの場合は収録を停止
+                if strcmpi(event.Data.identifier, 'MATLAB:nomem') || ...
+                   contains(lower(event.Data.message), 'fatal') || ...
+                   contains(lower(event.Data.message), 'critical')
+                    fprintf('Critical error detected. Stopping acquisition...\n');
+                    obj.stop();
+                end
+            catch ME
+                warning(ME.identifier, '%s', ME.message);
+                disp(getReport(ME, 'extended'));
+            end
+        end
+
+        function safeAcquireData(obj)
+            try
+                % オブジェクトの有効性と状態をチェック
+                if ~isvalid(obj) || obj.isDestroying
+                    return;
+                end
+                if obj.isRunning && ~obj.isPaused
+                    obj.acquireData();
+                end
+            catch ME
+                if ~isvalid(obj) || obj.isDestroying
+                    return;
+                end
+                warning(ME.identifier, '%s', ME.message);
+                disp(getReport(ME, 'extended'));
+            end
         end
         
         function handleLabel(obj, trigger)
@@ -750,22 +811,7 @@ classdef EEGAcquisitionManager < handle
                 end
 
                 % デバイス設定とデータの整合性チェック
-                if size(loadedData.rawData, 1) ~= obj.params.device.channelCount
-                    % チャンネル情報の表示
-                    obj.displayChannelInfo(obj.params, loadedData);
-
-                    errordlg(sprintf(['デバイスとデータの設定が一致しません。\n\n', ...
-                        'デバイス設定: %s (%dチャンネル)\n', ...
-                        'データ: %dチャンネル\n\n', ...
-                        'デバイス設定を確認してください。'], ...
-                        obj.params.device.name, ...
-                        obj.params.device.channelCount, ...
-                        size(loadedData.rawData, 1)), ...
-                        'デバイス設定エラー');
-                    error('DeviceConfig:ChannelMismatch', ...
-                        'デバイス設定(%dch)とデータ(%dch)のチャンネル数が一致しません。', ...
-                        obj.params.device.channelCount, size(loadedData.rawData, 1));
-                end
+                DataLoader.validateDeviceConfig(loadedData, obj.params);
 
                 % 正規化パラメータの読み込みと検証
                 if obj.params.signal.preprocessing.normalize.enable
@@ -775,33 +821,42 @@ classdef EEGAcquisitionManager < handle
                         obj.validateNormalizationParams(obj.normParams);
                         obj.displayNormalizationParams(obj.normParams);
                     else
-                        error('Normalization parameters not found in loaded data (processingInfo.normalize)');
+                        error('Normalization parameters not found in loaded data');
                     end
                 end
 
                 % アクティブな分類器の確認
                 if ~isfield(loadedData.classifier, obj.params.classifier.activeClassifier)
-                    error('Selected classifier "%s" not found in loaded data', obj.params.classifier.activeClassifier);
+                    error('Selected classifier "%s" not found in loaded data', ...
+                        obj.params.classifier.activeClassifier);
                 end
 
                 % 分類器モデルの設定
                 if ~isfield(loadedData.classifier.(obj.params.classifier.activeClassifier), 'model')
-                    error('%s model not found in loaded data', upper(obj.params.classifier.activeClassifier));
+                    error('%s model not found in loaded data', ...
+                        upper(obj.params.classifier.activeClassifier));
                 end
                 obj.classifiers = loadedData.classifier;
 
-                % SVMの場合のみ最適閾値を設定
-                if strcmp(obj.params.classifier.activeClassifier, 'svm')
-                    if obj.params.classifier.svm.probability
-                        % 分類器の性能情報から最適閾値を取得
-                        if isfield(loadedData.classifier.svm, 'performance') && ...
-                           isfield(loadedData.classifier.svm.performance, 'optimalThreshold') && ...
-                           ~isempty(loadedData.classifier.svm.performance.optimalThreshold)
-                            obj.optimalThreshold = loadedData.classifier.svm.performance.optimalThreshold;
+                % 分類器固有の設定
+                switch obj.params.classifier.activeClassifier
+                    case 'svm'
+                        if obj.params.classifier.svm.probability
+                            if isfield(loadedData.classifier.svm, 'performance') && ...
+                               isfield(loadedData.classifier.svm.performance, 'optimalThreshold')
+                                obj.optimalThreshold = ...
+                                    loadedData.classifier.svm.performance.optimalThreshold;
+                            end
                         end
-                    end
-                    % デフォルトの閾値を設定
-                    obj.optimalThreshold = obj.params.classifier.svm.threshold.rest;
+                        if isempty(obj.optimalThreshold)
+                            obj.optimalThreshold = obj.params.classifier.svm.threshold.rest;
+                        end
+                        
+                    case 'lstm'
+                        % LSTMの場合、シーケンス長とその他のパラメータを設定
+                        if isfield(loadedData.classifier.lstm, 'params')
+                            obj.params.classifier.lstm = loadedData.classifier.lstm.params;
+                        end
                 end
 
                 % CSPフィルタの設定
@@ -909,33 +964,36 @@ classdef EEGAcquisitionManager < handle
         end
         
         function updateDataBuffer(obj, eegData)
-            if isempty(eegData)
-                return;
-            end
-
             try
+                % オブジェクトの有効性と状態をチェック
+                if ~isvalid(obj) || obj.isDestroying || isempty(eegData)
+                    return;
+                end
+
                 % バッファにデータを追加
                 obj.dataBuffer = [obj.dataBuffer, eegData];
 
-                % バッファがbufferSizeを超えた場合の処理
+                % バッファサイズが上限に達した場合の処理
                 if size(obj.dataBuffer, 2) >= obj.bufferSize
                     % オンラインモードの処理
                     if strcmpi(obj.params.acquisition.mode, 'online')
                         obj.processOnline();
                     end
-                    
+
                     % スライダー処理
-                    if ~obj.isPaused
+                    if obj.isRunning && ~obj.isPaused
                         obj.updateSliderValue();
                     end
-                    
-                    % バッファのシフト
+
+                    % バッファのシフト処理
                     obj.dataBuffer = obj.dataBuffer(:, obj.slidingStep+1:end);
                 end
-
             catch ME
+                if ~isvalid(obj) || obj.isDestroying
+                    return;
+                end
                 warning(ME.identifier, '%s', ME.message);
-                fprintf('Error in updateBuffer: %s\n', getReport(ME, 'extended'));
+                fprintf('Error in updateDataBuffer: %s\n', getReport(ME, 'extended'));
             end
         end
         
@@ -951,23 +1009,20 @@ classdef EEGAcquisitionManager < handle
 
                 % EOGデータの処理
                 if obj.params.acquisition.eog.enable
-                    % EOGチャンネルの抽出
+                    % EOGチャンネルの抽出と処理
                     eogChannels = obj.params.device.eog.pairs.primary.left:obj.params.device.eog.pairs.primary.right;
                     obj.eogBuffer = obj.dataBuffer(eogChannels, end-obj.eogBufferSize+1:end);
-                    % EOG処理
                     obj.processEOG(obj.eogBuffer);
                 end
 
                 % 最新の解析ウィンドウを抽出
                 if size(preprocessedSegment, 2) > obj.processingWindow
-                    % 最新のobj.processingWindowのデータを抽出
                     analysisSegment = preprocessedSegment(:, end-obj.processingWindow+1:end);
                 else
-                    % データが解析ウィンドウより小さい場合はそのまま使用
                     analysisSegment = preprocessedSegment;
                 end
 
-                % 各特徴量の処理（最新の解析ウィンドウのみを使用）
+                % 各特徴量の処理
                 obj.processPowerFeatures(analysisSegment);
                 obj.processFAAFeatures(analysisSegment);
                 obj.processABRatioFeatures(analysisSegment);
@@ -976,15 +1031,24 @@ classdef EEGAcquisitionManager < handle
                 % CSP特徴量の抽出と分類
                 currentFeatures = obj.processCSPFeatures(analysisSegment);
                 
+                % 分類器に応じた処理
                 switch obj.params.classifier.activeClassifier
                     case 'svm'
-                         [label, score] = obj.processClassification(currentFeatures);
+                        [label, score] = obj.svmClassifier.predictOnline(...
+                            currentFeatures, obj.classifiers.svm.model, obj.optimalThreshold);
                          
                     case 'ecoc'
-                         [label, score] = obj.processClassification(currentFeatures);
+                        [label, score] = obj.ecocClassifier.predictOnline(...
+                            currentFeatures, obj.classifiers.ecoc.model);
 
                     case 'cnn'
-                         [label, score] = obj.processClassification(analysisSegment);
+                        [label, score] = obj.cnnClassifier.predictOnline(...
+                            analysisSegment, obj.classifiers.cnn.model);
+                            
+                    case 'lstm'
+                        % LSTMの場合、時系列データとして処理
+                        [label, score] = obj.lstmClassifier.predictOnline(...
+                            analysisSegment, obj.classifiers.lstm.model);
                 end
 
                 % 最新の結果を構造体として保存
