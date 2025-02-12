@@ -6,6 +6,7 @@ classdef UDPManager < handle
         startTime
         remoteAddress
         remotePort
+        isClosing = false
     end
     
     methods (Access = public)
@@ -113,22 +114,38 @@ classdef UDPManager < handle
         
         function delete(obj)
             try
-                if ~isempty(obj.receiveSocket) && isvalid(obj.receiveSocket)
-                    flush(obj.receiveSocket); % 受信バッファをクリア
-                    delete(obj.receiveSocket);
+                % クローズ処理中フラグを設定
+                obj.isClosing = true;
+                
+                % receiveSocketのクリーンアップ
+                if ~isempty(obj.receiveSocket)
+                    if isvalid(obj.receiveSocket)
+                        try
+                            % バッファをフラッシュ
+                            flush(obj.receiveSocket);
+                            % ポートを閉じる
+                            delete(obj.receiveSocket);
+                        catch ME
+                            warning(ME.identifier, '%s', ME.messge);
+                        end
+                    end
                     obj.receiveSocket = [];
                 end
-            catch ME
-                warning(ME.identifier, '%s', ME.message);
-            end
-            
-            try
-                if ~isempty(obj.sendSocket) && isvalid(obj.sendSocket)
-                    delete(obj.sendSocket);
+                
+                % sendSocketのクリーンアップ
+                if ~isempty(obj.sendSocket)
+                    if isvalid(obj.sendSocket)
+                        try
+                            delete(obj.sendSocket);
+                        catch ME
+                            warning(ME.identifier, '%s', ME.messge);
+                        end
+                    end
                     obj.sendSocket = [];
                 end
+                
             catch ME
-                warning(ME.identifier, '%s', ME.message);
+                warning(ME.identifier, '%s', ME.messge);
             end
         end
     end
@@ -136,18 +153,34 @@ classdef UDPManager < handle
     methods (Access = private)
         function initializeUDP(obj)
             try
-                if isempty(obj.receiveSocket) || ~isvalid(obj.receiveSocket)
+                % クローズ処理中は新しいソケットを作成しない
+                if obj.isClosing
+                    return;
+                end
+                
+                % 既存のソケットをクリーンアップ
+                obj.cleanup();
+                
+                % 新しいソケットの作成
+                try
                     obj.receiveSocket = udpport("datagram", ...
                         "LocalHost", obj.params.udp.receive.address, ...
                         "LocalPort", obj.params.udp.receive.port, ...
                         "EnablePortSharing", true);
+                catch ME
+                    warning(ME.identifier, '%s', ME.messge);
+                    obj.receiveSocket = [];
                 end
-        
-                if isempty(obj.sendSocket) || ~isvalid(obj.sendSocket)
+                
+                try
                     obj.sendSocket = udpport("datagram");
+                catch ME
+                    warning(ME.identifier, '%s', ME.messge);
+                    obj.sendSocket = [];
                 end
+                
             catch ME
-                warning(ME.identifier, '%s', ME.message);
+                warning(ME.identifier, '%s', ME.messge);
                 obj.cleanup();
                 rethrow(ME);
             end
@@ -155,22 +188,35 @@ classdef UDPManager < handle
         
         function cleanup(obj)
             try
-                if ~isempty(obj.receiveSocket) && isvalid(obj.receiveSocket)
-                    flush(obj.receiveSocket);
-                    delete(obj.receiveSocket);
+                % receiveSocketのクリーンアップ
+                if ~isempty(obj.receiveSocket)
+                    if isvalid(obj.receiveSocket)
+                        try
+                            % バッファをフラッシュ
+                            flush(obj.receiveSocket);
+                            % ポートを閉じる
+                            delete(obj.receiveSocket);
+                        catch ME
+                            warning(ME.identifier, '%s', ME.messge);
+                        end
+                    end
                     obj.receiveSocket = [];
                 end
-            catch ME
-                warning(ME.identifier, '%s', ME.message);
-            end
-        
-            try
-                if ~isempty(obj.sendSocket) && isvalid(obj.sendSocket)
-                    delete(obj.sendSocket);
+                
+                % sendSocketのクリーンアップ
+                if ~isempty(obj.sendSocket)
+                    if isvalid(obj.sendSocket)
+                        try
+                            delete(obj.sendSocket);
+                        catch ME
+                            warning(ME.identifier, '%s', ME.messge);
+                        end
+                    end
                     obj.sendSocket = [];
                 end
+                
             catch ME
-                warning(ME.identifier, '%s', ME.message);
+                warning(ME.identifier, '%s', ME.messge);
             end
         end
     end

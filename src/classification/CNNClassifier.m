@@ -204,10 +204,7 @@ classdef CNNClassifier < handle
                     'totalEpochs', totalEpochs);
                 
                 % 過学習判定
-                isOverfit = strcmp(severity, 'critical') || ...
-                           strcmp(severity, 'severe') || ...
-                           strcmp(severity, 'moderate');
-                
+                isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
                 fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
                 
             catch ME
@@ -387,15 +384,10 @@ classdef CNNClassifier < handle
                    'Verbose', true);
         
                % 検証データの設定
-               if ~isempty(valData) && ~isempty(valLabels)
-                   options.ValidationData = {valData, valLabels};
-                   options.ValidationFrequency = obj.params.classifier.cnn.training.validation.frequency;
-                   options.ValidationPatience = obj.params.classifier.cnn.training.validation.patience;
-                   fprintf('検証データを使用して学習を開始します\n');
-               else
-                   fprintf('検証データなしで学習を開始します\n');
-               end
-        
+               options.ValidationData = {valData, valLabels};
+               options.ValidationFrequency = obj.params.classifier.cnn.training.validation.frequency;
+               options.ValidationPatience = obj.params.classifier.cnn.training.validation.patience;
+       
                % レイヤーの構築とモデルの学習
                layers = obj.buildCNNLayers(trainData);
                [cnnModel, trainHistory] = trainNetwork(trainData, trainLabels, layers, options);
@@ -404,7 +396,7 @@ classdef CNNClassifier < handle
                trainInfo.History = trainHistory;
                trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
         
-               fprintf('学習完了: 最終エポック %d\n', trainInfo.FinalEpoch);
+               fprintf('\n学習完了: %d反復\n', trainInfo.FinalEpoch);
 
                % GPUメモリを解放
                if obj.useGPU
