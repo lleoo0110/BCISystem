@@ -11,7 +11,8 @@ classdef EEGAnalyzer < handle
         svm              % SVM分類器の結果
         ecoc             % ECOC分類器の結果
         cnn              % CNN分類器の結果
-        lstm             % LSTM分類器の結果（追加）
+        lstm             % LSTM分類器の結果
+        hybrid          % Hybrid分類器の結果
         results          % 解析結果
         
         % 前処理コンポーネント
@@ -35,7 +36,8 @@ classdef EEGAnalyzer < handle
         svmClassifier
         ecocClassifier
         cnnClassifier
-        lstmClassifier      % LSTM分類器を追加
+        lstmClassifier 
+        hybridClassifier
         
         % データ管理コンポーネント
         dataManager
@@ -215,10 +217,12 @@ classdef EEGAnalyzer < handle
         end
         
         function initializeClassifiers(obj)
+            % 分類器コンポーネントの初期化
             obj.svmClassifier = SVMClassifier(obj.params);
             obj.ecocClassifier = ECOCClassifier(obj.params);
             obj.cnnClassifier = CNNClassifier(obj.params);
             obj.lstmClassifier = LSTMClassifier(obj.params);
+            obj.hybridClassifier = HybridClassifier(obj.params);
         end
         
         function initializeResults(obj)
@@ -268,6 +272,8 @@ classdef EEGAnalyzer < handle
             obj.svm = classifierStruct;
             obj.ecoc = classifierStruct;
             obj.cnn = classifierStruct;
+            obj.lstm = classifierStruct;
+            obj.hybrid = classifierStruct;
         end
         
         function setData(obj, loadedData)
@@ -436,13 +442,14 @@ classdef EEGAnalyzer < handle
                 end
 
                 % CNN分類
+                
                 if obj.params.classifier.cnn.enable
-                    optimizer = CNNOptimizer(obj.params);
-                    [optimizedParams, ~, ~] = optimizer.optimize(obj.processedData, obj.processedLabel);
+                    cnnOptimizer = CNNOptimizer(obj.params);
+                    [cnnOptimizedParams, ~, ~] = cnnOptimizer.optimize(obj.processedData, obj.processedLabel);
 
-                    if obj.params.classifier.cnn.optimize && ~isempty(optimizedParams)
+                    if obj.params.classifier.cnn.optimize && ~isempty(cnnOptimizedParams)
                         updatedParams = obj.params;
-                        updatedParams.classifier.cnn = obj.updateCNNParams(obj.params.classifier.cnn, optimizedParams);
+                        updatedParams.classifier.cnn = obj.updateCNNParams(obj.params.classifier.cnn, cnnOptimizedParams);
                         updatedCnnClassifier = CNNClassifier(updatedParams);
                         obj.cnn = updatedCnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
                     else
@@ -452,16 +459,32 @@ classdef EEGAnalyzer < handle
 
                 % LSTM分類
                 if obj.params.classifier.lstm.enable
-                    optimizer = LSTMOptimizer(obj.params);
-                    [optimizedParams, ~, ~] = optimizer.optimize(obj.processedData, obj.processedLabel);
+                    lstmOptimizer = LSTMOptimizer(obj.params);
+                    [lstmOptimizedParams, ~, ~] = lstmOptimizer.optimize(obj.processedData, obj.processedLabel);
 
-                    if obj.params.classifier.lstm.optimize && ~isempty(optimizedParams)
+                    if obj.params.classifier.lstm.optimize && ~isempty(lstmOptimizedParams)
                         updatedParams = obj.params;
-                        updatedParams.classifier.lstm = obj.updateLSTMParams(obj.params.classifier.lstm, optimizedParams);
+                        updatedParams.classifier.lstm = obj.updateLSTMParams(obj.params.classifier.lstm, lstmOptimizedParams);
                         updatedLstmClassifier = LSTMClassifier(updatedParams);
                         obj.lstm = updatedLstmClassifier.trainLSTM(obj.processedData, obj.processedLabel);
                     else
                         obj.lstm = obj.lstmClassifier.trainLSTM(obj.processedData, obj.processedLabel);
+                    end
+                end
+
+                % Hybrid分類
+                if obj.params.classifier.hybrid.enable
+                    hybridOptimizer = HybridOptimizer(obj.params);
+                    [hybridOptimizedParams, ~, ~] = hybridOptimizer.optimize(obj.processedData, obj.processedLabel);
+    
+                    if obj.params.classifier.hybrid.optimize && ~isempty(hybridOptimizedParams)
+                        updatedParams = obj.params;
+                        updatedParams.classifier.hybrid = obj.updateHybridParams(obj.params.classifier.hybrid, hybridOptimizedParams);
+                        updatedHybridClassifier = HybridClassifier(updatedParams);
+                        obj.hybrid = updatedHybridClassifier.trainHybrid(obj.processedData, obj.processedLabel);
+                    else
+                        obj.hybridClassifier = HybridClassifier(obj.params);
+                        obj.hybrid = obj.hybridClassifier.trainHybrid(obj.processedData, obj.processedLabel);
                     end
                 end
                 
@@ -511,6 +534,37 @@ classdef EEGAnalyzer < handle
 
             % 全結合層の更新
             params.architecture.fullyConnected = [optimizedParams(6)];
+        end
+
+        function params = updateHybridParams(~, baseParams, optimizedParams)
+            % Hybridパラメータの更新
+            params = baseParams;
+            params.training.learningRate = optimizedParams(1);
+            params.training.miniBatchSize = optimizedParams(2);
+            
+            % CNNパラメータの更新
+            params.cnn.numFilters = optimizedParams(3);
+            params.cnn.filterSize = optimizedParams(4);
+            
+            % LSTM層の更新
+            numLayers = optimizedParams(5);
+            lstmLayers = struct();
+            for i = 1:numLayers
+                layerName = sprintf('lstm%d', i);
+                lstmLayers.(layerName) = struct(...
+                    'numHiddenUnits', optimizedParams(6), ...
+                    'OutputMode', 'last' ...
+                );
+            end
+            params.lstm.architecture.lstmLayers = lstmLayers;
+            
+            % ドロップアウトレイヤーの更新
+            dropoutLayers = struct();
+            for i = 1:numLayers
+                dropoutName = sprintf('dropout%d', i);
+                dropoutLayers.(dropoutName) = optimizedParams(7);
+            end
+            params.lstm.architecture.dropoutLayers = dropoutLayers;
         end
 
         function extractPowerFeatures(obj)

@@ -7,6 +7,7 @@ classdef CNNOptimizer < handle
         searchSpace         % パラメータ探索空間
         optimizationHistory % 最適化履歴
         useGPU              % GPUを使用するかどうか
+        maxTrials           % 最大試行回数
     end
     
     methods (Access = public)
@@ -16,6 +17,7 @@ classdef CNNOptimizer < handle
             obj.bestPerformance = -inf;
             obj.optimizationHistory = struct('params', {}, 'performance', {}, 'model', {});
             obj.useGPU = params.classifier.cnn.gpu;
+            obj.maxTrials = 30;  % デフォルトの試行回数
         end
         
         function [optimizedParams, performance, model] = optimize(obj, data, labels)
@@ -27,8 +29,7 @@ classdef CNNOptimizer < handle
                 end
 
                 % パラメータセットの生成
-                numSamples = 30;
-                paramSets = obj.generateParameterSets(numSamples);
+                paramSets = obj.generateParameterSets(obj.maxTrials);
                 fprintf('パラメータ%dセットで最適化を開始します...\n', size(paramSets, 1));
 
                 results = cell(size(paramSets, 1), 1);
@@ -93,12 +94,12 @@ classdef CNNOptimizer < handle
             obj.searchSpace = obj.params.classifier.cnn.optimization.searchSpace;
         end
         
-        function paramSets = generateParameterSets(obj, numSamples)
+        function paramSets = generateParameterSets(obj, numTrials)
             % Latin Hypercube Sampling
-            lhsPoints = lhsdesign(numSamples, 6);
+            lhsPoints = lhsdesign(numTrials, 6);
 
             % パラメータ空間の初期化
-            paramSets = zeros(numSamples, 6);
+            paramSets = zeros(numTrials, 6);
 
             % 学習率（対数スケール）
             lr_range = obj.searchSpace.learningRate;
@@ -110,7 +111,7 @@ classdef CNNOptimizer < handle
 
             % カーネルサイズインデックス（kernelSizeはセル配列）
             num_kernel_sizes = numel(obj.searchSpace.kernelSize);
-            paramSets(:,3) = ones(numSamples, 1);  % デフォルト値として1を設定
+            paramSets(:,3) = ones(numTrials, 1);  % デフォルト値として1を設定
             if num_kernel_sizes > 1
                 paramSets(:,3) = round(1 + (num_kernel_sizes - 1) * lhsPoints(:,3));
             end

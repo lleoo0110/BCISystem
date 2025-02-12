@@ -26,7 +26,8 @@ classdef EEGAcquisitionManager < handle
         svmClassifier
         ecocClassifier
         cnnClassifier
-        lstmClassifier 
+        lstmClassifier
+        hybridClassifier
         
         % 設定とデータ管理
         params
@@ -397,6 +398,7 @@ classdef EEGAcquisitionManager < handle
                 obj.ecocClassifier = ECOCClassifier(obj.params);
                 obj.cnnClassifier = CNNClassifier(obj.params);
                 obj.lstmClassifier = LSTMClassifier(obj.params);
+                obj.hybridClassifier = HybridClassifier(obj.params);
                 
                 % classifiersストラクチャの初期化
                 obj.classifiers = struct(...
@@ -857,6 +859,12 @@ classdef EEGAcquisitionManager < handle
                         if isfield(loadedData.classifier.lstm, 'params')
                             obj.params.classifier.lstm = loadedData.classifier.lstm.params;
                         end
+
+                    case 'hybrid'
+                        % Hybridモデル固有の設定
+                        if isfield(loadedData.classifier.hybrid, 'params')
+                            obj.params.classifier.hybrid = loadedData.classifier.hybrid.params;
+                        end
                 end
 
                 % CSPフィルタの設定
@@ -1046,9 +1054,12 @@ classdef EEGAcquisitionManager < handle
                             analysisSegment, obj.classifiers.cnn.model);
                             
                     case 'lstm'
-                        % LSTMの場合、時系列データとして処理
                         [label, score] = obj.lstmClassifier.predictOnline(...
                             analysisSegment, obj.classifiers.lstm.model);
+
+                    case 'hybrid'
+                        [label, score] = obj.hybridClassifier.predictOnline(...
+                            analysisSegment, obj.classifiers.hybrid.model);
                 end
 
                 % 最新の結果を構造体として保存
