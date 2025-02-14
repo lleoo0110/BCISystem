@@ -4,6 +4,13 @@ classdef IIRFilterDesigner < handle
     % フィルタ設計パラメータ（フィルタ次数、カットオフ周波数、設計手法など）を properties として保持し、
     % designAndApplyFilter メソッドでフィルタ設計、適用、特性解析を実行する。
     % フィルタ情報は filterInfo プロパティに格納される。
+    % 
+    % フィルタ設計と適用
+    % iirFilterDesigner = IIRFilterDesigner(params);
+    % [filteredData, filterInfo] = iirFilterDesigner.designAndApplyFilter(data);
+    % 
+    % フィルタ情報の取得
+    % info = iirFilterDesigner.getFilterInfo();
 
     properties (Access = private)
         params % パラメータ構造体
