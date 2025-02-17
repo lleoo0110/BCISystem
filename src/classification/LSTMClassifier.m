@@ -136,10 +136,6 @@ classdef LSTMClassifier < handle
                 
                 % クラス1（安静状態）の確率を取得
                 score = scores(:,1);
-                
-                % デバッグ情報
-                fprintf('LSTM Prediction - Label: %d, Score: %.4f\n', label, score);
-
             catch ME
                 fprintf('Error in LSTM online prediction: %s\n', ME.message);
                 fprintf('Error details:\n');
@@ -270,7 +266,7 @@ classdef LSTMClassifier < handle
                     obj.patienceCounter = 0;
                 else
                     obj.patienceCounter = obj.patienceCounter + 1;
-                    if obj.patienceCounter >= obj.params.classifier.lstm.training.validation.patience
+                    if obj.patienceCounter >= obj.params.classifier.lstm.training.patience
                         fprintf('\nEarly stopping: エポック %d で学習を終了\n', obj.currentEpoch);
                         fprintf('最良検証精度 %.2f%% を %d エポック更新できず\n', ...
                             obj.bestValAccuracy * 100, obj.patienceCounter);

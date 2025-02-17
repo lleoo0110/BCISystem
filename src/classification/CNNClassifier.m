@@ -687,7 +687,7 @@ classdef CNNClassifier < handle
                     obj.patienceCounter = 0;
                 else
                     obj.patienceCounter = obj.patienceCounter + 1;
-                    if obj.patienceCounter >= obj.params.classifier.cnn.training.validation.patience
+                    if obj.patienceCounter >= obj.params.classifier.cnn.training.patience
                         fprintf('\nEarly stopping triggered at epoch %d\n', obj.currentEpoch);
                         stop = true;
                     end
