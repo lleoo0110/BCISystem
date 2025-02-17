@@ -232,8 +232,8 @@ classdef LSTMClassifier < handle
 
             % 検証データの設定
             options.ValidationData = {valData, categorical(valLabels)};
-            options.ValidationFrequency = training.validation.frequency;
-            options.ValidationPatience = training.validation.patience;
+            options.ValidationFrequency = training.frequency;
+            options.ValidationPatience = training.patience;
         end
 
         %% トレーニング進捗のコールバック関数
@@ -827,11 +827,11 @@ classdef LSTMClassifier < handle
                 severity = 'critical';
             elseif ~isLearningProgressing
                 severity = 'failed';
-            elseif genGap > 10 || perfGap > 10
+            elseif genGap > 10 || perfGap > 15
                 severity = 'severe';
-            elseif genGap > 5 || perfGap > 5
+            elseif genGap > 5 || perfGap > 8
                 severity = 'moderate';
-            elseif genGap > 3 || perfGap > 3
+            elseif genGap > 3 || perfGap > 5
                 severity = 'mild';
             else
                 severity = 'none';

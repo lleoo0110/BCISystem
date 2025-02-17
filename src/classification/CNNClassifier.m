@@ -379,14 +379,15 @@ classdef CNNClassifier < handle
                    'MaxEpochs', obj.params.classifier.cnn.training.maxEpochs, ...
                    'MiniBatchSize', obj.params.classifier.cnn.training.miniBatchSize, ...
                    'Plots', 'none', ...
+                   'Shuffle', obj.params.classifier.cnn.training.shuffle, ...
                    'OutputFcn', @(info)obj.trainingOutputFcn(info), ...
                    'ExecutionEnvironment', executionEnvironment, ...
                    'Verbose', true);
         
                % 検証データの設定
                options.ValidationData = {valData, valLabels};
-               options.ValidationFrequency = obj.params.classifier.cnn.training.validation.frequency;
-               options.ValidationPatience = obj.params.classifier.cnn.training.validation.patience;
+               options.ValidationFrequency = obj.params.classifier.cnn.training.frequency;
+               options.ValidationPatience = obj.params.classifier.cnn.training.patience;
        
                % レイヤーの構築とモデルの学習
                layers = obj.buildCNNLayers(trainData);
@@ -620,11 +621,11 @@ classdef CNNClassifier < handle
                 severity = 'critical';
             elseif ~isLearningProgressing
                 severity = 'failed';
-            elseif genGap > 10 || perfGap > 10
+            elseif genGap > 10 || perfGap > 15
                 severity = 'severe';
-            elseif genGap > 5 || perfGap > 5
+            elseif genGap > 5 || perfGap > 8
                 severity = 'moderate';
-            elseif genGap > 3 || perfGap > 3
+            elseif genGap > 3 || perfGap > 5
                 severity = 'mild';
             else
                 severity = 'none';
@@ -697,8 +698,8 @@ classdef CNNClassifier < handle
         function cvResults = performCrossValidation(obj, data, labels)
             try
                 % k-fold cross validationのパラメータ取得
-                k = obj.params.classifier.evaluation.kfold;
-                fprintf('\nStarting %d-fold Cross-validation\n', k);
+                k = obj.params.classifier.cnn.training.validation.kfold;
+                fprintf('\n=== %d分割交差検証開始 ===\n', k);
         
                 % cvResultsの初期化
                 cvResults = struct();
@@ -714,7 +715,7 @@ classdef CNNClassifier < handle
                     obj.splitDataset(data, labels);
         
                 for i = 1:k
-                    fprintf('\nFold %d/%d\n', i, k);
+                    fprintf('\nフォールド %d/%d の処理開始\n', i, k);
         
                     % データの準備
                     prepTrainData = obj.prepareDataForCNN(trainData{i});
@@ -742,11 +743,10 @@ classdef CNNClassifier < handle
                             'val_loss', trainInfo.History.ValidationLoss ...
                         );
         
-                        fprintf('Fold %d - Accuracy: %.2f%%\n', ...
-                            i, cvResults.folds.accuracy(i) * 100);
+                        fprintf('フォールド %d の精度: %.2f%%\n', i, results.folds.accuracy(i) * 100);
         
                     catch ME
-                        warning('Error in fold %d: %s', i, ME.message);
+                        warning('フォールド %d でエラーが発生: %s', i, ME.message);
                         % エラーが発生したフォールドは精度0として記録
                         cvResults.folds.accuracy(i) = 0;
                         cvResults.folds.confusionMat{i} = [];
