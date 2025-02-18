@@ -339,7 +339,7 @@ function preset = color()
     num_classes = size(trigger_mappings, 1);  % クラス数を動的設定
     
     classifier = struct(...
-        'activeClassifier', 'lstm', ... % 使用分類器: 'svm'/'ecoc'/'cnn'/'lstm'/'hybrid'
+        'activeClassifier', 'cnn', ... % 使用分類器: 'svm'/'ecoc'/'cnn'/'lstm'/'hybrid'
         'svm', struct(...              % SVMの設定
             'enable', false, ...       % true/false: SVM有効/無効
             'optimize', true, ...      % true/false: パラメータ最適化有効/無効
@@ -371,7 +371,7 @@ function preset = color()
             ) ...
         ), ...
         'cnn', struct(...             % CNN設定
-            'enable', false, ...      % true/false: CNN有効/無効
+            'enable', true, ...      % true/false: CNN有効/無効
             'gpu', true, ...          % true/false: GPU使用有効/無効
             'optimize', true, ...     % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
@@ -404,8 +404,8 @@ function preset = color()
                 ), ...
                 'maxEpochs', 100, ... % 最大エポック数 (10-1000)
                 'miniBatchSize', 128, ... % ミニバッチサイズ (8-512)
-                'frequency', 10, ... % 検証頻度 (エポック)
-                'patience', 10, ... % 早期終了の待機回数
+                'frequency', 5, ... % 検証頻度 (エポック)
+                'patience', 20, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
                     'enable', false, ... % true/false: 検証有効/無効
@@ -416,6 +416,7 @@ function preset = color()
                 'searchSpace', struct(... % パラメータ探索範囲
                     'learningRate', [0.0005, 0.005], ... % 学習率範囲
                     'miniBatchSize', [64, 256], ...      % バッチサイズ範囲
+                    'filterSize', [3, 7], ... % フィルタサイズ範囲
                     'kernelSize', {[3,3], [5,5]}, ...    % カーネルサイズ候補
                     'numFilters', [16, 64], ...          % フィルタ数範囲
                     'dropoutRate', [0.3, 0.7], ...       % ドロップアウト率範囲
@@ -424,9 +425,9 @@ function preset = color()
             ) ...
         ), ...
         'lstm', struct(...            % LSTM設定
-            'enable', true, ...      % true/false: LSTM有効/無効
-            'gpu', false, ...         % true/false: GPU使用有効/無効
-            'optimize', false, ...    % true/false: パラメータ最適化有効/無効
+            'enable', false, ...      % true/false: LSTM有効/無効
+            'gpu', true, ...         % true/false: GPU使用有効/無効
+            'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
                 'numClasses', num_classes, ... % クラス数 (自動設定)
                 'sequenceInputLayer', struct(... % 入力層設定
@@ -458,8 +459,8 @@ function preset = color()
                 ), ...
                 'maxEpochs', 100, ...  % 最大エポック数 (5-100)
                 'miniBatchSize', 64, ... % ミニバッチサイズ (8-128)
-                'frequency', 10, ... % 検証頻度 (エポック)
-                'patience', 10, ... % 早期終了の待機回数
+                'frequency', 5, ... % 検証頻度 (エポック)
+                'patience', 15, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
                     'enable', false, ... % true/false: 検証有効/無効
@@ -467,13 +468,13 @@ function preset = color()
                 ) ...
             ), ...
             'optimization', struct(... % 最適化設定
-                'searchSpace', struct(... % パラメータ探索範囲
-                    'learningRate', [0.0001, 0.01], ... % 学習率範囲
+                'searchSpace', struct(...
+                    'learningRate', [0.0001, 0.01], ...  % 学習率範囲
                     'miniBatchSize', [16, 128], ...      % バッチサイズ範囲
-                    'numHiddenUnits', [32, 256], ...    % 隠れユニット数範囲
-                    'numLayers', [1, 3], ...            % LSTM層数範囲
-                    'dropoutRate', [0.2, 0.7], ...      % ドロップアウト率範囲
-                    'fcUnits', [32, 256] ...            % 全結合層ユニット数範囲
+                    'numHiddenUnits', [32, 256], ...     % 隠れユニット数範囲
+                    'numLayers', [1, 3], ...             % LSTM層数範囲
+                    'dropoutRate', [0.2, 0.7], ...       % ドロップアウト率範囲
+                    'fcUnits', [32, 256] ...             % 全結合層ユニット数範囲
                 ) ...
             ) ...
         ), ...
@@ -527,9 +528,9 @@ function preset = color()
                     'gradientThreshold', 1 ... % 勾配クリッピング閾値
                 ), ...
                 'maxEpochs', 100, ...    % 最大エポック数
-                'miniBatchSize', 50, ... % バッチサイズ (論文に合わせ50)
-                'frequency', 10, ... % 検証頻度 (エポック)
-                'patience', 10, ... % 早期終了の待機回数
+                'miniBatchSize', 50, ... % バッチサイズ
+                'frequency', 5, ... % 検証頻度 (エポック)
+                'patience', 15, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % データシャッフル方法
                 'validation', struct(... % 検証設定
                     'enable', false, ...  % 検証の有効化

@@ -446,12 +446,7 @@ classdef EEGAnalyzer < handle
                 if obj.params.classifier.cnn.enable
                     if obj.params.classifier.cnn.optimize
                         cnnOptimizer = CNNOptimizer(obj.params);
-                        [~, ~, optimizedModel] = cnnOptimizer.optimize(obj.processedData, obj.processedLabel);
-                        if ~isempty(optimizedModel)
-                            obj.cnn = cnnOptimizer.optimizedModel;  % 最適化されたモデルを直接使用
-                        else
-                            obj.cnn = obj.cnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
-                        end
+                        obj.cnn = cnnOptimizer.optimize(obj.processedData, obj.processedLabel);
                     else
                         obj.cnn = obj.cnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
                     end
@@ -461,12 +456,7 @@ classdef EEGAnalyzer < handle
                 if obj.params.classifier.lstm.enable
                     if obj.params.classifier.lstm.optimize
                         lstmOptimizer = LSTMOptimizer(obj.params);
-                        [~, ~, optimizedModel] = lstmOptimizer.optimize(obj.processedData, obj.processedLabel);
-                        if ~isempty(optimizedModel)
-                            obj.lstm = lstmOptimizer.optimizedModel;  % 最適化されたモデルを直接使用
-                        else
-                            obj.lstm = obj.lstmClassifier.trainLSTM(obj.processedData, obj.processedLabel);
-                        end
+                        obj.lstm = lstmOptimizer.optimize(obj.processedData, obj.processedLabel);
                     else
                         obj.lstm = obj.lstmClassifier.trainLSTM(obj.processedData, obj.processedLabel);
                     end
@@ -476,14 +466,8 @@ classdef EEGAnalyzer < handle
                 if obj.params.classifier.hybrid.enable
                     if obj.params.classifier.hybrid.optimize
                         hybridOptimizer = HybridOptimizer(obj.params);
-                        [~, ~, optimizedModel] = hybridOptimizer.optimize(obj.processedData, obj.processedLabel);
-                        if ~isempty(optimizedModel)
-                            obj.hybrid = hybridOptimizer.optimizedModel;  % 最適化されたモデルを直接使用
-                        else
-                            obj.hybrid = obj.hybridClassifier.trainHybrid(obj.processedData, obj.processedLabel);
-                        end
+                        obj.hybrid = hybridOptimizer.optimize(obj.processedData, obj.processedLabel);
                     else
-                        obj.hybridClassifier = HybridClassifier(obj.params);
                         obj.hybrid = obj.hybridClassifier.trainHybrid(obj.processedData, obj.processedLabel);
                     end
                 end
