@@ -426,7 +426,7 @@ function preset = template()
             ) ...
         ), ...
         'lstm', struct(...            % LSTM設定
-            'enable', true, ...      % true/false: LSTM有効/無効
+            'enable', false, ...      % true/false: LSTM有効/無効
             'gpu', true, ...         % true/false: GPU使用有効/無効
             'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
@@ -480,7 +480,7 @@ function preset = template()
             ) ...
         ), ...
         'hybrid', struct(...
-            'enable', false, ...       % true/false: ハイブリッドモデル有効/無効
+            'enable', true, ...       % true/false: ハイブリッドモデル有効/無効
             'gpu', false, ...         % true/false: GPU使用有効/無効
             'optimize', false, ...    % true/false: パラメータ最適化有効/無効
             'architecture', struct(...
@@ -548,7 +548,7 @@ function preset = template()
             'training', struct(...
                 'optimizer', struct(... % オプティマイザ設定
                     'type', 'adam', ... % オプティマイザ: 'adam'/'sgdm'/'rmsprop'
-                    'learningRate', 0.0001, ... % 学習率 (論文に合わせ0.0001)
+                    'learningRate', 0.0001, ... % 学習率
                     'beta1', 0.9, ...   % Adamのβ1パラメータ
                     'beta2', 0.999, ... % Adamのβ2パラメータ
                     'epsilon', 1e-8, ... % 数値安定化係数

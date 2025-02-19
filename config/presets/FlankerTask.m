@@ -230,7 +230,7 @@ function preset = FlankerTask()
             ), ...
             'augmentation', struct(... % データ拡張設定
                 'enable', true, ...   % true/false: データ拡張有効/無効
-                'augmentationRatio', 7, ... % 拡張比率 (2-10)
+                'augmentationRatio', 5, ... % 拡張比率 (2-10)
                 'combinationLimit', 3, ... % 最大手法数 (1-5)
                 'methods', struct(...   % 拡張手法設定
                     'noise', struct(...  % ノイズ付加
@@ -245,7 +245,7 @@ function preset = FlankerTask()
                         'probability', 0.3 ... % 適用確率 (0-1)
                     ), ...
                     'timeshift', struct(... % 時間シフト
-                        'enable', true, ... % true/false: 時間シフト有効/無効
+                        'enable', false, ... % true/false: 時間シフト有効/無効
                         'maxShift', 0.1, ... % 最大シフト量 (0.05-0.5 秒)
                         'probability', 0.3 ... % 適用確率 (0-1)
                     ), ...
@@ -339,7 +339,7 @@ function preset = FlankerTask()
     num_classes = size(trigger_mappings, 1);  % クラス数を動的設定
     
     classifier = struct(...
-        'activeClassifier', 'cnn', ... % 使用分類器: 'svm'/'ecoc'/'cnn'/'lstm'/'hybrid'
+        'activeClassifier', 'lstm', ... % 使用分類器: 'svm'/'ecoc'/'cnn'/'lstm'/'hybrid'
         'svm', struct(...              % SVMの設定
             'enable', false, ...       % true/false: SVM有効/無効
             'optimize', true, ...      % true/false: パラメータ最適化有効/無効
@@ -377,9 +377,9 @@ function preset = FlankerTask()
             'architecture', struct(... % ネットワークアーキテクチャ
                 'numClasses', num_classes, ... % クラス数 (自動設定)
                 'convLayers', struct(... % 畳み込み層設定
-                    'conv1', struct('size', [1 10], 'filters', 32, 'stride', 1, 'padding', 'same'), ...
-                    'conv2', struct('size', [1 10], 'filters', 64, 'stride', 1, 'padding', 'same'), ...
-                    'conv3', struct('size', [1 10], 'filters', 128, 'stride', 1, 'padding', 'same') ...
+                    'conv1', struct('size', [3 3], 'filters', 32, 'stride', 1, 'padding', 'same'), ...
+                    'conv2', struct('size', [3 3], 'filters', 64, 'stride', 1, 'padding', 'same'), ...
+                    'conv3', struct('size', [3 3], 'filters', 128, 'stride', 1, 'padding', 'same') ...
                 ), ...
                 'poolLayers', struct(... % プーリング層設定
                     'pool1', struct('size', 2, 'stride', 2), ... % size: 1-4, stride: 1-4
@@ -397,15 +397,15 @@ function preset = FlankerTask()
             'training', struct(...    % 学習設定
                 'optimizer', struct(... % オプティマイザ設定
                     'type', 'adam', ... % タイプ: 'adam'/'sgdm'/'rmsprop'
-                    'learningRate', 0.0001, ... % 学習率 (0.0001-0.01)
+                    'learningRate', 0.001, ... % 学習率 (0.0001-0.01)
                     'beta1', 0.9, ...   % 一次モーメント係数 (0.8-0.99)
                     'beta2', 0.999, ... % 二次モーメント係数 (0.9-0.9999)
                     'epsilon', 1e-8 ... % 数値安定化係数 (1e-8-1e-4)
                 ), ...
                 'maxEpochs', 100, ... % 最大エポック数 (10-1000)
-                'miniBatchSize', 50, ... % ミニバッチサイズ (8-512)
-                'frequency', 10, ... % 検証頻度 (エポック)
-                'patience', 10, ... % 早期終了の待機回数
+                'miniBatchSize', 128, ... % ミニバッチサイズ (8-512)
+                'frequency', 5, ... % 検証頻度 (エポック)
+                'patience', 20, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
                     'enable', false, ... % true/false: 検証有効/無効
@@ -416,6 +416,7 @@ function preset = FlankerTask()
                 'searchSpace', struct(... % パラメータ探索範囲
                     'learningRate', [0.0005, 0.005], ... % 学習率範囲
                     'miniBatchSize', [64, 256], ...      % バッチサイズ範囲
+                    'filterSize', [3, 7], ... % フィルタサイズ範囲
                     'kernelSize', {[3,3], [5,5]}, ...    % カーネルサイズ候補
                     'numFilters', [16, 64], ...          % フィルタ数範囲
                     'dropoutRate', [0.3, 0.7], ...       % ドロップアウト率範囲
@@ -425,8 +426,8 @@ function preset = FlankerTask()
         ), ...
         'lstm', struct(...            % LSTM設定
             'enable', false, ...      % true/false: LSTM有効/無効
-            'gpu', false, ...         % true/false: GPU使用有効/無効
-            'optimize', false, ...    % true/false: パラメータ最適化有効/無効
+            'gpu', true, ...         % true/false: GPU使用有効/無効
+            'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
                 'numClasses', num_classes, ... % クラス数 (自動設定)
                 'sequenceInputLayer', struct(... % 入力層設定
@@ -456,10 +457,10 @@ function preset = FlankerTask()
                     'epsilon', 1e-8, ... % 数値安定化係数 (1e-8-1e-4)
                     'gradientThreshold', 1 ... % 勾配クリッピング閾値 (0.1-10)
                 ), ...
-                'maxEpochs', 10, ...  % 最大エポック数 (5-100)
-                'miniBatchSize', 32, ... % ミニバッチサイズ (8-128)
-                'frequency', 10, ... % 検証頻度 (エポック)
-                'patience', 10, ... % 早期終了の待機回数
+                'maxEpochs', 100, ...  % 最大エポック数 (5-100)
+                'miniBatchSize', 64, ... % ミニバッチサイズ (8-128)
+                'frequency', 5, ... % 検証頻度 (エポック)
+                'patience', 15, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
                     'enable', false, ... % true/false: 検証有効/無効
@@ -467,13 +468,13 @@ function preset = FlankerTask()
                 ) ...
             ), ...
             'optimization', struct(... % 最適化設定
-                'searchSpace', struct(... % パラメータ探索範囲
-                    'learningRate', [0.0001, 0.01], ... % 学習率範囲
-                    'miniBatchSize', [16, 64], ...      % バッチサイズ範囲
-                    'numHiddenUnits', [32, 256], ...    % 隠れユニット数範囲
-                    'numLayers', [1, 3], ...            % LSTM層数範囲
-                    'dropoutRate', [0.2, 0.7], ...      % ドロップアウト率範囲
-                    'fcUnits', [32, 256] ...            % 全結合層ユニット数範囲
+                'searchSpace', struct(...
+                    'learningRate', [0.0001, 0.01], ...  % 学習率範囲
+                    'miniBatchSize', [16, 128], ...      % バッチサイズ範囲
+                    'numHiddenUnits', [32, 256], ...     % 隠れユニット数範囲
+                    'numLayers', [1, 3], ...             % LSTM層数範囲
+                    'dropoutRate', [0.2, 0.7], ...       % ドロップアウト率範囲
+                    'fcUnits', [32, 256] ...             % 全結合層ユニット数範囲
                 ) ...
             ) ...
         ), ...
@@ -485,7 +486,7 @@ function preset = FlankerTask()
                 'numClasses', num_classes, ... % クラス数 (自動設定)
                 'cnn', struct(...
                     'inputSize', [], ...        % 入力サイズ (自動設定)
-                    'convLayers', struct(...   % 畳み込み層設定
+                    'convLayers', struct(...   % 畳み込み層設定（論文に合わせconv1のみ使用）
                         'conv1', struct('size', [3 3], 'filters', 32, 'stride', 1, 'padding', 'same') ...
                     ), ...
                     'poolLayers', struct(...   % プーリング層設定
@@ -553,7 +554,7 @@ function preset = FlankerTask()
                     'gradientThreshold', 1 ... % 勾配クリッピング閾値
                 ), ...
                 'maxEpochs', 100, ...    % 最大エポック数
-                'miniBatchSize', 50, ... % バッチサイズ
+                'miniBatchSize', 50, ... % バッチサイズ (論文に合わせ50)
                 'frequency', 10, ... % 検証頻度 (エポック)
                 'patience', 10, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % データシャッフル方法
@@ -563,7 +564,7 @@ function preset = FlankerTask()
                 ) ...
             ), ...
             'optimization', struct(...
-                'searchSpace', struct(...   % パラメータ探索範囲
+                'searchSpace', struct(... % パラメータ探索範囲
                     'learningRate', [0.0001, 0.01], ...  % 学習率範囲
                     'miniBatchSize', [16, 128], ...      % バッチサイズ範囲
                     'cnnFilters', [32, 128], ...         % CNNフィルタ数範囲
@@ -571,8 +572,7 @@ function preset = FlankerTask()
                     'lstmUnits', [32, 256], ...          % LSTMユニット数範囲
                     'numLayers', [2, 4], ...             % 層数範囲
                     'dropoutRate', [0.2, 0.7], ...       % ドロップアウト率範囲
-                    'fcUnits', [64, 256], ...            % 全結合層ユニット数範囲
-                    'mergeUnits', [64, 256] ...          % マージ層のユニット数範囲
+                    'fcUnits', [64, 256] ...             % 全結合層ユニット数範囲
                 ) ...
             ) ...
         ), ...
