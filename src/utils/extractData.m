@@ -1,42 +1,46 @@
 function [extractedData, extractedLabels] = extractData(varargin)
     %% extractData の使用例
     % パスの設定に注意→パスを通していないと使用できない
-    
-   % よく使う設定
-   % [data, labels] = extractData('Classes', [1 2 4], 'ClassMap', [4, 3], 'SaveExtracted', true);
-    
+    %
+    % よく使う設定例:
+    % [data, labels] = extractData('Classes', [1 2 4], 'ClassMap', [4, 3], 'SaveExtracted', true);
+    %
     % 1. 基本的な使用法（UIでファイル選択）
     % [data, labels] = extractData();
-    
+    %
     % 2. 特定のクラスのみ抽出
     % [data, labels] = extractData('Classes', [1 2], 'SaveExtracted', true);
-    
+    %
     % 3. 特定のサンプル範囲を抽出
     % [data, labels] = extractData('Samples', 1:100, 'SaveExtracted', true);
-    
+    %
     % 4. クラス番号の変更（クラス4をクラス3に変更）
     % [data, labels] = extractData('ClassMap', [4, 3]);
-    
+    %
     % 5. 複数クラスの同時変更（クラス4→3、クラス2→1）
     % [data, labels] = extractData('ClassMap', [4, 3; 2, 1], 'SaveExtracted', true);
-    
+    %
     % 6. クラス抽出と番号変更の組み合わせ
     % [data, labels] = extractData('Classes', [1 2 4], 'ClassMap', [4, 3], 'SaveExtracted', true);
-
+    %
     % 7. 保存モードの選択（一括保存モード）
     % [data, labels] = extractData('SaveExtracted', true, 'SaveMode', 'batch');
-    
+    %
     % 8. 保存モードの選択（個別保存モード）
     % [data, labels] = extractData('SaveExtracted', true, 'SaveMode', 'individual');
-
+    %
     % 9. クラス数を均衡にして抽出
     % [data, labels] = extractData('SaveExtracted', true, 'BalanceClasses', true);
-
+    %
+    % 10. 特定のチャンネルのみ抽出（例: チャンネル 1, 3, 5）
+    % [data, labels] = extractData('Channels', [1 3 5], 'SaveExtracted', true);
+    
     % 入力パーサーの初期化
     p = inputParser;
     addParameter(p, 'Filename', '', @ischar);
     addParameter(p, 'Classes', [], @isnumeric);
     addParameter(p, 'Samples', [], @isnumeric);
+    addParameter(p, 'Channels', [], @isnumeric);  % <-- 追加：抽出するチャンネルのインデックス
     addParameter(p, 'ValidateOnly', false, @islogical);
     addParameter(p, 'SaveExtracted', false, @islogical);
     addParameter(p, 'SaveMode', '', @(x) isempty(x) || ismember(x, {'individual', 'batch'}));
@@ -159,6 +163,9 @@ function saveExtractedFile(data, labels, sourcePath, params)
     if ~isempty(params.Samples)
         suffix = [suffix sprintf('_samples%d-%d', min(params.Samples), max(params.Samples))];
     end
+    if ~isempty(params.Channels)
+        suffix = [suffix sprintf('_channels%s', strjoin(string(params.Channels), '-'))];
+    end
     if ~isempty(params.ClassMap)
         suffix = [suffix '_remapped'];
     end
@@ -176,6 +183,7 @@ function saveExtractedFile(data, labels, sourcePath, params)
             'sourceFile', sourcePath, ...
             'extractedClasses', params.Classes, ...
             'extractedSamples', params.Samples, ...
+            'extractedChannels', params.Channels, ...
             'classMap', params.ClassMap, ...
             'timestamp', datetime('now') ...
         ) ...
@@ -196,6 +204,9 @@ function batchSaveFile(data, labels, sourcePath, outputPath, params)
     if ~isempty(params.Samples)
         suffix = [suffix sprintf('_samples%d-%d', min(params.Samples), max(params.Samples))];
     end
+    if ~isempty(params.Channels)
+        suffix = [suffix sprintf('_channels%s', strjoin(string(params.Channels), '-'))];
+    end
     if ~isempty(params.ClassMap)
         suffix = [suffix '_remapped'];
     end
@@ -213,6 +224,7 @@ function batchSaveFile(data, labels, sourcePath, outputPath, params)
             'sourceFile', sourcePath, ...
             'extractedClasses', params.Classes, ...
             'extractedSamples', params.Samples, ...
+            'extractedChannels', params.Channels, ...
             'classMap', params.ClassMap, ...
             'timestamp', datetime('now') ...
         ) ...
@@ -266,6 +278,15 @@ function [processedData, processedLabels] = processFile(fullpath, params)
         fprintf('\nクラス番号の変換を実行しました\n');
         displayClassMapping(params.ClassMap);
     end
+    
+    % 追加: 指定されたチャンネルのみ抽出（1試行のデータは Ch x timepoints）
+    if ~isempty(params.Channels)
+        if max(params.Channels) > size(processedData, 1) || min(params.Channels) < 1
+            error('指定されたチャンネルインデックスがデータサイズを超えています。');
+        end
+        processedData = processedData(params.Channels, :);
+        fprintf('\nチャンネルの抽出を実行しました: チャンネル [%s]\n', num2str(params.Channels));
+    end
 
     % 抽出結果の表示
     displayExtractionResults(processedData, processedLabels);
@@ -274,26 +295,33 @@ end
 function [balancedData, balancedLabels] = balanceClasses(data, labels)
     % balanceClasses: ラベルのみを各クラスの最小数に合わせてダウンサンプリングし、
     % rawData はそのままコピーする
-    balancedData = data;  % rawData は変更せずコピー
+    balancedData = data; % rawData は変更せずコピー
     classValues = [labels.value];
     uniqueClasses = unique(classValues);
-    
     % 各クラスのインデックスを取得
-    balancedLabels = [];  % 空の行ベクトルとして初期化
+    balancedLabels = struct([]); % 空の構造体として初期化
+    
     for k = 1:length(uniqueClasses)
         indices = find(classValues == uniqueClasses(k));
         % 各クラス内のサンプル数
         counts(k) = length(indices); %#ok<AGROW>
     end
-    minCount = min(counts);
     
-    % 各クラスからランダムに minCount 個ずつ選択し、横方向に連結（1×N の構造体配列になる）
+    minCount = min(counts);
+    allSelected = [];
+    
+    % 各クラスからランダムに minCount 個ずつ選択
     for k = 1:length(uniqueClasses)
         indices = find(classValues == uniqueClasses(k));
         perm = randperm(length(indices));
         selected = indices(perm(1:minCount));
-        balancedLabels = [balancedLabels, labels(selected)];  % 横方向に連結
+        allSelected = [allSelected; selected]; % インデックスを縦方向に保存
     end
+    
+    % 選択されたインデックスを使用して縦方向に構造体を構築
+    balancedLabels = labels(allSelected);
+    % reshape を使用して確実に N*1 構造体にする
+    balancedLabels = reshape(balancedLabels, [], 1);
 end
 
 function [extractedData, extractedLabels] = extractByClass(data, labels, targetClasses)
