@@ -290,11 +290,9 @@ classdef EEGAnalyzer < handle
             obj.labels = loadedData.labels;
             
             % デバイス設定の確認（デバッグ出力）
-            actualChannelCount = size(obj.rawData, 1);
             fprintf('\n[DEBUG] デバイス設定確認:\n');
             fprintf('  デバイス名: %s\n', obj.params.device.name);
             fprintf('  設定チャンネル数: %d\n', obj.params.device.channelCount);
-            fprintf('  実際のチャンネル数: %d\n', actualChannelCount);
             if isfield(obj.params.device, 'channels') && ~isempty(obj.params.device.channels)
                 % セル配列の場合は strjoin で連結
                 if iscell(obj.params.device.channels)

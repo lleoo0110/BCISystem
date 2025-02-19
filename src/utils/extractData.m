@@ -32,8 +32,8 @@ function [extractedData, extractedLabels] = extractData(varargin)
     % 9. クラス数を均衡にして抽出
     % [data, labels] = extractData('SaveExtracted', true, 'BalanceClasses', true);
     %
-    % 10. 特定のチャンネルのみ抽出（例: チャンネル 1, 3, 5）
-    % [data, labels] = extractData('Channels', [1 3 5], 'SaveExtracted', true);
+    % 10. 特定のチャンネルのみ抽出
+    % [data, labels] = extractData('Channels', [1, 2, 6, 8, 27, 29], 'SaveExtracted', true);
     
     % 入力パーサーの初期化
     p = inputParser;
