@@ -346,7 +346,7 @@ classdef EEGAnalyzer < handle
                 end
 
                 % IIRフィルタ
-                if obj.params.signal.preprocessing.filter.iir.enable
+                if obj.params.signal.preprocessing.filter.fir.enable
                     [data, info] = obj.iirFilter.designAndApplyFilter(data);
                     obj.processingInfo.iirFilter = info;
                 end

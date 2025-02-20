@@ -16,7 +16,7 @@ setupPaths(currentDir);
 
 
 %%  指定のパラメータで実行
-params = getConfig('epocx', 'preset', 'character');
+params = getConfig('epocx', 'preset', 'masa_template');
 analyzer = EEGAnalyzer(params);     % アナライザーの初期化
 analyzer.analyze();                            % 解析の実行
 

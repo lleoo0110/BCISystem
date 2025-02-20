@@ -214,14 +214,6 @@ function preset = template()
                     'frequency', [50 60], ... % 除去周波数 ([50]/[60]/[50 60] Hz)
                     'bandwidth', 2 ...  % 帯域幅 (1-5 Hz)
                 ), ...
-                'iir', struct(...       % IIRフィルタ  **追加**
-                    'enable', false, ...    % IIRフィルタの有効/無効
-                    'filterOrder', 4, ...     % IIRフィルタの次数
-                    'designMethod', 'butterworth', ... % 'butterworth', 'chebyshev1', 'chebyshev2', 'ellip'
-                    'filterType', 'bandpass', ...     % 'bandpass', 'lowpass', 'highpass', 'bandstop'
-                    'passbandRipple', 1, ...          % Chebyshev1, Elliptic の場合
-                    'stopbandAttenuation', 60 ...     % Chebyshev2, Elliptic の場合
-                ),...
                 'fir', struct(...     % FIRフィルタ
                     'enable', true, ... % true/false: FIRフィルタ有効/無効
                     'scaledPassband', true, ... % true/false: パスバンドスケーリング
@@ -230,7 +222,15 @@ function preset = template()
                     'windowType', 'hamming', ... % 窓関数: 'hamming'/'hann'/'blackman'
                     'passbandRipple', 1, ... % パスバンドリップル (0.5-3 dB)
                     'stopbandAttenuation', 60 ... % 阻止域減衰量 (40-80 dB)
-                ) ...
+                ), ...
+                'iir', struct(...       % IIRフィルタ  **追加**
+                    'enable', false, ...    % IIRフィルタの有効/無効
+                    'filterOrder', 4, ...     % IIRフィルタの次数
+                    'designMethod', 'butterworth', ... % 'butterworth', 'chebyshev1', 'chebyshev2', 'ellip'
+                    'filterType', 'bandpass', ...     % 'bandpass', 'lowpass', 'highpass', 'bandstop'
+                    'passbandRipple', 1, ...          % Chebyshev1, Elliptic の場合
+                    'stopbandAttenuation', 60 ...     % Chebyshev2, Elliptic の場合
+                )...
             ), ...
             'normalize', struct(...    % 正規化設定
                 'enable', true, ...    % true/false: 正規化有効/無効
