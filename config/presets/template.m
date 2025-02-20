@@ -75,7 +75,7 @@ function preset = template()
             ), ...
             'filter', struct(...        % EOGフィルタ設定
                 'bandpass', struct(...  % バンドパスフィルタ
-                    'enable', true, ... % true/false: フィルタ有効/無効
+                    'enable', false, ... % true/false: フィルタ有効/無効
                     'low', 0.1, ...    % 低域カットオフ (0.1-1 Hz)
                     'high', 15 ...     % 高域カットオフ (10-30 Hz)
                 ), ...
@@ -156,8 +156,8 @@ function preset = template()
     signal = struct(...
         'enable', true, ...           % true/false: 信号処理有効/無効
         'window', struct(...          % 解析窓の設定
-            'analysis', 2.0, ...      % 解析窓長 (0.5-10.0 秒)
-            'stimulus', 5.0, ...      % 刺激提示時間 (1.0-30.0 秒)
+            'analysis', 1.0, ...      % 解析窓長 (0.5-10.0 秒)
+            'stimulus', 2.0, ...      % 刺激提示時間 (1.0-30.0 秒)
             'bufferSize', 15, ...     % バッファサイズ (5-30 秒)
             'updateBuffer', 1, ...    % バッファ更新間隔 (0.1-2.0 秒)
             'step', [], ...           % 解析窓シフト幅 (自動計算)
@@ -166,7 +166,7 @@ function preset = template()
         'epoch', struct(...           % エポック化設定
             'method', 'time', ...     % 方法: 'time'/'odd-even'
             'storageType', 'array', ... % 保存形式: 'array'/'cell'
-            'overlap', 0.25, ...      % オーバーラップ率 (0-0.9)
+            'overlap', 0, ...      % オーバーラップ率 (0-0.9)
             'visual', struct(...      % 視覚タスク設定
                 'enable', false, ...  % true/false: 視覚タスク有効/無効
                 'taskTypes', {{'observation', 'imagery'}}, ... % タスク種類: 'observation'/'imagery'
@@ -176,7 +176,7 @@ function preset = template()
             ) ...
         ), ...
         'frequency', struct(...       % 周波数解析設定
-            'min', 8, ...             % 最小周波数 (0.1-100 Hz)
+            'min', 1, ...             % 最小周波数 (0.1-100 Hz)
             'max', 30, ...            % 最大周波数 (1-200 Hz)
             'bands', struct(...       % 周波数帯域定義
                 'delta', [1 4], ...   % デルタ波帯域 (0.5-4 Hz)
@@ -238,7 +238,7 @@ function preset = template()
                 'method', 'zscore' ... % 正規化方法: 'zscore'/'minmax'/'robust'
             ), ...
             'augmentation', struct(... % データ拡張設定
-                'enable', false, ...   % true/false: データ拡張有効/無効
+                'enable', true, ...   % true/false: データ拡張有効/無効
                 'augmentationRatio', 7, ... % 拡張比率 (2-10)
                 'combinationLimit', 3, ... % 最大手法数 (1-5)
                 'methods', struct(...   % 拡張手法設定
@@ -413,12 +413,11 @@ function preset = template()
                 ), ...
                 'maxEpochs', 100, ... % 最大エポック数 (10-1000)
                 'miniBatchSize', 128, ... % ミニバッチサイズ (8-512)
+                'frequency', 5, ... % 検証頻度 (エポック)
+                'patience', 20, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
                     'enable', false, ... % true/false: 検証有効/無効
-                    'frequency', 10, ... % 検証頻度 (エポック)
-                    'patience', 20, ... % 早期終了の待機回数
-                    'holdout', 0.2, ... % ホールドアウト比率 (0.1-0.3)
                     'kfold', 5 ...     % 交差検証分割数 (3-10)
                 ) ...
             ), ...
@@ -426,6 +425,7 @@ function preset = template()
                 'searchSpace', struct(... % パラメータ探索範囲
                     'learningRate', [0.0005, 0.005], ... % 学習率範囲
                     'miniBatchSize', [64, 256], ...      % バッチサイズ範囲
+                    'filterSize', [3, 7], ... % フィルタサイズ範囲
                     'kernelSize', {[3,3], [5,5]}, ...    % カーネルサイズ候補
                     'numFilters', [16, 64], ...          % フィルタ数範囲
                     'dropoutRate', [0.3, 0.7], ...       % ドロップアウト率範囲
@@ -435,8 +435,8 @@ function preset = template()
         ), ...
         'lstm', struct(...            % LSTM設定
             'enable', false, ...      % true/false: LSTM有効/無効
-            'gpu', false, ...         % true/false: GPU使用有効/無効
-            'optimize', false, ...    % true/false: パラメータ最適化有効/無効
+            'gpu', true, ...         % true/false: GPU使用有効/無効
+            'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
                 'numClasses', num_classes, ... % クラス数 (自動設定)
                 'sequenceInputLayer', struct(... % 入力層設定
@@ -466,100 +466,122 @@ function preset = template()
                     'epsilon', 1e-8, ... % 数値安定化係数 (1e-8-1e-4)
                     'gradientThreshold', 1 ... % 勾配クリッピング閾値 (0.1-10)
                 ), ...
-                'maxEpochs', 10, ...  % 最大エポック数 (5-100)
-                'miniBatchSize', 32, ... % ミニバッチサイズ (8-128)
+                'maxEpochs', 100, ...  % 最大エポック数 (5-100)
+                'miniBatchSize', 64, ... % ミニバッチサイズ (8-128)
+                'frequency', 5, ... % 検証頻度 (エポック)
+                'patience', 15, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
                     'enable', false, ... % true/false: 検証有効/無効
-                    'frequency', 10, ... % 検証頻度 (エポック)
-                    'patience', 20, ... % 早期終了の待機回数
-                    'holdout', 0.2, ... % ホールドアウト比率 (0.1-0.3)
                     'kfold', 5 ...     % 交差検証分割数 (3-10)
                 ) ...
             ), ...
             'optimization', struct(... % 最適化設定
-                'searchSpace', struct(... % パラメータ探索範囲
-                    'learningRate', [0.0001, 0.01], ... % 学習率範囲
-                    'miniBatchSize', [16, 64], ...      % バッチサイズ範囲
-                    'numHiddenUnits', [32, 256], ...    % 隠れユニット数範囲
-                    'numLayers', [1, 3], ...            % LSTM層数範囲
-                    'dropoutRate', [0.2, 0.7], ...      % ドロップアウト率範囲
-                    'fcUnits', [32, 256] ...            % 全結合層ユニット数範囲
+                'searchSpace', struct(...
+                    'learningRate', [0.0001, 0.01], ...  % 学習率範囲
+                    'miniBatchSize', [16, 128], ...      % バッチサイズ範囲
+                    'numHiddenUnits', [32, 256], ...     % 隠れユニット数範囲
+                    'numLayers', [1, 3], ...             % LSTM層数範囲
+                    'dropoutRate', [0.2, 0.7], ...       % ドロップアウト率範囲
+                    'fcUnits', [32, 256] ...             % 全結合層ユニット数範囲
                 ) ...
             ) ...
         ), ...
-        'hybrid', struct(...          % ハイブリッドモデル設定
+        'hybrid', struct(...
             'enable', true, ...       % true/false: ハイブリッドモデル有効/無効
-            'gpu', true, ...          % true/false: GPU使用有効/無効
-            'optimize', true, ...     % true/false: パラメータ最適化有効/無効
-            'evaluation', struct(...  % 評価設定
-                'kfold', 5 ...       % 交差検証分割数 (3-10)
-            ), ...
-            'overfitThreshold', 5, ... % 過学習判定閾値 (%) (1-10)
-            'cnn', struct(...        % CNN部分の設定
-                'inputSize', [32, 32, 3], ... % 入力サイズ [高さ,幅,チャンネル]
-                'filterSize', 3, ...  % フィルタサイズ (3-7)
-                'numFilters', 16, ... % フィルタ数 (8-64)
-                'poolSize', 2, ...    % プーリングサイズ (2-4)
-                'poolStride', 2, ...  % プーリングストライド (1-4)
-                'numClasses', num_classes ... % クラス数 (自動設定)
-            ), ...
-            'lstm', struct(...       % LSTM部分の設定
-                'enable', true, ...   % true/false: LSTM有効/無効
-                'gpu', true, ...      % true/false: GPU使用有効/無効
-                'optimize', false, ... % true/false: パラメータ最適化有効/無効
-                'architecture', struct(... % LSTMアーキテクチャ
-                    'numClasses', num_classes, ...
+            'gpu', false, ...         % true/false: GPU使用有効/無効
+            'optimize', false, ...    % true/false: パラメータ最適化有効/無効
+            'architecture', struct(...
+                'numClasses', num_classes, ... % クラス数 (自動設定)
+                'cnn', struct(...
+                    'inputSize', [], ...        % 入力サイズ (自動設定)
+                    'convLayers', struct(...   % 畳み込み層設定（論文に合わせconv1のみ使用）
+                        'conv1', struct('size', [3 3], 'filters', 32, 'stride', 1, 'padding', 'same') ...
+                    ), ...
+                    'poolLayers', struct(...   % プーリング層設定
+                        'pool1', struct('size', 2, 'stride', 2) ...
+                    ), ...
+                    'dropoutLayers', struct(...% ドロップアウト層設定
+                        'dropout1', 0.3 ...
+                    ) ...
+                ), ...
+                'lstm', struct(...
                     'sequenceInputLayer', struct(...
                         'inputSize', [], ...      % 入力サイズ (自動設定)
                         'sequenceLength', [], ... % シーケンス長 (自動設定)
                         'normalization', 'none' ... % 正規化方法
                     ), ...
-                    'lstmLayers', struct(...    % LSTM層設定
-                        'lstm1', struct('numHiddenUnits', 256, 'OutputMode', 'last'), ...
-                        'lstm2', struct('numHiddenUnits', 256, 'OutputMode', 'last'), ...
-                        'lstm3', struct('numHiddenUnits', 256, 'OutputMode', 'last'), ...
-                        'lstm4', struct('numHiddenUnits', 64, 'OutputMode', 'last') ...
+                    'lstmLayers', struct(...    % LSTM層設定（4層構成）
+                        'lstm1', struct('numHiddenUnits', 256, 'OutputMode', 'sequence'), ...
+                        'lstm2', struct('numHiddenUnits', 256, 'OutputMode', 'sequence'), ...
+                        'lstm3', struct('numHiddenUnits', 256, 'OutputMode', 'sequence'), ...
+                        'lstm4', struct('numHiddenUnits', 64,  'OutputMode', 'last') ...
                     ), ...
                     'dropoutLayers', struct(... % ドロップアウト層設定
-                        'dropout1', 0.3, ... % ドロップアウト率 (0-0.8)
+                        'dropout1', 0.3, ...
                         'dropout2', 0.4, ...
-                        'dropout3', 0.4, ...
+                        'dropout3', 0.5, ...
                         'dropout4', 0.5 ...
+                    ) ...
+                ), ...
+                'merge', struct(...            % NEW: マージ層の設定を追加
+                    'concat', struct(...
+                        'dimension', 3, ...     % 結合する次元
+                        'numInputs', 2, ...     % 入力数（CNNとLSTMの2つ）
+                        'name', 'concat' ...    % レイヤー名
                     ), ...
-                    'batchNorm', true, ... % true/false: バッチ正規化有効/無効
-                    'fullyConnected', [128 64] ... % 全結合層ユニット数 (配列)
-                ) ...
+                    'globalPooling', struct(...
+                        'enable', true, ...     % グローバルプーリングの有効化
+                        'name', 'gavg' ...      % レイヤー名
+                    ), ...
+                    'fullyConnected', struct(...
+                        'layers', [...
+                            struct('units', 256, 'name', 'fc_merge1'), ...
+                            struct('units', 128, 'name', 'fc_merge2')
+                        ], ...
+                        'activation', 'relu' ... % 活性化関数
+                    ), ...
+                    'dropout', struct(...
+                        'rate', 0.5, ...        % ドロップアウト率
+                        'name', 'dropout_merge' ... % レイヤー名
+                    ), ...
+                    'output', struct(...
+                        'activation', 'softmax', ... % 出力層の活性化関数
+                        'name', 'output' ...        % レイヤー名
+                    ) ...
+                ), ...
+                'fullyConnected', [128 64], ... % 全結合層ユニット数
+                'batchNorm', true ...          % バッチ正規化の使用
             ), ...
-            'fc', struct(...         % 全結合層設定
-                'numUnits', 50 ...   % ユニット数 (32-256)
-            ), ...
-            'training', struct(...   % 学習設定
-                'optimizerType', 'adam', ... % オプティマイザ: 'adam'/'sgdm'/'rmsprop'
-                'learningRate', 0.001, ... % 学習率 (0.0001-0.01)
-                'maxEpochs', 20, ...      % 最大エポック数 (10-100)
-                'miniBatchSize', 32, ...  % バッチサイズ (16-128)
-                'validationFrequency', 30, ... % 検証頻度 (10-50)
-                'validationPatience', 5, ... % 検証パティエンス (3-10)
+            'training', struct(...
+                'optimizer', struct(... % オプティマイザ設定
+                    'type', 'adam', ... % オプティマイザ: 'adam'/'sgdm'/'rmsprop'
+                    'learningRate', 0.0001, ... % 学習率
+                    'beta1', 0.9, ...   % Adamのβ1パラメータ
+                    'beta2', 0.999, ... % Adamのβ2パラメータ
+                    'epsilon', 1e-8, ... % 数値安定化係数
+                    'gradientThreshold', 1 ... % 勾配クリッピング閾値
+                ), ...
+                'maxEpochs', 100, ...    % 最大エポック数
+                'miniBatchSize', 50, ... % バッチサイズ (論文に合わせ50)
+                'frequency', 10, ... % 検証頻度 (エポック)
+                'patience', 10, ... % 早期終了の待機回数
+                'shuffle', 'every-epoch', ... % データシャッフル方法
                 'validation', struct(... % 検証設定
-                    'enable', false, ... % true/false: 検証有効/無効
-                    'frequency', 10, ... % 検証頻度 (エポック)
-                    'patience', 20, ...  % 早期終了の待機回数
-                    'holdout', 0.2, ... % ホールドアウト比率 (0.1-0.3)
-                    'kfold', 5 ...      % 交差検証分割数 (3-10)
+                    'enable', false, ...  % 検証の有効化
+                    'kfold', 5 ...      % 交差検証分割数
                 ) ...
             ), ...
-            'optimization', struct(... % 最適化設定
+            'optimization', struct(...
                 'searchSpace', struct(... % パラメータ探索範囲
-                    'learningRate', [0.0001, 0.01], ... % 学習率範囲
-                    'miniBatchSize', [16, 64], ...      % バッチサイズ範囲
-                    'cnnFilters', [8, 32], ...          % CNNフィルタ数範囲
-                    'filterSize', [3, 5], ...           % フィルタサイズ範囲
-                    'poolSize', [2, 3], ...             % プーリングサイズ範囲
-                    'numLstmLayers', [2, 4], ...        % LSTM層数範囲
-                    'lstmUnits', [64, 256], ...         % LSTMユニット数範囲
-                    'dropoutRate', [0.2, 0.5], ...      % ドロップアウト率範囲
-                    'fcUnits', [32, 128] ...            % 全結合層ユニット数範囲
+                    'learningRate', [0.0001, 0.01], ...  % 学習率範囲
+                    'miniBatchSize', [16, 128], ...      % バッチサイズ範囲
+                    'cnnFilters', [32, 128], ...         % CNNフィルタ数範囲
+                    'filterSize', [3, 7], ...            % フィルタサイズ範囲
+                    'lstmUnits', [32, 256], ...          % LSTMユニット数範囲
+                    'numLayers', [2, 4], ...             % 層数範囲
+                    'dropoutRate', [0.2, 0.7], ...       % ドロップアウト率範囲
+                    'fcUnits', [64, 256] ...             % 全結合層ユニット数範囲
                 ) ...
             ) ...
         ), ...

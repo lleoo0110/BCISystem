@@ -1,20 +1,19 @@
-function preset = character()
+function preset = FlankerTask()
     %% === プリセット情報 ===
     preset_info = struct(...
-        'name', 'character', ...
-        'description', 'Character Control preset', ...
-        'version', '3.1', ...
+        'name', 'FlankerTask', ...
+        'description', 'FlankerTask preset', ...
+        'version', '1.0', ...
         'author', 'LLEOO', ...
-        'date', '2025-02-13' ...
+        'date', '2025-02-18' ...
     );
 
     %% === トリガーマッピング設定 ===
     % トリガー値とクラスラベルの対応付け
     % 形式: {'状態名', トリガー値}
     trigger_mappings = {
-        '安静', 1;         % クラス1: 安静状態 (ベースライン)
-        '歩行', 2;      % クラス2: 歩行状態
-        '回転', 3;      % クラス3: 回転状態
+        'correct', 1;         % クラス1: 成功
+        'incorrect', 2;      % クラス2: 失敗
     };
 
     % トリガーマッピング構造体の生成
@@ -31,7 +30,7 @@ function preset = character()
     % Lab Streaming Layer通信の設定
     lsl = struct(...
         'simulate', struct(...           % シミュレーションモード設定
-            'enable', true, ...          % true/false: シミュレーション有効/無効
+            'enable', false, ...          % true/false: シミュレーション有効/無効
             'signal', struct(...         % シミュレーション信号の設定
                 'alpha', struct(...      % α波シミュレーション
                     'freq', 10, ...      % 周波数 (8-13 Hz)
@@ -48,7 +47,7 @@ function preset = character()
     %% === データ収集設定 ===
     % データ収集に関する基本設定
     acquisition = struct(...
-        'mode', 'online', ...           % モード: 'online'/'offline'
+        'mode', 'offline', ...           % モード: 'online'/'offline'
         'emg', struct(...               % EMG計測の設定
             'enable', false, ...        % true/false: EMG計測有効/無効
             'channels', struct(...      % EMGチャンネル設定
@@ -75,7 +74,7 @@ function preset = character()
             ), ...
             'filter', struct(...        % EOGフィルタ設定
                 'bandpass', struct(...  % バンドパスフィルタ
-                    'enable', false, ... % true/false: フィルタ有効/無効
+                    'enable', true, ... % true/false: フィルタ有効/無効
                     'low', 0.1, ...    % 低域カットオフ (0.1-1 Hz)
                     'high', 15 ...     % 高域カットオフ (10-30 Hz)
                 ), ...
@@ -157,7 +156,7 @@ function preset = character()
         'enable', true, ...           % true/false: 信号処理有効/無効
         'window', struct(...          % 解析窓の設定
             'analysis', 1.0, ...      % 解析窓長 (0.5-10.0 秒)
-            'stimulus', 2.0, ...      % 刺激提示時間 (1.0-30.0 秒)
+            'stimulus', 1.0, ...      % 刺激提示時間 (1.0-30.0 秒)
             'bufferSize', 15, ...     % バッファサイズ (5-30 秒)
             'updateBuffer', 1, ...    % バッファ更新間隔 (0.1-2.0 秒)
             'step', [], ...           % 解析窓シフト幅 (自動計算)
@@ -177,7 +176,7 @@ function preset = character()
         ), ...
         'frequency', struct(...       % 周波数解析設定
             'min', 1, ...             % 最小周波数 (0.1-100 Hz)
-            'max', 30, ...            % 最大周波数 (1-200 Hz)
+            'max', 10, ...            % 最大周波数 (1-200 Hz)
             'bands', struct(...       % 周波数帯域定義
                 'delta', [1 4], ...   % デルタ波帯域 (0.5-4 Hz)
                 'theta', [4 8], ...   % シータ波帯域 (4-8 Hz)
@@ -231,7 +230,7 @@ function preset = character()
             ), ...
             'augmentation', struct(... % データ拡張設定
                 'enable', true, ...   % true/false: データ拡張有効/無効
-                'augmentationRatio', 7, ... % 拡張比率 (2-10)
+                'augmentationRatio', 5, ... % 拡張比率 (2-10)
                 'combinationLimit', 3, ... % 最大手法数 (1-5)
                 'methods', struct(...   % 拡張手法設定
                     'noise', struct(...  % ノイズ付加
@@ -246,7 +245,7 @@ function preset = character()
                         'probability', 0.3 ... % 適用確率 (0-1)
                     ), ...
                     'timeshift', struct(... % 時間シフト
-                        'enable', true, ... % true/false: 時間シフト有効/無効
+                        'enable', false, ... % true/false: 時間シフト有効/無効
                         'maxShift', 0.1, ... % 最大シフト量 (0.05-0.5 秒)
                         'probability', 0.3 ... % 適用確率 (0-1)
                     ), ...
@@ -372,7 +371,7 @@ function preset = character()
             ) ...
         ), ...
         'cnn', struct(...             % CNN設定
-            'enable', false, ...      % true/false: CNN有効/無効
+            'enable', true, ...      % true/false: CNN有効/無効
             'gpu', true, ...          % true/false: GPU使用有効/無効
             'optimize', true, ...     % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
@@ -480,7 +479,7 @@ function preset = character()
             ) ...
         ), ...
         'hybrid', struct(...
-            'enable', true, ...       % true/false: ハイブリッドモデル有効/無効
+            'enable', false, ...       % true/false: ハイブリッドモデル有効/無効
             'gpu', false, ...         % true/false: GPU使用有効/無効
             'optimize', false, ...    % true/false: パラメータ最適化有効/無効
             'architecture', struct(...

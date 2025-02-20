@@ -136,10 +136,6 @@ classdef LSTMClassifier < handle
                 
                 % クラス1（安静状態）の確率を取得
                 score = scores(:,1);
-                
-                % デバッグ情報
-                fprintf('LSTM Prediction - Label: %d, Score: %.4f\n', label, score);
-
             catch ME
                 fprintf('Error in LSTM online prediction: %s\n', ME.message);
                 fprintf('Error details:\n');
@@ -232,8 +228,8 @@ classdef LSTMClassifier < handle
 
             % 検証データの設定
             options.ValidationData = {valData, categorical(valLabels)};
-            options.ValidationFrequency = training.validation.frequency;
-            options.ValidationPatience = training.validation.patience;
+            options.ValidationFrequency = training.frequency;
+            options.ValidationPatience = training.patience;
         end
 
         %% トレーニング進捗のコールバック関数
@@ -270,7 +266,7 @@ classdef LSTMClassifier < handle
                     obj.patienceCounter = 0;
                 else
                     obj.patienceCounter = obj.patienceCounter + 1;
-                    if obj.patienceCounter >= obj.params.classifier.lstm.training.validation.patience
+                    if obj.patienceCounter >= obj.params.classifier.lstm.training.patience
                         fprintf('\nEarly stopping: エポック %d で学習を終了\n', obj.currentEpoch);
                         fprintf('最良検証精度 %.2f%% を %d エポック更新できず\n', ...
                             obj.bestValAccuracy * 100, obj.patienceCounter);
@@ -827,11 +823,11 @@ classdef LSTMClassifier < handle
                 severity = 'critical';
             elseif ~isLearningProgressing
                 severity = 'failed';
-            elseif genGap > 10 || perfGap > 10
+            elseif genGap > 10 || perfGap > 15
                 severity = 'severe';
-            elseif genGap > 5 || perfGap > 5
+            elseif genGap > 5 || perfGap > 8
                 severity = 'moderate';
-            elseif genGap > 3 || perfGap > 3
+            elseif genGap > 3 || perfGap > 5
                 severity = 'mild';
             else
                 severity = 'none';

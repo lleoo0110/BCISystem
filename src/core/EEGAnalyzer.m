@@ -284,10 +284,28 @@ classdef EEGAnalyzer < handle
                     error('Required field %s not found in loaded data', requiredFields{i});
                 end
             end
-
+        
             % データの設定
             obj.rawData = loadedData.rawData;
-            obj.labels = loadedData.labels;           
+            obj.labels = loadedData.labels;
+            
+            % デバイス設定の確認（デバッグ出力）
+            fprintf('\n[DEBUG] デバイス設定確認:\n');
+            fprintf('  デバイス名: %s\n', obj.params.device.name);
+            fprintf('  設定チャンネル数: %d\n', obj.params.device.channelCount);
+            if isfield(obj.params.device, 'channels') && ~isempty(obj.params.device.channels)
+                % セル配列の場合は strjoin で連結
+                if iscell(obj.params.device.channels)
+                    channelList = strjoin(obj.params.device.channels, ', ');
+                else
+                    channelList = num2str(obj.params.device.channels);
+                end
+                fprintf('  チャンネル配置: %s\n', channelList);
+            else
+                fprintf('  チャンネル配置: 未定義\n');
+            end
+            fprintf('  サンプルレート: %d Hz\n', obj.params.device.sampleRate);
+            fprintf('---------------------------\n');
         end
         
         function executePreprocessingPipeline(obj)
@@ -425,69 +443,53 @@ classdef EEGAnalyzer < handle
             end
         end
         
-        function performClassification(obj)
+       function performClassification(obj)
             try
+                % CSP特徴量に基づく分類
                 if ~isempty(obj.results.csp.features)
                     % SVM分類
                     if obj.params.classifier.svm.enable
                         obj.svm = obj.svmClassifier.trainSVM(...
                             obj.results.csp.features, obj.processedLabel);
                     end
-
+        
                     % ECOC分類
                     if obj.params.classifier.ecoc.enable
                         obj.ecoc = obj.ecocClassifier.trainECOC(...
                             obj.results.csp.features, obj.processedLabel);
                     end
                 end
-
+        
                 % CNN分類
-                
                 if obj.params.classifier.cnn.enable
-                    cnnOptimizer = CNNOptimizer(obj.params);
-                    [cnnOptimizedParams, ~, ~] = cnnOptimizer.optimize(obj.processedData, obj.processedLabel);
-
-                    if obj.params.classifier.cnn.optimize && ~isempty(cnnOptimizedParams)
-                        updatedParams = obj.params;
-                        updatedParams.classifier.cnn = obj.updateCNNParams(obj.params.classifier.cnn, cnnOptimizedParams);
-                        updatedCnnClassifier = CNNClassifier(updatedParams);
-                        obj.cnn = updatedCnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
+                    if obj.params.classifier.cnn.optimize
+                        cnnOptimizer = CNNOptimizer(obj.params);
+                        obj.cnn = cnnOptimizer.optimize(obj.processedData, obj.processedLabel);
                     else
                         obj.cnn = obj.cnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
                     end
                 end
-
+        
                 % LSTM分類
                 if obj.params.classifier.lstm.enable
-                    lstmOptimizer = LSTMOptimizer(obj.params);
-                    [lstmOptimizedParams, ~, ~] = lstmOptimizer.optimize(obj.processedData, obj.processedLabel);
-
-                    if obj.params.classifier.lstm.optimize && ~isempty(lstmOptimizedParams)
-                        updatedParams = obj.params;
-                        updatedParams.classifier.lstm = obj.updateLSTMParams(obj.params.classifier.lstm, lstmOptimizedParams);
-                        updatedLstmClassifier = LSTMClassifier(updatedParams);
-                        obj.lstm = updatedLstmClassifier.trainLSTM(obj.processedData, obj.processedLabel);
+                    if obj.params.classifier.lstm.optimize
+                        lstmOptimizer = LSTMOptimizer(obj.params);
+                        obj.lstm = lstmOptimizer.optimize(obj.processedData, obj.processedLabel);
                     else
                         obj.lstm = obj.lstmClassifier.trainLSTM(obj.processedData, obj.processedLabel);
                     end
                 end
-
+        
                 % Hybrid分類
                 if obj.params.classifier.hybrid.enable
-                    hybridOptimizer = HybridOptimizer(obj.params);
-                    [hybridOptimizedParams, ~, ~] = hybridOptimizer.optimize(obj.processedData, obj.processedLabel);
-    
-                    if obj.params.classifier.hybrid.optimize && ~isempty(hybridOptimizedParams)
-                        updatedParams = obj.params;
-                        updatedParams.classifier.hybrid = obj.updateHybridParams(obj.params.classifier.hybrid, hybridOptimizedParams);
-                        updatedHybridClassifier = HybridClassifier(updatedParams);
-                        obj.hybrid = updatedHybridClassifier.trainHybrid(obj.processedData, obj.processedLabel);
+                    if obj.params.classifier.hybrid.optimize
+                        hybridOptimizer = HybridOptimizer(obj.params);
+                        obj.hybrid = hybridOptimizer.optimize(obj.processedData, obj.processedLabel);
                     else
-                        obj.hybridClassifier = HybridClassifier(obj.params);
                         obj.hybrid = obj.hybridClassifier.trainHybrid(obj.processedData, obj.processedLabel);
                     end
                 end
-                
+        
             catch ME
                 error('Classification failed: %s', ME.message);
             end
@@ -824,13 +826,23 @@ classdef EEGAnalyzer < handle
                     );
                 end
 
-                % LSTM結果（追加）
+                % LSTM結果
                 if obj.params.classifier.lstm.enable && ~isempty(obj.lstm)
                     saveData.classifier.lstm = struct(...
                         'model', obj.lstm.model, ...
                         'performance', obj.lstm.performance, ...
                         'trainInfo', obj.lstm.trainInfo, ...
                         'overfitting', obj.lstm.overfitting ...
+                    );
+                end
+
+                % Hybrid結果
+                if obj.params.classifier.hybrid.enable && ~isempty(obj.hybrid)
+                    saveData.classifier.hybrid = struct(...
+                        'model', obj.hybrid.model, ...
+                        'performance', obj.hybrid.performance, ...
+                        'trainInfo', obj.hybrid.trainInfo, ...
+                        'overfitting', obj.hybrid.overfitting ...
                     );
                 end
 
