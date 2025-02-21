@@ -106,73 +106,86 @@ classdef LSTMOptimizer < handle
     
     methods (Access = private)
         function initializeSearchSpace(obj)
-            obj.searchSpace = obj.params.classifier.lstm.optimization.searchSpace;
+            % LSTM の探索空間設定
+            if isfield(obj.params.classifier.lstm.optimization, 'searchSpace')
+                obj.searchSpace = obj.params.classifier.lstm.optimization.searchSpace;
+            else
+                obj.searchSpace = struct(...
+                    'learningRate', [0.0001, 0.01], ...    % 学習率範囲
+                    'miniBatchSize', [16, 128], ...         % バッチサイズ範囲
+                    'lstmUnits', [32, 256], ...             % LSTM ユニット数範囲
+                    'numLayers', [1, 3], ...                % LSTM 層数範囲
+                    'dropoutRate', [0.2, 0.7], ...          % ドロップアウト率範囲
+                    'fcUnits', [64, 256] ...                % 全結合層ユニット数範囲
+                );
+            end
+            
+            fprintf('\n探索空間の範囲 (LSTM):\n');
+            fprintf('  学習率: [%.6f, %.6f]\n', obj.searchSpace.learningRate);
+            fprintf('  バッチサイズ: [%d, %d]\n', obj.searchSpace.miniBatchSize);
+            fprintf('  LSTMユニット数: [%d, %d]\n', obj.searchSpace.lstmUnits);
+            fprintf('  LSTM層数: [%d, %d]\n', obj.searchSpace.numLayers);
+            fprintf('  ドロップアウト率: [%.2f, %.2f]\n', obj.searchSpace.dropoutRate);
+            fprintf('  全結合層ユニット数: [%d, %d]\n', obj.searchSpace.fcUnits);
         end
         
         function paramSets = generateParameterSets(obj, numTrials)
-            % 最適化するパラメータ数 (6個)
+            % 6個のパラメータを Latin Hypercube Sampling で生成
             lhsPoints = lhsdesign(numTrials, 6);
-            
-            % パラメータセットの初期化
             paramSets = zeros(numTrials, 6);
             
             % 1. 学習率（対数スケール）
             lr_range = obj.searchSpace.learningRate;
-            paramSets(:,1) = 10.^(log10(lr_range(1)) + ...
-                (log10(lr_range(2)) - log10(lr_range(1))) * lhsPoints(:,1));
+            paramSets(:,1) = 10.^(log10(lr_range(1)) + (log10(lr_range(2))-log10(lr_range(1))) * lhsPoints(:,1));
             
             % 2. ミニバッチサイズ
             bs_range = obj.searchSpace.miniBatchSize;
-            paramSets(:,2) = round(bs_range(1) + ...
-                (bs_range(2) - bs_range(1)) * lhsPoints(:,2));
+            paramSets(:,2) = round(bs_range(1) + (bs_range(2)-bs_range(1)) * lhsPoints(:,2));
             
-            % 3. 隠れ層ユニット数
-            hu_range = obj.searchSpace.numHiddenUnits;
-            paramSets(:,3) = round(hu_range(1) + ...
-                (hu_range(2) - hu_range(1)) * lhsPoints(:,3));
+            % 3. LSTMユニット数
+            lu_range = obj.searchSpace.lstmUnits;
+            paramSets(:,3) = round(lu_range(1) + (lu_range(2)-lu_range(1)) * lhsPoints(:,3));
             
             % 4. LSTM層数
             nl_range = obj.searchSpace.numLayers;
-            paramSets(:,4) = round(nl_range(1) + ...
-                (nl_range(2) - nl_range(1)) * lhsPoints(:,4));
+            paramSets(:,4) = round(nl_range(1) + (nl_range(2)-nl_range(1)) * lhsPoints(:,4));
             
             % 5. ドロップアウト率
             do_range = obj.searchSpace.dropoutRate;
-            paramSets(:,5) = do_range(1) + ...
-                (do_range(2) - do_range(1)) * lhsPoints(:,5);
+            paramSets(:,5) = do_range(1) + (do_range(2)-do_range(1)) * lhsPoints(:,5);
             
             % 6. 全結合層ユニット数
             fc_range = obj.searchSpace.fcUnits;
-            paramSets(:,6) = round(fc_range(1) + ...
-                (fc_range(2) - fc_range(1)) * lhsPoints(:,6));
+            paramSets(:,6) = round(fc_range(1) + (fc_range(2)-fc_range(1)) * lhsPoints(:,6));
         end
         
         function params = updateLSTMParameters(~, params, paramSet)
-            % トレーニングパラメータ更新
+            % 1. 学習率とミニバッチサイズの更新
             params.classifier.lstm.training.optimizer.learningRate = paramSet(1);
             params.classifier.lstm.training.miniBatchSize = paramSet(2);
             
-            % LSTM層の更新
-            numLayers = paramSet(4);
+            % 2. LSTM層の更新：最終層は 'last'、それ以外は 'sequence'
+            lstmUnits = round(paramSet(3));
+            numLayers = round(paramSet(4));
             lstmLayers = struct();
             for i = 1:numLayers
-                layerName = sprintf('lstm%d', i);
-                lstmLayers.(layerName) = struct(...
-                    'numHiddenUnits', paramSet(3), ...
-                    'OutputMode', 'last');
+                if i == numLayers
+                    lstmLayers.(sprintf('lstm%d', i)) = struct('numHiddenUnits', floor(lstmUnits/2), 'OutputMode', 'last');
+                else
+                    lstmLayers.(sprintf('lstm%d', i)) = struct('numHiddenUnits', lstmUnits, 'OutputMode', 'sequence');
+                end
             end
             params.classifier.lstm.architecture.lstmLayers = lstmLayers;
             
-            % ドロップアウト層の更新
+            % 3. ドロップアウト層の更新：各層に同じ値を設定
             dropoutLayers = struct();
             for i = 1:numLayers
-                dropoutName = sprintf('dropout%d', i);
-                dropoutLayers.(dropoutName) = paramSet(5);
+                dropoutLayers.(sprintf('dropout%d', i)) = paramSet(5);
             end
             params.classifier.lstm.architecture.dropoutLayers = dropoutLayers;
             
-            % 全結合層の更新
-            params.classifier.lstm.architecture.fullyConnected = [paramSet(6)];
+            % 4. 全結合層ユニット数の更新
+            params.classifier.lstm.architecture.fullyConnected = [round(paramSet(6))];
         end
 
         function [bestResults, summary] = processFinalResults(obj, results)

@@ -110,6 +110,7 @@ classdef HybridOptimizer < handle
                 obj.searchSpace = struct(...
                     'learningRate', [0.0001, 0.01], ...    % 学習率範囲
                     'miniBatchSize', [16, 128], ...         % バッチサイズ範囲
+                    'numConvLayers', [1, 3], ...            % CNNの畳み込み層数範囲
                     'cnnFilters', [32, 128], ...            % CNNフィルタ数範囲
                     'filterSize', [3, 7], ...               % フィルタサイズ範囲
                     'lstmUnits', [32, 256], ...             % LSTMユニット数範囲
@@ -122,6 +123,7 @@ classdef HybridOptimizer < handle
             fprintf('\n探索空間の範囲:\n');
             fprintf('  学習率: [%.6f, %.6f]\n', obj.searchSpace.learningRate);
             fprintf('  バッチサイズ: [%d, %d]\n', obj.searchSpace.miniBatchSize);
+            fprintf('  CNN層数: [%d, %d]\n', obj.searchSpace.numConvLayers);
             fprintf('  CNNフィルタ数: [%d, %d]\n', obj.searchSpace.cnnFilters);
             fprintf('  フィルタサイズ: [%d, %d]\n', obj.searchSpace.filterSize);
             fprintf('  LSTMユニット数: [%d, %d]\n', obj.searchSpace.lstmUnits);
@@ -131,60 +133,69 @@ classdef HybridOptimizer < handle
         end
         
         function paramSets = generateParameterSets(obj, numTrials)
-            % 8個のパラメータ（Hybridモデル用）を Latin Hypercube Sampling により生成
-            lhsPoints = lhsdesign(numTrials, 8);
-            paramSets = zeros(numTrials, 8);
+            % 9個のパラメータを Latin Hypercube Sampling により生成
+            lhsPoints = lhsdesign(numTrials, 9);
+            paramSets = zeros(numTrials, 9);
             
             % 1. 学習率（対数スケール）
             lr_range = obj.searchSpace.learningRate;
-            paramSets(:,1) = 10.^(log10(lr_range(1)) + (log10(lr_range(2)) - log10(lr_range(1))) * lhsPoints(:,1));
+            paramSets(:,1) = 10.^(log10(lr_range(1)) + (log10(lr_range(2))-log10(lr_range(1))) * lhsPoints(:,1));
             
             % 2. ミニバッチサイズ
             bs_range = obj.searchSpace.miniBatchSize;
-            paramSets(:,2) = round(bs_range(1) + (bs_range(2) - bs_range(1)) * lhsPoints(:,2));
+            paramSets(:,2) = round(bs_range(1) + (bs_range(2)-bs_range(1)) * lhsPoints(:,2));
             
-            % 3. CNNフィルタ数
+            % 3. CNN層数 (numConvLayers)
+            ncl_range = obj.searchSpace.numConvLayers;
+            paramSets(:,3) = round(ncl_range(1) + (ncl_range(2)-ncl_range(1)) * lhsPoints(:,3));
+            
+            % 4. CNNフィルタ数
             cf_range = obj.searchSpace.cnnFilters;
-            paramSets(:,3) = round(cf_range(1) + (cf_range(2) - cf_range(1)) * lhsPoints(:,3));
+            paramSets(:,4) = round(cf_range(1) + (cf_range(2)-cf_range(1)) * lhsPoints(:,4));
             
-            % 4. フィルタサイズ
+            % 5. フィルタサイズ
             fs_range = obj.searchSpace.filterSize;
-            paramSets(:,4) = round(fs_range(1) + (fs_range(2) - fs_range(1)) * lhsPoints(:,4));
+            paramSets(:,5) = round(fs_range(1) + (fs_range(2)-fs_range(1)) * lhsPoints(:,5));
             
-            % 5. LSTMユニット数
+            % 6. LSTMユニット数
             lu_range = obj.searchSpace.lstmUnits;
-            paramSets(:,5) = round(lu_range(1) + (lu_range(2) - lu_range(1)) * lhsPoints(:,5));
+            paramSets(:,6) = round(lu_range(1) + (lu_range(2)-lu_range(1)) * lhsPoints(:,6));
             
-            % 6. LSTM層数
+            % 7. LSTM層数
             nl_range = obj.searchSpace.numLstmLayers;
-            paramSets(:,6) = round(nl_range(1) + (nl_range(2) - nl_range(1)) * lhsPoints(:,6));
+            paramSets(:,7) = round(nl_range(1) + (nl_range(2)-nl_range(1)) * lhsPoints(:,7));
             
-            % 7. ドロップアウト率
+            % 8. ドロップアウト率
             do_range = obj.searchSpace.dropoutRate;
-            paramSets(:,7) = do_range(1) + (do_range(2) - do_range(1)) * lhsPoints(:,7);
+            paramSets(:,8) = do_range(1) + (do_range(2)-do_range(1)) * lhsPoints(:,8);
             
-            % 8. 全結合層ユニット数
+            % 9. 全結合層ユニット数
             fc_range = obj.searchSpace.fcUnits;
-            paramSets(:,8) = round(fc_range(1) + (fc_range(2) - fc_range(1)) * lhsPoints(:,8));
+            paramSets(:,9) = round(fc_range(1) + (fc_range(2)-fc_range(1)) * lhsPoints(:,9));
         end
         
         function params = updateHybridParameters(~, params, paramSet)
-            % Hybridモデルのパラメータ更新
-            % 1-2. 学習率とミニバッチサイズ
+            % 1. 学習率とミニバッチサイズ
             params.classifier.hybrid.training.optimizer.learningRate = paramSet(1);
             params.classifier.hybrid.training.miniBatchSize = paramSet(2);
             
-            % 3-4. CNNパラメータの更新
-            kernelSize = round(paramSet(4));  % フィルタサイズ
-            params.classifier.hybrid.architecture.convLayers.conv1.size = [kernelSize, kernelSize];
-            params.classifier.hybrid.architecture.convLayers.conv1.filters = round(paramSet(3));  % CNNフィルタ数
+            % 2. CNNパラメータの更新
+            numConvLayers = round(paramSet(3));
+            cnnFilters = round(paramSet(4));
+            filterSize = round(paramSet(5));
+            convLayers = struct();
+            for j = 1:numConvLayers
+                layerName = sprintf('conv%d', j);
+                convLayers.(layerName) = struct('size', [filterSize, filterSize], 'filters', cnnFilters, 'stride', 1, 'padding', 'same');
+            end
+            params.classifier.hybrid.architecture.cnn.convLayers = convLayers;
             
-            % 5-6. LSTMパラメータの更新
-            lstmUnits = round(paramSet(5));
-            numLayers = round(paramSet(6));
+            % 3. LSTMパラメータの更新
+            lstmUnits = round(paramSet(6));
+            numLstmLayers = round(paramSet(7));
             lstmLayers = struct();
-            for i = 1:numLayers
-                if i == numLayers
+            for i = 1:numLstmLayers
+                if i == numLstmLayers
                     lstmLayers.(['lstm' num2str(i)]) = struct('numHiddenUnits', floor(lstmUnits/2), 'OutputMode', 'last');
                 else
                     lstmLayers.(['lstm' num2str(i)]) = struct('numHiddenUnits', lstmUnits, 'OutputMode', 'sequence');
@@ -192,15 +203,15 @@ classdef HybridOptimizer < handle
             end
             params.classifier.hybrid.architecture.lstm.lstmLayers = lstmLayers;
             
-            % 7. ドロップアウト率の更新（CNN, LSTM共通で設定）
-            dropoutRate = paramSet(7);
-            % LSTMのドロップアウトレイヤー更新
+            % 4. ドロップアウト率の更新（CNN, LSTM共通で設定）
+            dropoutRate = paramSet(8);
+            % LSTM側のドロップアウトレイヤー更新
             dropoutLayers = struct();
-            for i = 1:numLayers
+            for i = 1:numLstmLayers
                 dropoutLayers.(['dropout' num2str(i)]) = dropoutRate;
             end
             params.classifier.hybrid.architecture.lstm.dropoutLayers = dropoutLayers;
-            % CNN側のドロップアウト更新（存在する場合）
+            % CNN側のドロップアウト（存在する場合）
             if isfield(params.classifier.hybrid.architecture, 'cnnDropout')
                 dropoutLayerNames = fieldnames(params.classifier.hybrid.architecture.cnnDropout);
                 for i = 1:length(dropoutLayerNames)
@@ -209,10 +220,10 @@ classdef HybridOptimizer < handle
                 end
             end
             
-            % 8. 全結合層ユニット数の更新
-            params.classifier.hybrid.architecture.fullyConnected = [round(paramSet(8))];
+            % 5. 全結合層ユニット数の更新
+            params.classifier.hybrid.architecture.fullyConnected = [round(paramSet(9))];
         end
-        
+
         function [bestResults, summary] = processFinalResults(obj, results)
             try
                 fprintf('\n=== パラメータ最適化の結果処理 ===\n');

@@ -106,62 +106,86 @@ classdef CNNOptimizer < handle
     
     methods (Access = private)
         function initializeSearchSpace(obj)
-            obj.searchSpace = obj.params.classifier.cnn.optimization.searchSpace;
+            % 探索空間に numConvLayers を追加（例: 1〜3層）
+            if isfield(obj.params.classifier.cnn.optimization, 'searchSpace')
+                obj.searchSpace = obj.params.classifier.cnn.optimization.searchSpace;
+            else
+                obj.searchSpace = struct(...
+                    'learningRate', [0.0001, 0.01], ...    % 学習率範囲
+                    'miniBatchSize', [16, 128], ...         % バッチサイズ範囲
+                    'numConvLayers', [1, 3], ...            % 畳み込み層数範囲
+                    'filterSize', [3, 7], ...               % フィルタサイズ範囲
+                    'numFilters', [32, 128], ...            % 各層のフィルタ数範囲
+                    'dropoutRate', [0.3, 0.7], ...          % ドロップアウト率範囲
+                    'fcUnits', [64, 256] ...                % 全結合層ユニット数範囲
+                );
+            end
+            
+            fprintf('\n探索空間の範囲 (CNN):\n');
+            fprintf('  学習率: [%.6f, %.6f]\n', obj.searchSpace.learningRate);
+            fprintf('  バッチサイズ: [%d, %d]\n', obj.searchSpace.miniBatchSize);
+            fprintf('  畳み込み層数: [%d, %d]\n', obj.searchSpace.numConvLayers);
+            fprintf('  フィルタサイズ: [%d, %d]\n', obj.searchSpace.filterSize);
+            fprintf('  フィルタ数: [%d, %d]\n', obj.searchSpace.numFilters);
+            fprintf('  ドロップアウト率: [%.2f, %.2f]\n', obj.searchSpace.dropoutRate);
+            fprintf('  全結合層ユニット数: [%d, %d]\n', obj.searchSpace.fcUnits);
         end
         
         function paramSets = generateParameterSets(obj, numTrials)
-            % 最適化するパラメータ数 (6個)
-            lhsPoints = lhsdesign(numTrials, 6);
-            
-            % パラメータセットの初期化
-            paramSets = zeros(numTrials, 6);
+            % 7個のパラメータを Latin Hypercube Sampling で生成
+            lhsPoints = lhsdesign(numTrials, 7);
+            paramSets = zeros(numTrials, 7);
             
             % 1. 学習率（対数スケール）
             lr_range = obj.searchSpace.learningRate;
-            paramSets(:,1) = 10.^(log10(lr_range(1)) + ...
-                (log10(lr_range(2)) - log10(lr_range(1))) * lhsPoints(:,1));
+            paramSets(:,1) = 10.^(log10(lr_range(1)) + (log10(lr_range(2))-log10(lr_range(1))) * lhsPoints(:,1));
             
             % 2. ミニバッチサイズ
             bs_range = obj.searchSpace.miniBatchSize;
-            paramSets(:,2) = round(bs_range(1) + ...
-                (bs_range(2) - bs_range(1)) * lhsPoints(:,2));
+            paramSets(:,2) = round(bs_range(1) + (bs_range(2)-bs_range(1)) * lhsPoints(:,2));
             
-            % 3. フィルタサイズ
+            % 3. 畳み込み層数 (numConvLayers)
+            ncl_range = obj.searchSpace.numConvLayers;
+            paramSets(:,3) = round(ncl_range(1) + (ncl_range(2)-ncl_range(1)) * lhsPoints(:,3));
+            
+            % 4. フィルタサイズ
             fs_range = obj.searchSpace.filterSize;
-            paramSets(:,3) = round(fs_range(1) + ...
-                (fs_range(2) - fs_range(1)) * lhsPoints(:,3));
+            paramSets(:,4) = round(fs_range(1) + (fs_range(2)-fs_range(1)) * lhsPoints(:,4));
             
-            % 4. フィルタ数
+            % 5. フィルタ数
             nf_range = obj.searchSpace.numFilters;
-            paramSets(:,4) = round(nf_range(1) + ...
-                (nf_range(2) - nf_range(1)) * lhsPoints(:,4));
+            paramSets(:,5) = round(nf_range(1) + (nf_range(2)-nf_range(1)) * lhsPoints(:,5));
             
-            % 5. ドロップアウト率
+            % 6. ドロップアウト率
             do_range = obj.searchSpace.dropoutRate;
-            paramSets(:,5) = do_range(1) + ...
-                (do_range(2) - do_range(1)) * lhsPoints(:,5);
+            paramSets(:,6) = do_range(1) + (do_range(2)-do_range(1)) * lhsPoints(:,6);
             
-            % 6. 全結合層ユニット数
+            % 7. 全結合層ユニット数
             fc_range = obj.searchSpace.fcUnits;
-            paramSets(:,6) = round(fc_range(1) + ...
-                (fc_range(2) - fc_range(1)) * lhsPoints(:,6));
+            paramSets(:,7) = round(fc_range(1) + (fc_range(2)-fc_range(1)) * lhsPoints(:,7));
         end
         
         function params = updateCNNParameters(~, params, paramSet)
-            % パラメータの更新
+            % 1. 学習率とミニバッチサイズの更新
             params.classifier.cnn.training.optimizer.learningRate = paramSet(1);
             params.classifier.cnn.training.miniBatchSize = paramSet(2);
             
-            % 畳み込み層の設定
-            kernelSize = round(paramSet(3));  % カーネルサイズを整数に丸める
-            params.classifier.cnn.architecture.convLayers.conv1.size = [kernelSize kernelSize];
-            params.classifier.cnn.architecture.convLayers.conv1.filters = round(paramSet(4));
+            % 2. 畳み込み層の更新：指定された層数分だけ生成
+            numConvLayers = round(paramSet(3));
+            filterSize = round(paramSet(4));
+            numFilters = round(paramSet(5));
+            convLayers = struct();
+            for j = 1:numConvLayers
+                layerName = sprintf('conv%d', j);
+                convLayers.(layerName) = struct('size', [filterSize, filterSize], 'filters', numFilters, 'stride', 1, 'padding', 'same');
+            end
+            params.classifier.cnn.architecture.convLayers = convLayers;
             
-            % ドロップアウト率の設定
-            params.classifier.cnn.architecture.dropoutLayers.dropout1 = paramSet(5);
+            % 3. ドロップアウト率の更新
+            params.classifier.cnn.architecture.dropoutLayers.dropout1 = paramSet(6);
             
-            % 全結合層のユニット数設定
-            params.classifier.cnn.architecture.fullyConnected = [round(paramSet(6))];
+            % 4. 全結合層ユニット数の更新
+            params.classifier.cnn.architecture.fullyConnected = [round(paramSet(7))];
         end
 
         function [bestResults, summary] = processFinalResults(obj, results)
