@@ -48,7 +48,7 @@ function preset = character()
     %% === データ収集設定 ===
     % データ収集に関する基本設定
     acquisition = struct(...
-        'mode', 'online', ...           % モード: 'online'/'offline'
+        'mode', 'offline', ...           % モード: 'online'/'offline'
         'emg', struct(...               % EMG計測の設定
             'enable', false, ...        % true/false: EMG計測有効/無効
             'channels', struct(...      % EMGチャンネル設定
@@ -156,8 +156,8 @@ function preset = character()
     signal = struct(...
         'enable', true, ...           % true/false: 信号処理有効/無効
         'window', struct(...          % 解析窓の設定
-            'analysis', 1.0, ...      % 解析窓長 (0.5-10.0 秒)
-            'stimulus', 2.0, ...      % 刺激提示時間 (1.0-30.0 秒)
+            'analysis', 2.0, ...      % 解析窓長 (0.5-10.0 秒)
+            'stimulus', 5.0, ...      % 刺激提示時間 (1.0-30.0 秒)
             'bufferSize', 15, ...     % バッファサイズ (5-30 秒)
             'updateBuffer', 1, ...    % バッファ更新間隔 (0.1-2.0 秒)
             'step', [], ...           % 解析窓シフト幅 (自動計算)
@@ -166,7 +166,7 @@ function preset = character()
         'epoch', struct(...           % エポック化設定
             'method', 'time', ...     % 方法: 'time'/'odd-even'
             'storageType', 'array', ... % 保存形式: 'array'/'cell'
-            'overlap', 0, ...      % オーバーラップ率 (0-0.9)
+            'overlap', 0.25, ...      % オーバーラップ率 (0-0.9)
             'visual', struct(...      % 視覚タスク設定
                 'enable', false, ...  % true/false: 視覚タスク有効/無効
                 'taskTypes', {{'observation', 'imagery'}}, ... % タスク種類: 'observation'/'imagery'
@@ -176,7 +176,7 @@ function preset = character()
             ) ...
         ), ...
         'frequency', struct(...       % 周波数解析設定
-            'min', 1, ...             % 最小周波数 (0.1-100 Hz)
+            'min', 8, ...             % 最小周波数 (0.1-100 Hz)
             'max', 30, ...            % 最大周波数 (1-200 Hz)
             'bands', struct(...       % 周波数帯域定義
                 'delta', [1 4], ...   % デルタ波帯域 (0.5-4 Hz)
@@ -231,7 +231,7 @@ function preset = character()
             ), ...
             'augmentation', struct(... % データ拡張設定
                 'enable', true, ...   % true/false: データ拡張有効/無効
-                'augmentationRatio', 7, ... % 拡張比率 (2-10)
+                'augmentationRatio', 4, ... % 拡張比率 (2-10)
                 'combinationLimit', 3, ... % 最大手法数 (1-5)
                 'methods', struct(...   % 拡張手法設定
                     'noise', struct(...  % ノイズ付加
@@ -340,7 +340,7 @@ function preset = character()
     num_classes = size(trigger_mappings, 1);  % クラス数を動的設定
     
     classifier = struct(...
-        'activeClassifier', 'lstm', ... % 使用分類器: 'svm'/'ecoc'/'cnn'/'lstm'/'hybrid'
+        'activeClassifier', 'hybrid', ... % 使用分類器: 'svm'/'ecoc'/'cnn'/'lstm'/'hybrid'
         'svm', struct(...              % SVMの設定
             'enable', false, ...       % true/false: SVM有効/無効
             'optimize', true, ...      % true/false: パラメータ最適化有効/無効
@@ -372,7 +372,7 @@ function preset = character()
             ) ...
         ), ...
         'cnn', struct(...             % CNN設定
-            'enable', false, ...      % true/false: CNN有効/無効
+            'enable', true, ...      % true/false: CNN有効/無効
             'gpu', true, ...          % true/false: GPU使用有効/無効
             'optimize', true, ...     % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
@@ -426,7 +426,7 @@ function preset = character()
             ) ...
         ), ...
         'lstm', struct(...            % LSTM設定
-            'enable', false, ...      % true/false: LSTM有効/無効
+            'enable', true, ...      % true/false: LSTM有効/無効
             'gpu', true, ...         % true/false: GPU使用有効/無効
             'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
@@ -481,7 +481,7 @@ function preset = character()
         ), ...
         'hybrid', struct(...
             'enable', true, ...       % true/false: ハイブリッドモデル有効/無効
-            'gpu', false, ...         % true/false: GPU使用有効/無効
+            'gpu', true, ...         % true/false: GPU使用有効/無効
             'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'architecture', struct(...
                 'numClasses', num_classes, ... % クラス数 (自動設定)
@@ -555,7 +555,7 @@ function preset = character()
                     'epsilon', 1e-8, ... % 数値安定化係数
                     'gradientThreshold', 1 ... % 勾配クリッピング閾値
                 ), ...
-                'maxEpochs', 3, ...    % 最大エポック数
+                'maxEpochs', 100, ...    % 最大エポック数
                 'miniBatchSize', 50, ...
                 'frequency', 5, ... % 検証頻度 (エポック)
                 'patience', 15, ... % 早期終了の待機回数

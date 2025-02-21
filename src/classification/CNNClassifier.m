@@ -479,6 +479,7 @@ classdef CNNClassifier < handle
                 else
                     % 標準的なCNNアーキテクチャ（チャンネル数が十分な場合）             
                     % 初期フィルタ数の決定 (チャンネル数によって調整)
+                    numChannels = obj.params.device.channelCount;
                     initialFilters = min(32, max(16, ceil(numChannels * 1.5)));
                     
                     % レイヤー数の計算
