@@ -568,8 +568,8 @@ function preset = character()
                     'numConvLayers', [1, 3], ...            % CNNの畳み込み層数範囲
                     'cnnFilters', [32, 128], ...            % CNNフィルタ数範囲
                     'filterSize', [3, 7], ...               % フィルタサイズ範囲
-                    'lstmUnits', [32, 128], ...             % LSTMユニット数範囲（上記変更に合わせ調整）
-                    'numLstmLayers', [2, 4], ...            % LSTM層数を2固定
+                    'lstmUnits', [32, 128], ...             % LSTMユニット数範囲
+                    'numLstmLayers', [2, 4], ...            % LSTM層数
                     'dropoutRate', [0.4, 0.7], ...          % ドロップアウト率範囲
                     'fcUnits', [64, 256] ...                % 全結合層ユニット数範囲
                 ) ...
