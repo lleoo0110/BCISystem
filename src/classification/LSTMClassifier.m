@@ -738,7 +738,7 @@ classdef LSTMClassifier < handle
                     'totalEpochs', totalEpochs);
                 
                 % 過学習判定
-                isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
+                isOverfit = ismember(severity, {'critical', 'severe', 'moderate', 'mild'});
                 fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
         
                 % 詳細な分析結果の表示

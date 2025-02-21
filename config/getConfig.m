@@ -19,9 +19,8 @@ function params = getConfig(deviceType, varargin)
 
     try
         % デバッグ出力
-        fprintf('=== 設定読み込み開始 ===\n');
-        fprintf('デバイスタイプ: %s\n', deviceType);
-
+        fprintf('=== 設定読み込み ===\n');
+        
         % プリセット名の決定
         if isempty(p.Results.preset)
             presetName = 'template';
@@ -46,6 +45,9 @@ function params = getConfig(deviceType, varargin)
         params = feval(presetFuncName);
         rmpath(presetDir);
 
+        % デバイス設定を追加
+        params.device = getDeviceConfig(deviceType);
+
         % プリセット情報の表示
         if isfield(params, 'info')
             fprintf('\nプリセット情報:\n');
@@ -54,10 +56,25 @@ function params = getConfig(deviceType, varargin)
             fprintf('  バージョン: %s\n', params.info.version);
             fprintf('  作成者: %s\n', params.info.author);
             fprintf('  作成日: %s\n', params.info.date);
+            fprintf('---------------------------\n');
         end
 
-        % デバイス設定を追加
-        params.device = getDeviceConfig(deviceType);
+        if isfield(params, 'device')
+            fprintf('デバイスタイプ: %s\n', deviceType);
+            fprintf('  設定チャンネル数: %d\n', params.device.channelCount);
+            if isfield(params.device, 'channels') && ~isempty(params.device.channels)
+                % セル配列の場合は strjoin で連結
+                if iscell(params.device.channels)
+                    channelList = strjoin(params.device.channels, ', ');
+                else
+                    channelList = num2str(params.device.channels);
+                end
+                fprintf('  チャンネル配置: %s\n', channelList);
+            else
+                fprintf('  チャンネル配置: 未定義\n');
+            end
+            fprintf('  サンプルレート: %d Hz\n', params.device.sampleRate);
+        end
 
         % 設定の整合性チェック
         validateConfig(params, deviceType);

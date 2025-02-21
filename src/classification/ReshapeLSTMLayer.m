@@ -1,82 +1,51 @@
 classdef ReshapeLSTMLayer < nnet.layer.Layer & nnet.layer.Formattable
-    properties (Learnable)
-        Weights
-        Bias
+    % ReshapeLSTMLayer
+    %   LSTMブランチの全結合層出力 [NumFeatures x N] を 4 次元テンソル
+    %   [1 1 NumFeatures N] にリシェイプするカスタムレイヤーです。
+    
+    properties
+        NumFeatures   % LSTM全結合層の出力ユニット数
+    end
+    
+    properties (Learnable, SetAccess = private)
+        % Learnableパラメータはありません
+    end
+    
+    properties
+        OutputFormat  % 出力のフォーマット（例："SSCB"）
     end
     
     methods
-        function layer = ReshapeLSTMLayer(name)
+        function layer = ReshapeLSTMLayer(name, numFeatures)
             layer.Name = name;
-            layer.Description = 'Reshape LSTM output to 1x1x128 format';
-            layer.Type = 'Reshape';
-            layer.Weights = [];
-            layer.Bias = [];
+            layer.Description = "Reshape LSTM branch output to [1 1 NumFeatures N]";
+            layer.NumFeatures = numFeatures;
+            layer.OutputFormat = "";
         end
         
         function Z = predict(layer, X)
-            % セルの場合は先頭要素を取り出し、dlarray なら数値配列へ変換
-            if iscell(X), X = X{1}; end
-            if isa(X, 'dlarray'), X = extractdata(X); end
-            
-            [d, b] = size(X);
-            
-            % 初回実行時に重み初期化
-            if isempty(layer.Weights)
-                layer.Weights = randn(128, d) * sqrt(2/d);
-                layer.Bias    = zeros(128,1);
+            N = size(X,2);
+            if size(X,1) ~= layer.NumFeatures
+                error('Input first dimension (%d) does not match expected NumFeatures (%d).', ...
+                      size(X,1), layer.NumFeatures);
             end
-            
-            % 全結合 (Weights, Bias) を適用
-            features = layer.Weights * X + layer.Bias;
-            
-            % [1,1,128,batch] へ reshape
-            features = reshape(features, [1,1,128,b]);
-            
-            % 出力を dlarray として返す（次元ラベルは SSCB 等）
-            Z = dlarray(features, 'SSCB');
+            Z = reshape(X, [1, 1, layer.NumFeatures, N]);
+            if isa(X, 'dlarray')
+                Z = dlarray(Z, 'SSCB');
+            end
         end
         
         function [Z, memory] = forward(layer, X)
-            % memory には後方伝搬で必要な入力（数値配列）を保存
-            if iscell(X)
-                memory = X{1};
-            else
-                memory = X;
-            end
             Z = layer.predict(X);
+            memory = [];
         end
         
-        function [dLdX, dLdW, dLdB] = backward(layer, X, Z, dLdZ, memory)
-            % dLdZ が dlarray の場合は数値配列へ
-            if isa(dLdZ, 'dlarray')
-                dLdZ = extractdata(dLdZ);
-            end
-            
-            [d, b] = size(memory);
-            % dLdZ を [128, b] に reshape
-            dLdFeatures = reshape(dLdZ, [128, b]);
-            
-            %----------------------
-            % 1) dLdX の計算
-            %----------------------
-            %   dLdX = W' * dLdFeatures
-            dLdX = layer.Weights' * dLdFeatures;
-            % dLdX は学習の微分追跡をしないなら数値配列のままでもよいが、
-            % dlarray に変換しておく場合は以下
-            dLdX = dlarray(dLdX);
-            
-            %----------------------
-            % 2) dLdW の計算
-            %----------------------
-            %   dLdW = dLdFeatures * memory'
-            %   memory が forward 時の入力 [d, b]
-            dLdW = dLdFeatures * memory';
-            
-            %----------------------
-            % 3) dLdB の計算
-            %----------------------
-            %   バッチ方向に勾配を合計
-            dLdB = sum(dLdFeatures, 2);
+        function dX = backward(layer, X, Z, dZ, memory)
+            dX = reshape(dZ, size(X));
+        end
+        
+        function layer = setOutputFormat(layer, format)
+            layer.OutputFormat = format;
         end
     end
 end

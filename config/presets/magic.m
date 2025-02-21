@@ -1,9 +1,9 @@
-function preset = template()
+function preset = magic()
     %% === プリセット情報 ===
     preset_info = struct(...
-        'name', 'template', ...
-        'description', 'Default template preset', ...
-        'version', '3.1', ...
+        'name', 'magic', ...
+        'description', 'Magic Game preset', ...
+        'version', '1.0', ...
         'author', 'LLEOO', ...
         'date', '2025-02-21' ...
     );
@@ -13,8 +13,8 @@ function preset = template()
     % 形式: {'状態名', トリガー値}
     trigger_mappings = {
         '安静', 1;         % クラス1: 安静状態 (ベースライン)
-        'タスクA', 2;      % クラス2: タスク状態 (例: 運動イメージ)
-        'タスクB', 3;      % クラス3: タスク状態 (例: 計算タスク)
+        '炎魔法', 2;      % クラス2: 炎魔法想起
+        '雷魔法', 3;      % クラス3: 雷魔法想起
     };
 
     % トリガーマッピング構造体の生成
@@ -48,7 +48,7 @@ function preset = template()
     %% === データ収集設定 ===
     % データ収集に関する基本設定
     acquisition = struct(...
-        'mode', 'online', ...           % モード: 'online'/'offline'
+        'mode', 'offline', ...           % モード: 'online'/'offline'
         'emg', struct(...               % EMG計測の設定
             'enable', false, ...        % true/false: EMG計測有効/無効
             'channels', struct(...      % EMGチャンネル設定
@@ -156,8 +156,8 @@ function preset = template()
     signal = struct(...
         'enable', true, ...           % true/false: 信号処理有効/無効
         'window', struct(...          % 解析窓の設定
-            'analysis', 1.0, ...      % 解析窓長 (0.5-10.0 秒)
-            'stimulus', 2.0, ...      % 刺激提示時間 (1.0-30.0 秒)
+            'analysis', 2.0, ...      % 解析窓長 (0.5-10.0 秒)
+            'stimulus', 6.0, ...      % 刺激提示時間 (1.0-30.0 秒)
             'bufferSize', 15, ...     % バッファサイズ (5-30 秒)
             'updateBuffer', 1, ...    % バッファ更新間隔 (0.1-2.0 秒)
             'step', [], ...           % 解析窓シフト幅 (自動計算)
@@ -168,7 +168,7 @@ function preset = template()
             'storageType', 'array', ... % 保存形式: 'array'/'cell'
             'overlap', 0, ...      % オーバーラップ率 (0-0.9)
             'visual', struct(...      % 視覚タスク設定
-                'enable', false, ...  % true/false: 視覚タスク有効/無効
+                'enable', true, ...  % true/false: 視覚タスク有効/無効
                 'taskTypes', {{'observation', 'imagery'}}, ... % タスク種類: 'observation'/'imagery'
                 'observationDuration', 5.0, ... % 観察時間 (2.0-10.0 秒)
                 'signalDuration', 1.0, ...     % 合図時間 (0.5-2.0 秒)
@@ -231,7 +231,7 @@ function preset = template()
             ), ...
             'augmentation', struct(... % データ拡張設定
                 'enable', true, ...   % true/false: データ拡張有効/無効
-                'augmentationRatio', 7, ... % 拡張比率 (2-10)
+                'augmentationRatio', 4, ... % 拡張比率 (2-10)
                 'combinationLimit', 3, ... % 最大手法数 (1-5)
                 'methods', struct(...   % 拡張手法設定
                     'noise', struct(...  % ノイズ付加
@@ -340,7 +340,7 @@ function preset = template()
     num_classes = size(trigger_mappings, 1);  % クラス数を動的設定
     
     classifier = struct(...
-        'activeClassifier', 'lstm', ... % 使用分類器: 'svm'/'ecoc'/'cnn'/'lstm'/'hybrid'
+        'activeClassifier', 'hybrid', ... % 使用分類器: 'svm'/'ecoc'/'cnn'/'lstm'/'hybrid'
         'svm', struct(...              % SVMの設定
             'enable', false, ...       % true/false: SVM有効/無効
             'optimize', true, ...      % true/false: パラメータ最適化有効/無効
@@ -481,8 +481,8 @@ function preset = template()
         ), ...
         'hybrid', struct(...
             'enable', true, ...       % true/false: ハイブリッドモデル有効/無効
-            'gpu', false, ...         % true/false: GPU使用有効/無効
-            'optimize', false, ...    % true/false: パラメータ最適化有効/無効
+            'gpu', true, ...         % true/false: GPU使用有効/無効
+            'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'architecture', struct(...
                 'numClasses', num_classes, ... % クラス数 (自動設定)
                 'batchNorm', true, ...          % バッチ正規化の使用

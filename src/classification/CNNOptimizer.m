@@ -199,7 +199,7 @@ classdef CNNOptimizer < handle
                     if ~isempty(result.model) && ~isempty(result.performance)
                         % 過学習の重症度により判定
                         severity = result.overfitting.severity;
-                        isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
+                        isOverfit = ismember(severity, {'critical', 'severe', 'moderate', 'mild'});
                         
                         validScores(i) = result.performance.overallAccuracy;
                         isOverfitFlags(i) = isOverfit;
@@ -311,7 +311,7 @@ classdef CNNOptimizer < handle
         end
         
         function displayOptimizationSummary(obj, summary)
-            fprintf('\n=== 最適化プロセスのサマリー ===\n');
+            fprintf('\n=== 最適化プロセス ===\n');
             fprintf('試行結果:\n');
             fprintf('  総試行回数: %d\n', summary.total_trials);
             fprintf('  有効な試行: %d\n', summary.valid_trials);

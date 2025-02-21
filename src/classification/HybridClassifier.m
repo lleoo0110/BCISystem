@@ -90,7 +90,8 @@ classdef HybridClassifier < handle
                     prepValCNN, prepValLSTM, valLabels, cnnInputSize, lstmInputSize);
                 
                 % テストデータでの評価
-                testMetrics = obj.evaluateModel(hybridModel, {prepTestCNN, prepTestLSTM}, testLabels);
+                testData = {prepTestCNN, prepTestLSTM};
+                testMetrics = obj.evaluateModel(hybridModel, testData, testLabels);
                 
                 % 過学習の検証
                 [isOverfit, obj.overfitMetrics] = obj.validateOverfitting(trainInfo, testMetrics);
@@ -164,7 +165,7 @@ classdef HybridClassifier < handle
                 prepLSTM = obj.prepareDataForLSTM(data{2});
                 
                 % 予測の実行
-                [label, scores] = classify(hybridModel, {prepCNN, prepLSTM});
+                [label, scores] = classify(hybridModel, prepCNN, prepLSTM);
                 score = scores(:,1);  % クラス1の確率
                 
             catch ME
@@ -298,7 +299,7 @@ classdef HybridClassifier < handle
                 if isfield(arch.cnn, 'fullyConnected')
                     fcSizes = arch.cnn.fullyConnected;
                 else
-                    fcSizes = []; % またはデフォルト例: [128]
+                    fcSizes = 128; % またはデフォルト例: [128]
                 end
                 if ~isempty(fcSizes)
                     for j = 1:length(fcSizes)
@@ -308,10 +309,14 @@ classdef HybridClassifier < handle
                         reluName = sprintf('relu_fc_cnn_%d', j);
                         cnnLayers = [cnnLayers; reluLayer('Name', reluName)];
                     end
+                    cnnFeatureSize = fcSizes(end);  % 最終全結合層のユニット数を特徴数とする
+                else
+                    error('CNN fully connected layers not defined.');
                 end
-                
-                % リシェイプ層（出力をマージ可能な形状に変換）
-                reshapeCNN = ReshapeCNNLayer('reshape_cnn');
+
+                % リシェイプ層（CNNブランチの出力を [1 1 cnnFeatureSize N] に変換）
+                reshapeCNN = ReshapeCNNLayer('reshape_cnn', cnnFeatureSize);
+                reshapeCNN = reshapeCNN.setOutputFormat('SSCB');
                 cnnLayers = [cnnLayers; reshapeCNN];
                 
                 %% === LSTMブランチの構築 ===
@@ -356,12 +361,14 @@ classdef HybridClassifier < handle
                 else
                     lstmFCSize = 128;
                 end
+
                 fcLSTM = fullyConnectedLayer(lstmFCSize, 'Name', 'fc_lstm');
                 reluFCL = reluLayer('Name', 'relu_fc_lstm');
                 lstmLayers = [lstmLayers; fcLSTM; reluFCL];
                 
-                % リシェイプ層（LSTMブランチの出力を統一）
-                reshapeLSTM = ReshapeLSTMLayer('reshape_lstm');
+                % リシェイプ層（LSTMブランチの出力を [1 1 lstmFCSize N] に変換）
+                reshapeLSTM = ReshapeLSTMLayer('reshape_lstm', lstmFCSize);
+                reshapeLSTM = reshapeLSTM.setOutputFormat('SSCB');
                 lstmLayers = [lstmLayers; reshapeLSTM];
                 
                 %% === マージ層と出力層 ===
@@ -441,7 +448,7 @@ classdef HybridClassifier < handle
                 fprintf('  - LSTM FC size: %d\n', lstmFCSize);
                 fprintf('\nMerged output classes: %d\n', numClasses);
                 
-                analyzeNetwork(layers);
+                % analyzeNetwork(layers);
                 
             catch ME
                 fprintf('\nError in buildHybridLayers:\n');
@@ -452,25 +459,25 @@ classdef HybridClassifier < handle
                 rethrow(ME);
             end
         end
-        
+
         function [hybridModel, trainInfo] = trainHybridModel(obj, trainCNNData, trainLSTMData, trainLabels, valCNNData, valLSTMData, valLabels, cnnInputSize, lstmInputSize)
             try
                 % ラベルの前処理
                 uniqueLabels = unique(trainLabels);
                 trainLabels = categorical(trainLabels, uniqueLabels);
                 valLabels = categorical(valLabels, uniqueLabels);
-                
+
                 % データストアの作成
                 trainDS = obj.createHybridDatastore(trainCNNData, trainLSTMData, trainLabels);
                 valDS = obj.createHybridDatastore(valCNNData, valLSTMData, valLabels);
-                
+
                 % 訓練設定
                 trainInfo = struct('History', []);
                 executionEnvironment = 'cpu';
                 if obj.useGPU
                     executionEnvironment = 'gpu';
                 end
-                
+
                 % トレーニングオプションの設定
                 optimizerType = obj.params.classifier.hybrid.training.optimizer.type;
                 options = trainingOptions(optimizerType, ...
@@ -478,7 +485,7 @@ classdef HybridClassifier < handle
                     'MaxEpochs', obj.params.classifier.hybrid.training.maxEpochs, ...
                     'MiniBatchSize', obj.params.classifier.hybrid.training.miniBatchSize, ...
                     'Shuffle', obj.params.classifier.hybrid.training.shuffle, ...
-                    'Plots', 'training-progress', ...
+                    'Plots', 'none', ...
                     'Verbose', true, ...
                     'ExecutionEnvironment', executionEnvironment, ...
                     'ValidationData', valDS, ...
@@ -486,120 +493,64 @@ classdef HybridClassifier < handle
                     'ValidationPatience', obj.params.classifier.hybrid.training.patience, ...
                     'GradientThreshold', obj.params.classifier.hybrid.training.optimizer.gradientThreshold, ...
                     'OutputFcn', @(info)obj.trainingOutputFcn(info));
-                
+
                 % レイヤーグラフの構築とトレーニング実行
                 layers = obj.buildHybridLayers(cnnInputSize, lstmInputSize);
                 fprintf('\nStarting model training...\n');
                 [hybridModel, trainHistory] = trainNetwork(trainDS, layers, options);
-                
+
                 trainInfo.History = trainHistory;
                 trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
                 fprintf('\nTraining completed: %d epochs\n', trainInfo.FinalEpoch);
-                
+
             catch ME
                 fprintf('\n=== Error in trainHybridModel: %s\n', ME.message);
                 rethrow(ME);
             end
         end
 
-        % function ds = createHybridDatastore(~, cnnData, lstmData, labels)
-        %     % cnnData : 4D配列 [H W C numSamples]
-        %     % lstmData : セル配列 (numSamples x 1) または3D配列
-        %     % labels  : カテゴリカルまたは数値のラベル配列
-        % 
-        %     try
-        %         numSamples = size(cnnData, 4);
-        % 
-        %         % CNNデータの準備
-        %         cnnInputs = cell(numSamples, 1);
-        %         for i = 1:numSamples
-        %             cnnInputs{i} = double(cnnData(:,:,:,i));
-        %         end
-        % 
-        %         % LSTMデータの準備
-        %         if ~iscell(lstmData)
-        %             lstmInputs = cell(numSamples, 1);
-        %             for i = 1:numSamples
-        %                 lstmInputs{i} = double(squeeze(lstmData(:,:,i)));
-        %             end
-        %         else
-        %             lstmInputs = cellfun(@double, lstmData, 'UniformOutput', false);
-        %         end
-        % 
-        %         % ラベルの準備
-        %         if ~iscategorical(labels)
-        %             labelOutputs = categorical(labels);
-        %         else
-        %             labelOutputs = labels;
-        %         end
-        % 
-        %         % 個別のデータストアを作成
-        %         cnnDS = arrayDatastore(cnnInputs);
-        %         lstmDS = arrayDatastore(lstmInputs);
-        %         labelDS = arrayDatastore(labelOutputs);
-        % 
-        %         % データストアを結合
-        %         ds = combine(cnnDS, lstmDS, labelDS);
-        % 
-        %         fprintf('データストア作成完了:\n');
-        %         fprintf('  サンプル数: %d\n', numSamples);
-        %         if ~isempty(cnnInputs)
-        %             fprintf('  CNN入力サイズ: [%s]\n', num2str(size(cnnInputs{1})));
-        %         end
-        %         if ~isempty(lstmInputs)
-        %             fprintf('  LSTM入力サイズ: [%s]\n', num2str(size(lstmInputs{1})));
-        %         end
-        % 
-        %     catch ME
-        %         error('Error creating hybrid datastore: %s\nStack trace:\n%s', ...
-        %             ME.message, getReport(ME, 'extended'));
-        %     end
-        % end
-
         function ds = createHybridDatastore(~, cnnData, lstmData, labels)
             try
                 numSamples = size(cnnData, 4);
-                
+
                 % CNNデータの準備
                 cnnInputs = cell(numSamples, 1);
                 for i = 1:numSamples
                     cnnInputs{i} = double(cnnData(:,:,:,i));
                 end
-                
-                % LSTMデータの準備（すでにセル配列の場合はスキップ）
-                if ~iscell(lstmData)
+
+                % LSTMデータの準備
+                if iscell(lstmData)
+                    if iscell(lstmData{1})
+                        fprintf('lstmData{1} is a cell. Unwrapping one level.\n');
+                        lstmInputs = cellfun(@(x) x{1}, lstmData, 'UniformOutput', false);
+                    else
+                        lstmInputs = lstmData;
+                    end
+                else
                     lstmInputs = cell(numSamples, 1);
                     for i = 1:numSamples
                         lstmInputs{i} = double(squeeze(lstmData(:,:,i)));
                     end
-                else
-                    lstmInputs = lstmData;
                 end
-                
-                % ラベルの準備
+
+                % CNN+LSTMデータセット作成
+                combinedData = [cnnInputs, lstmInputs];
+
+                 % ラベルの準備
                 if ~iscategorical(labels)
                     labelOutputs = categorical(labels);
                 else
                     labelOutputs = labels;
                 end
-                
-                % 個別のデータストアを作成
-                cnnDS = arrayDatastore(cnnInputs);
-                lstmDS = arrayDatastore(lstmInputs);
+
+                 % 個別のデータストアを作成
+                combineDS = arrayDatastore(combinedData, 'OutputType', 'same');
                 labelDS = arrayDatastore(labelOutputs);
-                
-                % データストアを結合
-                ds = combine(cnnDS, lstmDS, labelDS);
-                
-                fprintf('データストア作成完了:\n');
-                fprintf('  サンプル数: %d\n', numSamples);
-                if ~isempty(cnnInputs)
-                    fprintf('  CNN入力サイズ: [%s]\n', num2str(size(cnnInputs{1})));
-                end
-                if ~isempty(lstmInputs)
-                    fprintf('  LSTM入力サイズ: [%s]\n', num2str(size(lstmInputs{1})));
-                end
-                
+
+                 % データストアを結合
+                ds = combine(combineDS, labelDS);
+
             catch ME
                 error('Error creating hybrid datastore: %s', ME.message);
             end
@@ -619,23 +570,30 @@ classdef HybridClassifier < handle
                     obj.patienceCounter = 0;
                 else
                     obj.patienceCounter = obj.patienceCounter + 1;
-                    if obj.patienceCounter >= obj.params.classifier.hybrid.training.validation.patience
+                    if obj.patienceCounter >= obj.params.classifier.hybrid.training.patience
                         fprintf('\nEarly stopping triggered at epoch %d\n', obj.currentEpoch);
                         stop = true;
                     end
                 end
-                fprintf('Epoch %d/%d - Training Accuracy: %.2f%%, Validation Accuracy: %.2f%%\n', ...
-                    obj.currentEpoch, obj.params.classifier.hybrid.training.maxEpochs, ...
-                    info.TrainingAccuracy * 100, currentAccuracy * 100);
             end
         end
         
         function metrics = evaluateModel(~, model, testData, testLabels)
-            metrics = struct();
+            metrics = struct(...
+                'accuracy', [], ...
+                'confusionMat', [], ...
+                'classwise', [], ...
+                'roc', [], ...
+                'auc', [] ...
+            );
+
             try
                 uniqueLabels = unique(testLabels);
                 testLabels = categorical(testLabels, uniqueLabels);
-                [pred, scores] = classify(model, testData);
+                
+                % 予測実行
+                [pred, scores] = classify(model, testData{1}, testData{2});
+
                 metrics.accuracy = mean(pred == testLabels);
                 metrics.confusionMat = confusionmat(testLabels, pred);
                 numClasses = length(uniqueLabels);
@@ -711,7 +669,7 @@ classdef HybridClassifier < handle
                                  'severity', severity, ...
                                  'optimalEpoch', optimalEpoch, ...
                                  'totalEpochs', totalEpochs);
-                isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
+                isOverfit = ismember(severity, {'critical', 'severe', 'moderate', 'mild'});
                 fprintf('Overfitting Status: %s (Severity: %s)\n', mat2str(isOverfit), severity);
             catch ME
                 fprintf('Error in validateOverfitting: %s\n', ME.message);
@@ -824,7 +782,7 @@ classdef HybridClassifier < handle
                     prepTestLSTM = obj.prepareDataForLSTM(data{2}(:,:,testIdx));
                     [model, trainInfo] = obj.trainHybridModel(prepTrainCNN, prepTrainLSTM, labels(trainIdx), ...
                                                               prepValCNN, prepValLSTM, labels(valIdx), ...
-                                                              size(prepTrainCNN(:,:,:,1)), size(prepTrainLSTM{1},2));
+                                                              size(prepTrainCNN(:,:,:,1)), size(prepTrainLSTM{1},1));
                     metrics = obj.evaluateModel(model, {prepTestCNN, prepTestLSTM}, labels(testIdx));
                     cvResults.folds.accuracy(i) = metrics.accuracy;
                     cvResults.folds.confusionMat{i} = metrics.confusionMat;

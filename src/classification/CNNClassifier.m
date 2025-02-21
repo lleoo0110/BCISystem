@@ -204,7 +204,7 @@ classdef CNNClassifier < handle
                     'totalEpochs', totalEpochs);
                 
                 % 過学習判定
-                isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
+                isOverfit = ismember(severity, {'critical', 'severe', 'moderate', 'mild'});
                 fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
                 
             catch ME
@@ -417,74 +417,179 @@ classdef CNNClassifier < handle
         end
 
         function layers = buildCNNLayers(obj, data)
-            % 入力サイズの取得
-            inputSize = size(data);
-
-            % CNNの入力サイズを設定 [height width channels]
-            layerInputSize = [inputSize(1), inputSize(2), 1];
-
-            % アーキテクチャパラメータの取得
-            arch = obj.params.classifier.cnn.architecture;
-
-            % レイヤー数の計算
-            numConvLayers = 3;
-            numFCLayers = length(arch.fullyConnected);
-            totalLayers = numConvLayers * 5 + numFCLayers * 2 + 4; % 各畳み込み層に5つ、FC層に2つ、その他4つ
-
-            % レイヤー配列の事前割り当て
-            layers = cell(totalLayers, 1);
-            layerIdx = 1;
-
-            % 入力層
-            layers{layerIdx} = imageInputLayer(layerInputSize, 'Normalization', 'none', 'Name', 'input');
-            layerIdx = layerIdx + 1;
-
-            % 畳み込み層、プーリング層、ドロップアウト層の追加
-            convLayers = {'conv1', 'conv2', 'conv3'};
-            for i = 1:length(convLayers)
-                convName = convLayers{i};
-                convParams = arch.convLayers.(convName);
-                poolParams = arch.poolLayers.(['pool' num2str(i)]);
-                dropoutRate = arch.dropoutLayers.(['dropout' num2str(i)]);
-
-                layers{layerIdx} = convolution2dLayer(convParams.size, convParams.filters, ...
-                    'Stride', convParams.stride, 'Padding', convParams.padding, ...
-                    'Name', ['conv' num2str(i)]);
-                layerIdx = layerIdx + 1;
-
-                if arch.batchNorm
-                    layers{layerIdx} = batchNormalizationLayer('Name', ['bn' num2str(i)]);
-                    layerIdx = layerIdx + 1;
+            try
+                % 入力サイズの取得
+                inputSize = size(data);
+                
+                % 入力次元に基づいてレイヤー設定を決定
+                if ndims(data) == 4
+                    % 4次元データ [サンプル x チャンネル x 1 x エポック] の場合
+                    layerInputSize = [inputSize(1), inputSize(2), 1];
+                elseif ndims(data) == 3
+                    % 3次元データ [サンプル x チャンネル x エポック] の場合
+                    layerInputSize = [inputSize(1), inputSize(2), 1];
+                elseif ismatrix(data)
+                    % 2次元データ [チャンネル x サンプル] の場合
+                    layerInputSize = [inputSize(2), inputSize(1), 1];
+                else
+                    error('対応していないデータ次元数: %d', ndims(data));
                 end
-
-                layers{layerIdx} = reluLayer('Name', ['relu' num2str(i)]);
-                layerIdx = layerIdx + 1;
-                layers{layerIdx} = maxPooling2dLayer(poolParams.size, 'Stride', poolParams.stride, ...
-                    'Name', ['pool' num2str(i)]);
-                layerIdx = layerIdx + 1;
-                layers{layerIdx} = dropoutLayer(dropoutRate, 'Name', ['dropout' num2str(i)]);
-                layerIdx = layerIdx + 1;
+        
+                % アーキテクチャパラメータの取得
+                arch = obj.params.classifier.cnn.architecture;
+                
+                % チャンネル数が少ない場合に特化したアーキテクチャを使用
+                if layerInputSize(2) <= 10
+                    fprintf('チャンネル数が少ないため(%d)、特化したCNNアーキテクチャを使用します\n', layerInputSize(2));
+                    
+                    % 簡略化されたCNNアーキテクチャを構築
+                    layers = [
+                        % 入力層
+                        imageInputLayer(layerInputSize, 'Normalization', 'none', 'Name', 'input')
+                        
+                        % 1つ目の畳み込みブロック - 小さいフィルタサイズを使用
+                        convolution2dLayer([3 3], 16, 'Padding', 'same', 'Name', 'conv1')
+                        batchNormalizationLayer('Name', 'bn1')
+                        reluLayer('Name', 'relu1')
+                        % プーリングサイズを小さく (2,1) - チャンネル次元はプーリングしない
+                        maxPooling2dLayer([2 1], 'Stride', [2 1], 'Name', 'pool1')
+                        dropoutLayer(0.3, 'Name', 'dropout1')
+                        
+                        % 2つ目の畳み込みブロック
+                        convolution2dLayer([3 3], 32, 'Padding', 'same', 'Name', 'conv2')
+                        batchNormalizationLayer('Name', 'bn2')
+                        reluLayer('Name', 'relu2')
+                        maxPooling2dLayer([2 1], 'Stride', [2 1], 'Name', 'pool2')
+                        dropoutLayer(0.4, 'Name', 'dropout2')
+                        
+                        % グローバルプーリング（チャンネル次元を保持）
+                        globalAveragePooling2dLayer('Name', 'globalPool')
+                        
+                        % 全結合層
+                        fullyConnectedLayer(64, 'Name', 'fc1')
+                        reluLayer('Name', 'relu_fc1')
+                        dropoutLayer(0.5, 'Name', 'dropout_fc')
+                        
+                        % 出力層
+                        fullyConnectedLayer(arch.numClasses, 'Name', 'fc_output')
+                        softmaxLayer('Name', 'softmax')
+                        classificationLayer('Name', 'output')
+                    ];
+                    
+                else
+                    % 標準的なCNNアーキテクチャ（チャンネル数が十分な場合）             
+                    % 初期フィルタ数の決定 (チャンネル数によって調整)
+                    initialFilters = min(32, max(16, ceil(numChannels * 1.5)));
+                    
+                    % レイヤー数の計算
+                    numConvLayers = length(fieldnames(arch.convLayers));
+                    numFCLayers = length(arch.fullyConnected);
+                    totalLayers = numConvLayers * 5 + numFCLayers * 2 + 4; 
+        
+                    % レイヤー配列の事前割り当て
+                    layers = cell(totalLayers, 1);
+                    layerIdx = 1;
+        
+                    % 入力層
+                    layers{layerIdx} = imageInputLayer(layerInputSize, 'Normalization', 'none', 'Name', 'input');
+                    layerIdx = layerIdx + 1;
+        
+                    % 畳み込み層、プーリング層、ドロップアウト層の追加
+                    convLayers = fieldnames(arch.convLayers);
+                    for i = 1:length(convLayers)
+                        convName = convLayers{i};
+                        convParams = arch.convLayers.(convName);
+                        
+                        % プーリング層パラメータの取得
+                        if isfield(arch.poolLayers, ['pool' num2str(i)])
+                            poolParams = arch.poolLayers.(['pool' num2str(i)]);
+                        else
+                            % デフォルト値
+                            poolParams = struct('size', 2, 'stride', 2);
+                            warning('プーリング層設定が見つかりません。デフォルト値を使用: size=2, stride=2');
+                        end
+                        
+                        % ドロップアウト率の取得
+                        if isfield(arch.dropoutLayers, ['dropout' num2str(i)])
+                            dropoutRate = arch.dropoutLayers.(['dropout' num2str(i)]);
+                        else
+                            % デフォルト値
+                            dropoutRate = 0.5;
+                            warning('ドロップアウト設定が見つかりません。デフォルト値を使用: 0.5');
+                        end
+        
+                        % フィルタ数の計算（各層でサイズを2倍に）
+                        filterNum = initialFilters * (2^(i-1));
+                        filterSize = min(convParams.size);
+                        
+                        % パディングの決定
+                        paddingMode = 'same';
+        
+                        layers{layerIdx} = convolution2dLayer([filterSize filterSize], filterNum, ...
+                            'Stride', convParams.stride, 'Padding', paddingMode, ...
+                            'Name', ['conv' num2str(i)]);
+                        layerIdx = layerIdx + 1;
+        
+                        if arch.batchNorm
+                            layers{layerIdx} = batchNormalizationLayer('Name', ['bn' num2str(i)]);
+                            layerIdx = layerIdx + 1;
+                        end
+        
+                        layers{layerIdx} = reluLayer('Name', ['relu' num2str(i)]);
+                        layerIdx = layerIdx + 1;
+                        
+                        % プーリングサイズのチェックと調整
+                        poolSize = poolParams.size;
+                        poolStride = poolParams.stride;
+                        
+                        % チャンネル数が少ない場合、チャンネル方向へのプーリングを制限
+                        if i == 1 && numChannels <= 32
+                            poolSize = min(poolSize, 2);
+                            layers{layerIdx} = maxPooling2dLayer([poolSize 1], ...
+                                'Stride', [poolStride 1], 'Name', ['pool' num2str(i)]);
+                        else
+                            layers{layerIdx} = maxPooling2dLayer(poolSize, ...
+                                'Stride', poolStride, 'Name', ['pool' num2str(i)]);
+                        end
+                        layerIdx = layerIdx + 1;
+                        
+                        layers{layerIdx} = dropoutLayer(dropoutRate, 'Name', ['dropout' num2str(i)]);
+                        layerIdx = layerIdx + 1;
+                    end
+                    
+                    % グローバルプーリングの追加
+                    layers{layerIdx} = globalAveragePooling2dLayer('Name', 'globalPool');
+                    layerIdx = layerIdx + 1;
+        
+                    % 全結合層の追加
+                    for i = 1:length(arch.fullyConnected)
+                        layers{layerIdx} = fullyConnectedLayer(arch.fullyConnected(i), ...
+                            'Name', ['fc' num2str(i)]);
+                        layerIdx = layerIdx + 1;
+                        layers{layerIdx} = reluLayer('Name', ['relu_fc' num2str(i)]);
+                        layerIdx = layerIdx + 1;
+                    end
+        
+                    % 出力層の追加
+                    layers{layerIdx} = fullyConnectedLayer(arch.numClasses, 'Name', 'fc_output');
+                    layerIdx = layerIdx + 1;
+                    layers{layerIdx} = softmaxLayer('Name', 'softmax');
+                    layerIdx = layerIdx + 1;
+                    layers{layerIdx} = classificationLayer('Name', 'output');
+        
+                    % セル配列を層配列に変換
+                    layers = layers(~cellfun('isempty', layers));
+                    layers = cat(1, layers{:});
+                end
+                
+                fprintf('CNNレイヤー構築完了: 合計%dレイヤー\n', length(layers));
+                
+            catch ME
+                fprintf('\nbuildCNNLayersでエラー発生: %s\n', ME.message);
+                fprintf('エラースタック:\n');
+                disp(getReport(ME, 'extended'));
+                rethrow(ME);
             end
-
-            % 全結合層の追加
-            for i = 1:length(arch.fullyConnected)
-                layers{layerIdx} = fullyConnectedLayer(arch.fullyConnected(i), ...
-                    'Name', ['fc' num2str(i)]);
-                layerIdx = layerIdx + 1;
-                layers{layerIdx} = reluLayer('Name', ['relu_fc' num2str(i)]);
-                layerIdx = layerIdx + 1;
-            end
-
-            % 出力層の追加
-            layers{layerIdx} = fullyConnectedLayer(arch.numClasses, 'Name', 'fc_output');
-            layerIdx = layerIdx + 1;
-            layers{layerIdx} = softmaxLayer('Name', 'softmax');
-            layerIdx = layerIdx + 1;
-            layers{layerIdx} = classificationLayer('Name', 'output');
-
-            % セル配列を層配列に変換
-            layers = layers(~cellfun('isempty', layers));
-            layers = cat(1, layers{:});
         end
 
         function metrics = evaluateModel(~, model, testData, testLabels)
@@ -648,20 +753,35 @@ classdef CNNClassifier < handle
                 totalEpochs = 0;
             end
         end
-        
-        function preparedData = prepareDataForCNN(~, data)
-            try
+
+        function preparedData = prepareDataForCNN(obj, data)
+            try                
+                % データの次元数に基づいて処理を分岐
                 if ndims(data) == 3
-                    preparedData = permute(data, [2 1 4 3]);
+                    % 3次元データ（チャンネル x サンプル x エポック）の場合
+                    preparedData = permute(data, [2, 1, 4, 3]);
+                        
                 elseif ismatrix(data)
-                    [~, samples] = size(data);
-                    preparedData = permute(data, [2 1 3]);
-                    preparedData = reshape(preparedData, [samples, size(data,1), 1, 1]);
+                    % 2次元データ（チャンネル x サンプル）の場合
+                    [channels, samples] = size(data);
+                    preparedData = permute(data, [2, 1, 3]);
+                    preparedData = reshape(preparedData, [samples, channels, 1, 1]);
+                        
                 else
-                    error('Unsupported data dimension: %d', ndims(data));
+                    % その他の次元数は対応外
+                    error('対応していないデータ次元数: %d', ndims(data));
                 end
+                
+                % Nan/Infチェック
+                if any(isnan(preparedData(:))) || any(isinf(preparedData(:)))
+                    warning('prepareDataForCNN: 処理後のデータにNaNまたはInfが含まれています');
+                end
+                
             catch ME
-                fprintf('\nError in prepareDataForCNN: %s\n', ME.message);
+                fprintf('\nprepareDataForCNNでエラー発生: %s\n', ME.message);
+                fprintf('データサイズ: [%s]\n', num2str(size(data)));
+                fprintf('エラースタック:\n');
+                disp(getReport(ME, 'extended'));
                 rethrow(ME);
             end
         end
