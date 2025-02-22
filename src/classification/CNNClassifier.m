@@ -102,7 +102,7 @@ classdef CNNClassifier < handle
 
                 % GPUメモリを解放
                if obj.useGPU
-                   gpuDevice([]);
+                   reset(gpuDevice);
                end
 
             catch ME
@@ -116,7 +116,7 @@ classdef CNNClassifier < handle
 
                 % GPUメモリを解放
                if obj.useGPU
-                   gpuDevice([]);
+                   reset(gpuDevice);
                end
 
                 rethrow(ME);
@@ -339,23 +339,13 @@ classdef CNNClassifier < handle
                % ラベルのカテゴリカル変換
                uniqueLabels = unique(trainLabels);
                trainLabels = categorical(trainLabels, uniqueLabels);
-        
-               % GPU転送
-               if obj.useGPU
-                   trainData = gpuArray(trainData);
-               end
-        
+
                % テストデータの処理
                if ~isempty(valData)
                    if ndims(valData) ~= 4
                        valData = obj.prepareDataForCNN(valData);
                    end
                    valLabels = categorical(valLabels, uniqueLabels);
-
-                   % GPUにデータ転送
-                   if obj.useGPU
-                       valData = gpuArray(valData);
-                   end
                end
         
                % トレーニング情報の初期化
@@ -401,7 +391,7 @@ classdef CNNClassifier < handle
 
                % GPUメモリを解放
                if obj.useGPU
-                   gpuDevice([]);
+                   reset(gpuDevice);
                end
         
            catch ME
@@ -409,7 +399,7 @@ classdef CNNClassifier < handle
         
                % GPUメモリを解放
                if obj.useGPU
-                   gpuDevice([]);
+                   reset(gpuDevice);
                end
         
                rethrow(ME);

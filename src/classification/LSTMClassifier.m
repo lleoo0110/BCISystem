@@ -101,7 +101,7 @@ classdef LSTMClassifier < handle
 
                 % GPU使用時はGPUメモリをリセット
                 if obj.useGPU
-                    gpuDevice([]);
+                    reset(gpuDevice);
                 end
 
             catch ME
@@ -110,7 +110,7 @@ classdef LSTMClassifier < handle
                 disp(getReport(ME, 'extended'));
 
                 if obj.useGPU
-                    gpuDevice([]);
+                    reset(gpuDevice);
                 end
 
                 rethrow(ME);
@@ -370,9 +370,6 @@ classdef LSTMClassifier < handle
                             warning('Trial %d contains Inf values. Replacing with zeros.', i);
                             currentData(isinf(currentData)) = 0;
                         end
-                        if obj.useGPU
-                            currentData = gpuArray(currentData);
-                        end
                         preparedData{i} = currentData;
                     end
                 else
@@ -392,9 +389,6 @@ classdef LSTMClassifier < handle
                         if any(isinf(currentData(:)))
                             warning('Trial %d contains Inf values. Replacing with zeros.', i);
                             currentData(isinf(currentData)) = 0;
-                        end
-                        if obj.useGPU
-                            currentData = gpuArray(currentData);
                         end
                         preparedData{i} = currentData;
                     end
@@ -437,7 +431,6 @@ classdef LSTMClassifier < handle
         
                 % GPU転送
                 if obj.useGPU
-                    trainData = cellfun(@(x) gpuArray(x), trainData, 'UniformOutput', false);
                     fprintf('GPUを使用して学習を実行します\n');
                 else
                     fprintf('CPUを使用して学習を実行します\n');
@@ -449,10 +442,7 @@ classdef LSTMClassifier < handle
                         valData = obj.prepareDataForLSTM(valData);
                     end
                     valLabels = categorical(valLabels, uniqueLabels);
-                    
-                    if obj.useGPU
-                        valData = cellfun(@(x) gpuArray(x), valData, 'UniformOutput', false);
-                    end
+
                     fprintf('検証データを使用して学習を実行します\n');
                 end
         

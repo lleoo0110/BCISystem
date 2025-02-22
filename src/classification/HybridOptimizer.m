@@ -71,14 +71,14 @@ classdef HybridOptimizer < handle
                             trainResults.performance.overallAccuracy);
                         
                         if obj.useGPU
-                            gpuDevice([]);
+                            reset(gpuDevice);
                         end
                         
                     catch ME
                         warning('組み合わせ%dでエラー発生: %s', i, ME.message);
                         trialResults{i} = [];
                         if obj.useGPU
-                            gpuDevice([]);
+                            reset(gpuDevice);
                         end
                     end
                 end

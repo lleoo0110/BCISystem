@@ -131,7 +131,7 @@ classdef HybridClassifier < handle
                 
                 % GPUメモリの解放
                 if obj.useGPU
-                    gpuDevice([]);
+                    reset(gpuDevice);
                 end
                 
             catch ME
@@ -141,7 +141,7 @@ classdef HybridClassifier < handle
                 disp(getReport(ME, 'extended'));
                 
                 if obj.useGPU
-                    gpuDevice([]);
+                    reset(gpuDevice);
                 end
                 rethrow(ME);
             end
@@ -151,7 +151,7 @@ classdef HybridClassifier < handle
             if ~obj.isEnabled
                 error('Hybrid classifier is disabled');
             end
-            
+        
             try
                 % 入力が1つの場合は複製
                 if ~iscell(data)
@@ -159,15 +159,28 @@ classdef HybridClassifier < handle
                 elseif isscalar(data)
                     data = {data{1}, data{1}};
                 end
-                
+        
+                % もしdata{2}がcellであれば、数値配列を取り出す
+                if iscell(data{2})
+                    data{2} = data{2}{1};
+                end
+        
+                % 入力が2次元の場合は、サンプル数1として3次元に変換
+                if ndims(data{1}) == 2
+                    data{1} = reshape(data{1}, size(data{1},1), size(data{1},2), 1);
+                end
+                if ndims(data{2}) == 2
+                    data{2} = reshape(data{2}, size(data{2},1), size(data{2},2), 1);
+                end
+        
                 % データの前処理
                 prepCNN = obj.prepareDataForCNN(data{1});
                 prepLSTM = obj.prepareDataForLSTM(data{2});
-                
+        
                 % 予測の実行
                 [label, scores] = classify(hybridModel, prepCNN, prepLSTM);
                 score = scores(:,1);  % クラス1の確率
-                
+        
             catch ME
                 fprintf('Error in online prediction: %s\n', ME.message);
                 rethrow(ME);
@@ -206,34 +219,40 @@ classdef HybridClassifier < handle
         end
         
         function preparedData = prepareDataForCNN(~, data)
-            if ndims(data) ~= 3
+            % 入力が2次元の場合は、サンプル数1として3次元に変換
+            if ismatrix(data)
+                data = reshape(data, size(data,1), size(data,2), 1);
+            elseif ndims(data) ~= 3
                 error('Input data must be 3-dimensional [channels x timepoints x samples]');
             end
-            
+        
             [channels, timepoints, samples] = size(data);
-            
-            % 入力データを4次元テンソルに変換: [timepoints channels 1 samples]
+        
+            % 入力データを4次元テンソルに変換: [timepoints x channels x 1 x samples]
             preparedData = zeros(timepoints, channels, 1, samples);
-            
+        
             for i = 1:samples
                 preparedData(:,:,1,i) = data(:,:,i)';
             end
         end
         
         function preparedData = prepareDataForLSTM(~, data)
-            if ndims(data) ~= 3
+            % 入力が2次元の場合は、サンプル数1として3次元に変換
+            if isnumeric(data) && ismatrix(data)
+                data = reshape(data, size(data,1), size(data,2), 1);
+            elseif ~isnumeric(data) || ndims(data) ~= 3
                 error('Input data must be 3-dimensional [channels x timepoints x samples] or [timepoints x channels x samples]');
             end
         
             [dim1, dim2, samples] = size(data);
             preparedData = cell(samples, 1);
-            
+        
             for i = 1:samples
-                % もし dim1 > dim2 なら、元データは [timepoints x channels] と推定し、転置して [channels x timepoints] にする
+                % 入力が [timepoints x channels] の場合は転置して [channels x timepoints] にする
                 if dim1 > dim2
-                    preparedData{i} = data(:,:,i)';  % 転置して [channels x timepoints]
+                    preparedData{i} = data(:,:,i)';
                 else
-                    preparedData{i} = data(:,:,i);     % 既に [channels x timepoints] の場合はそのまま
+                    preparedData{i} = data(:,:,i);
                 end
             end
         end

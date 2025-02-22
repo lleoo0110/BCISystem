@@ -1105,31 +1105,20 @@ classdef EEGAcquisitionManager < handle
                 obj.processABRatioFeatures(analysisSegment);
                 obj.processEmotionFeatures(analysisSegment);
 
-                % CSP特徴量の抽出
-                currentFeatures = obj.processCSPFeatures(analysisSegment);
+                % 分類器への入力データ
+                switch obj.params.classifier.activeClassifier
+                    case {'svm', 'ecoc'}
+                        % svm, ecocの場合はCSPFeatureを使用
+                        currentFeatures = obj.processCSPFeatures(analysisSegment);
+                    case {'cnn', 'lstm', 'hybrid'}
+                        % cnn, lstm, hybridの場合はanalysisSegmentをそのまま使用
+                        currentFeatures = analysisSegment;
+                    otherwise
+                        error('Unknown classifier type: %s', obj.params.classifier.activeClassifier);
+                end
                 
                 % 分類処理の実行
-                switch obj.params.classifier.activeClassifier
-                    case 'svm'
-                        [label, score] = obj.svmClassifier.predictOnline(...
-                            currentFeatures, obj.classifiers.svm.model, obj.optimalThreshold);
-                         
-                    case 'ecoc'
-                        [label, score] = obj.ecocClassifier.predictOnline(...
-                            currentFeatures, obj.classifiers.ecoc.model);
-
-                    case 'cnn'
-                        [label, score] = obj.cnnClassifier.predictOnline(...
-                            analysisSegment, obj.classifiers.cnn.model);
-                            
-                    case 'lstm'
-                        [label, score] = obj.lstmClassifier.predictOnline(...
-                            analysisSegment, obj.classifiers.lstm.model);
-
-                    case 'hybrid'
-                        [label, score] = obj.hybridClassifier.predictOnline(...
-                            analysisSegment, obj.classifiers.hybrid.model);
-                end
+                [label, score] = obj.processClassification(currentFeatures);
 
                 % 最新の解析結果を構造体として保存
                 obj.latestResults = struct(...
@@ -1161,17 +1150,6 @@ classdef EEGAcquisitionManager < handle
                 if obj.params.signal.enable && ~isempty(obj.dataBuffer)
                     data = obj.dataBuffer;
 
-                    % アーティファクト除去処理
-                    if obj.params.signal.preprocessing.artifact.enable
-                        [data, ~] = obj.artifactRemover.removeArtifacts(data, 'all');
-                    end
-
-                    % ベースライン補正処理
-                    if obj.params.signal.preprocessing.baseline.enable
-                        [data, ~] = obj.baselineCorrector.correctBaseline(...
-                            data, obj.params.signal.preprocessing.baseline.method);
-                    end
-
                     % ダウンサンプリング処理
                     if obj.params.signal.preprocessing.downsample.enable
                         [data, ~] = obj.downSampler.downsample(...
@@ -1187,6 +1165,17 @@ classdef EEGAcquisitionManager < handle
                     end
                     if obj.params.signal.preprocessing.filter.iir.enable
                         [data, ~] = obj.iirFilter.designAndApplyFilter(data);
+                    end
+
+                    % アーティファクト除去処理
+                    if obj.params.signal.preprocessing.artifact.enable
+                        [data, ~] = obj.artifactRemover.removeArtifacts(data, 'all');
+                    end
+
+                    % ベースライン補正処理
+                    if obj.params.signal.preprocessing.baseline.enable
+                        [data, ~] = obj.baselineCorrector.correctBaseline(...
+                            data, obj.params.signal.preprocessing.baseline.method);
                     end
 
                     % 正規化処理
@@ -1372,45 +1361,54 @@ classdef EEGAcquisitionManager < handle
         function [label, score] = processClassification(obj, currentFeatures)
             label = [];
             score = [];
-
+        
             try
                 switch obj.params.classifier.activeClassifier
                     case 'svm'
-                        % SVMモデルの存在確認
-                        if ~isfield(obj.classifiers, 'svm') || isempty(obj.classifiers.svm.model)
-                            fprintf('Warning: SVM model not found\n');
-                            return;
-                        end
-
                         % SVM分類の実行
                         [label, score] = obj.svmClassifier.predictOnline(...
                             currentFeatures, obj.classifiers.svm.model, obj.optimalThreshold);
-
+        
                     case 'ecoc'
                         % ECOC分類の実行
                         [label, score] = obj.ecocClassifier.predictOnline(...
                             currentFeatures, obj.classifiers.ecoc.model);
-
+        
                     case 'cnn'
                         % CNN分類の実行
                         [label, score] = obj.cnnClassifier.predictOnline(...
                             currentFeatures, obj.classifiers.cnn.model);
+        
+                    case 'lstm'
+                        % LSTM分類の実行
+                        [label, score] = obj.lstmClassifier.predictOnline(...
+                            currentFeatures, obj.classifiers.lstm.model);
+        
+                    case 'hybrid'
+                        % Hybrid分類の実行
+                        [label, score] = obj.hybridClassifier.predictOnline(...
+                            currentFeatures, obj.classifiers.hybrid.model);
                 end
-
+        
+                % categorical型の場合、double型に変換
+                if isa(label, 'categorical')
+                    label = double(label);
+                end
+        
                 % 予測結果の保存
                 if ~isempty(label)
-                    currentTime = toc(obj.processingTimer)*1000;
+                    currentTime = toc(obj.processingTimer) * 1000;
                     newPredictResult = struct(...
                         'label', label, ...
                         'score', score, ...
                         'time', currentTime, ...
                         'classifier', obj.params.classifier.activeClassifier);
-
+        
                     % SVM特有の閾値情報を追加
                     if strcmp(obj.params.classifier.activeClassifier, 'svm') && obj.params.classifier.svm.probability
                         newPredictResult.threshold = obj.optimalThreshold;
                     end
-
+        
                     % 結果の蓄積
                     if isempty(obj.results.predict)
                         obj.results.predict = newPredictResult;

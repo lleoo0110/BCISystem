@@ -31,7 +31,7 @@ function preset = magic()
     % Lab Streaming Layer通信の設定
     lsl = struct(...
         'simulate', struct(...           % シミュレーションモード設定
-            'enable', false, ...          % true/false: シミュレーション有効/無効
+            'enable', true, ...          % true/false: シミュレーション有効/無効
             'signal', struct(...         % シミュレーション信号の設定
                 'alpha', struct(...      % α波シミュレーション
                     'freq', 10, ...      % 周波数 (8-13 Hz)
@@ -48,7 +48,7 @@ function preset = magic()
     %% === データ収集設定 ===
     % データ収集に関する基本設定
     acquisition = struct(...
-        'mode', 'offline', ...           % モード: 'online'/'offline'
+        'mode', 'online', ...           % モード: 'online'/'offline'
         'emg', struct(...               % EMG計測の設定
             'enable', false, ...        % true/false: EMG計測有効/無効
             'channels', struct(...      % EMGチャンネル設定
@@ -159,7 +159,7 @@ function preset = magic()
             'analysis', 2.0, ...      % 解析窓長 (0.5-10.0 秒)
             'stimulus', 6.0, ...      % 刺激提示時間 (1.0-30.0 秒)
             'bufferSize', 15, ...     % バッファサイズ (5-30 秒)
-            'updateBuffer', 1, ...    % バッファ更新間隔 (0.1-2.0 秒)
+            'updateBuffer', 0.75, ...    % バッファ更新間隔 (0.1-2.0 秒)
             'step', [], ...           % 解析窓シフト幅 (自動計算)
             'updateInterval', [] ...  % 更新間隔 (自動計算)
         ), ...
@@ -176,7 +176,7 @@ function preset = magic()
             ) ...
         ), ...
         'frequency', struct(...       % 周波数解析設定
-            'min', 1, ...             % 最小周波数 (0.1-100 Hz)
+            'min', 8, ...             % 最小周波数 (0.1-100 Hz)
             'max', 30, ...            % 最大周波数 (1-200 Hz)
             'bands', struct(...       % 周波数帯域定義
                 'delta', [1 4], ...   % デルタ波帯域 (0.5-4 Hz)
@@ -387,7 +387,7 @@ function preset = magic()
             ) ...
         ), ...
         'cnn', struct(...             % CNN設定
-            'enable', true, ...      % true/false: CNN有効/無効
+            'enable', false, ...      % true/false: CNN有効/無効
             'gpu', true, ...          % true/false: GPU使用有効/無効
             'optimize', true, ...     % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
@@ -442,7 +442,7 @@ function preset = magic()
             ) ...
         ), ...
         'lstm', struct(...            % LSTM設定
-            'enable', true, ...      % true/false: LSTM有効/無効
+            'enable', false, ...      % true/false: LSTM有効/無効
             'gpu', true, ...         % true/false: GPU使用有効/無効
             'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
@@ -497,8 +497,8 @@ function preset = magic()
         ), ...
        'hybrid', struct(...
             'enable', true, ...       % ハイブリッドモデル有効
-            'gpu', true, ...          % GPU使用有効
-            'optimize', true, ...     % パラメータ最適化有効
+            'gpu', false, ...          % GPU使用有効
+            'optimize', false, ...     % パラメータ最適化有効
             'architecture', struct(...
                 'numClasses', num_classes, ... % クラス数（自動設定）
                 'batchNorm', true, ...         % バッチ正規化の使用
