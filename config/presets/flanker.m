@@ -1,9 +1,9 @@
-function preset = character()
+function preset = flanker()
     %% === プリセット情報 ===
     preset_info = struct(...
-        'name', 'character', ...
-        'description', 'Character Control preset', ...
-        'version', '3.2', ...
+        'name', 'FlankerTask', ...
+        'description', 'FlankerTask preset', ...
+        'version', '1.1', ...
         'author', 'LLEOO', ...
         'date', '2025-02-21' ...
     );
@@ -12,9 +12,8 @@ function preset = character()
     % トリガー値とクラスラベルの対応付け
     % 形式: {'状態名', トリガー値}
     trigger_mappings = {
-        '安静', 1;         % クラス1: 安静状態 (ベースライン)
-        '歩行', 2;      % クラス2: 歩行状態
-        '回転', 3;      % クラス3: 回転状態
+        'correct', 1;         % クラス1: 成功
+        'incorrect', 2;      % クラス2: 失敗
     };
 
     % トリガーマッピング構造体の生成
@@ -48,7 +47,7 @@ function preset = character()
     %% === データ収集設定 ===
     % データ収集に関する基本設定
     acquisition = struct(...
-        'mode', 'offline', ...           % モード: 'online'/'offline'
+        'mode', 'online', ...           % モード: 'online'/'offline'
         'emg', struct(...               % EMG計測の設定
             'enable', false, ...        % true/false: EMG計測有効/無効
             'channels', struct(...      % EMGチャンネル設定
@@ -156,8 +155,8 @@ function preset = character()
     signal = struct(...
         'enable', true, ...           % true/false: 信号処理有効/無効
         'window', struct(...          % 解析窓の設定
-            'analysis', 2.0, ...      % 解析窓長 (0.5-10.0 秒)
-            'stimulus', 5.0, ...      % 刺激提示時間 (1.0-30.0 秒)
+            'analysis', 1.0, ...      % 解析窓長 (0.5-10.0 秒)
+            'stimulus', 2.0, ...      % 刺激提示時間 (1.0-30.0 秒)
             'bufferSize', 15, ...     % バッファサイズ (5-30 秒)
             'updateBuffer', 1, ...    % バッファ更新間隔 (0.1-2.0 秒)
             'step', [], ...           % 解析窓シフト幅 (自動計算)
@@ -166,7 +165,7 @@ function preset = character()
         'epoch', struct(...           % エポック化設定
             'method', 'time', ...     % 方法: 'time'/'odd-even'
             'storageType', 'array', ... % 保存形式: 'array'/'cell'
-            'overlap', 0.25, ...      % オーバーラップ率 (0-0.9)
+            'overlap', 0, ...      % オーバーラップ率 (0-0.9)
             'visual', struct(...      % 視覚タスク設定
                 'enable', false, ...  % true/false: 視覚タスク有効/無効
                 'taskTypes', {{'observation', 'imagery'}}, ... % タスク種類: 'observation'/'imagery'
@@ -176,7 +175,7 @@ function preset = character()
             ) ...
         ), ...
         'frequency', struct(...       % 周波数解析設定
-            'min', 8, ...             % 最小周波数 (0.1-100 Hz)
+            'min', 1, ...             % 最小周波数 (0.1-100 Hz)
             'max', 30, ...            % 最大周波数 (1-200 Hz)
             'bands', struct(...       % 周波数帯域定義
                 'delta', [1 4], ...   % デルタ波帯域 (0.5-4 Hz)
@@ -231,7 +230,7 @@ function preset = character()
             ), ...
             'augmentation', struct(... % データ拡張設定
                 'enable', true, ...   % true/false: データ拡張有効/無効
-                'augmentationRatio', 4, ... % 拡張比率 (2-10)
+                'augmentationRatio', 7, ... % 拡張比率 (2-10)
                 'combinationLimit', 3, ... % 最大手法数 (1-5)
                 'methods', struct(...   % 拡張手法設定
                     'noise', struct(...  % ノイズ付加

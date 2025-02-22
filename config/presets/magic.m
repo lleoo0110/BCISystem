@@ -1,19 +1,20 @@
-function preset = FlankerTask()
+function preset = magic()
     %% === プリセット情報 ===
     preset_info = struct(...
-        'name', 'FlankerTask', ...
-        'description', 'FlankerTask preset', ...
+        'name', 'magic', ...
+        'description', 'Magic Game preset', ...
         'version', '1.0', ...
         'author', 'LLEOO', ...
-        'date', '2025-02-18' ...
+        'date', '2025-02-21' ...
     );
 
     %% === トリガーマッピング設定 ===
     % トリガー値とクラスラベルの対応付け
     % 形式: {'状態名', トリガー値}
     trigger_mappings = {
-        'correct', 1;         % クラス1: 成功
-        'incorrect', 2;      % クラス2: 失敗
+        '安静', 1;         % クラス1: 安静状態 (ベースライン)
+        '炎魔法', 2;      % クラス2: 炎魔法想起
+        '雷魔法', 3;      % クラス3: 雷魔法想起
     };
 
     % トリガーマッピング構造体の生成
@@ -74,7 +75,7 @@ function preset = FlankerTask()
             ), ...
             'filter', struct(...        % EOGフィルタ設定
                 'bandpass', struct(...  % バンドパスフィルタ
-                    'enable', true, ... % true/false: フィルタ有効/無効
+                    'enable', false, ... % true/false: フィルタ有効/無効
                     'low', 0.1, ...    % 低域カットオフ (0.1-1 Hz)
                     'high', 15 ...     % 高域カットオフ (10-30 Hz)
                 ), ...
@@ -155,8 +156,8 @@ function preset = FlankerTask()
     signal = struct(...
         'enable', true, ...           % true/false: 信号処理有効/無効
         'window', struct(...          % 解析窓の設定
-            'analysis', 1.0, ...      % 解析窓長 (0.5-10.0 秒)
-            'stimulus', 1.0, ...      % 刺激提示時間 (1.0-30.0 秒)
+            'analysis', 2.0, ...      % 解析窓長 (0.5-10.0 秒)
+            'stimulus', 6.0, ...      % 刺激提示時間 (1.0-30.0 秒)
             'bufferSize', 15, ...     % バッファサイズ (5-30 秒)
             'updateBuffer', 1, ...    % バッファ更新間隔 (0.1-2.0 秒)
             'step', [], ...           % 解析窓シフト幅 (自動計算)
@@ -167,7 +168,7 @@ function preset = FlankerTask()
             'storageType', 'array', ... % 保存形式: 'array'/'cell'
             'overlap', 0, ...      % オーバーラップ率 (0-0.9)
             'visual', struct(...      % 視覚タスク設定
-                'enable', false, ...  % true/false: 視覚タスク有効/無効
+                'enable', true, ...  % true/false: 視覚タスク有効/無効
                 'taskTypes', {{'observation', 'imagery'}}, ... % タスク種類: 'observation'/'imagery'
                 'observationDuration', 5.0, ... % 観察時間 (2.0-10.0 秒)
                 'signalDuration', 1.0, ...     % 合図時間 (0.5-2.0 秒)
@@ -176,7 +177,7 @@ function preset = FlankerTask()
         ), ...
         'frequency', struct(...       % 周波数解析設定
             'min', 1, ...             % 最小周波数 (0.1-100 Hz)
-            'max', 10, ...            % 最大周波数 (1-200 Hz)
+            'max', 30, ...            % 最大周波数 (1-200 Hz)
             'bands', struct(...       % 周波数帯域定義
                 'delta', [1 4], ...   % デルタ波帯域 (0.5-4 Hz)
                 'theta', [4 8], ...   % シータ波帯域 (4-8 Hz)
@@ -230,7 +231,7 @@ function preset = FlankerTask()
             ), ...
             'augmentation', struct(... % データ拡張設定
                 'enable', true, ...   % true/false: データ拡張有効/無効
-                'augmentationRatio', 5, ... % 拡張比率 (2-10)
+                'augmentationRatio', 4, ... % 拡張比率 (2-10)
                 'combinationLimit', 3, ... % 最大手法数 (1-5)
                 'methods', struct(...   % 拡張手法設定
                     'noise', struct(...  % ノイズ付加
@@ -245,7 +246,7 @@ function preset = FlankerTask()
                         'probability', 0.3 ... % 適用確率 (0-1)
                     ), ...
                     'timeshift', struct(... % 時間シフト
-                        'enable', false, ... % true/false: 時間シフト有効/無効
+                        'enable', true, ... % true/false: 時間シフト有効/無効
                         'maxShift', 0.1, ... % 最大シフト量 (0.05-0.5 秒)
                         'probability', 0.3 ... % 適用確率 (0-1)
                     ), ...
@@ -339,7 +340,7 @@ function preset = FlankerTask()
     num_classes = size(trigger_mappings, 1);  % クラス数を動的設定
     
     classifier = struct(...
-        'activeClassifier', 'lstm', ... % 使用分類器: 'svm'/'ecoc'/'cnn'/'lstm'/'hybrid'
+        'activeClassifier', 'hybrid', ... % 使用分類器: 'svm'/'ecoc'/'cnn'/'lstm'/'hybrid'
         'svm', struct(...              % SVMの設定
             'enable', false, ...       % true/false: SVM有効/無効
             'optimize', true, ...      % true/false: パラメータ最適化有効/無効
@@ -416,6 +417,7 @@ function preset = FlankerTask()
                 'searchSpace', struct(... % パラメータ探索範囲
                     'learningRate', [0.0005, 0.005], ... % 学習率範囲
                     'miniBatchSize', [64, 256], ...      % バッチサイズ範囲
+                    'numConvLayers', [1, 3], ...            % 畳み込み層数範囲
                     'filterSize', [3, 7], ... % フィルタサイズ範囲
                     'kernelSize', {[3,3], [5,5]}, ...    % カーネルサイズ候補
                     'numFilters', [16, 64], ...          % フィルタ数範囲
@@ -425,7 +427,7 @@ function preset = FlankerTask()
             ) ...
         ), ...
         'lstm', struct(...            % LSTM設定
-            'enable', false, ...      % true/false: LSTM有効/無効
+            'enable', true, ...      % true/false: LSTM有効/無効
             'gpu', true, ...         % true/false: GPU使用有効/無効
             'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
@@ -471,108 +473,105 @@ function preset = FlankerTask()
                 'searchSpace', struct(...
                     'learningRate', [0.0001, 0.01], ...  % 学習率範囲
                     'miniBatchSize', [16, 128], ...      % バッチサイズ範囲
-                    'numHiddenUnits', [32, 256], ...     % 隠れユニット数範囲
+                    'lstmUnits', [32, 256], ...     % LSTM ユニット数範囲
                     'numLayers', [1, 3], ...             % LSTM層数範囲
                     'dropoutRate', [0.2, 0.7], ...       % ドロップアウト率範囲
                     'fcUnits', [32, 256] ...             % 全結合層ユニット数範囲
                 ) ...
             ) ...
         ), ...
-        'hybrid', struct(...
-            'enable', false, ...       % true/false: ハイブリッドモデル有効/無効
-            'gpu', false, ...         % true/false: GPU使用有効/無効
-            'optimize', false, ...    % true/false: パラメータ最適化有効/無効
+       'hybrid', struct(...
+            'enable', true, ...       % ハイブリッドモデル有効
+            'gpu', true, ...          % GPU使用有効
+            'optimize', true, ...     % パラメータ最適化有効
             'architecture', struct(...
-                'numClasses', num_classes, ... % クラス数 (自動設定)
+                'numClasses', num_classes, ... % クラス数（自動設定）
+                'batchNorm', true, ...         % バッチ正規化の使用
                 'cnn', struct(...
-                    'inputSize', [], ...        % 入力サイズ (自動設定)
-                    'convLayers', struct(...   % 畳み込み層設定（論文に合わせconv1のみ使用）
+                    'inputSize', [], ...       % 入力サイズ（自動設定）
+                    'convLayers', struct(...
                         'conv1', struct('size', [3 3], 'filters', 32, 'stride', 1, 'padding', 'same') ...
                     ), ...
-                    'poolLayers', struct(...   % プーリング層設定
+                    'poolLayers', struct(...
                         'pool1', struct('size', 2, 'stride', 2) ...
                     ), ...
-                    'dropoutLayers', struct(...% ドロップアウト層設定
-                        'dropout1', 0.3 ...
-                    ) ...
+                    'dropoutLayers', struct(...
+                        'dropout1', 0.4 ...      % ドロップアウト率を0.3から0.4に増加
+                    ), ...
+                    'fullyConnected', [64] ...   % 全結合層のユニット数を削減
                 ), ...
                 'lstm', struct(...
                     'sequenceInputLayer', struct(...
-                        'inputSize', [], ...      % 入力サイズ (自動設定)
-                        'sequenceLength', [], ... % シーケンス長 (自動設定)
-                        'normalization', 'none' ... % 正規化方法
+                        'inputSize', [], ...     % 入力サイズ（自動設定）
+                        'sequenceLength', [], ...% シーケンス長（自動設定）
+                        'normalization', 'none' ...% 正規化方法
                     ), ...
-                    'lstmLayers', struct(...    % LSTM層設定（4層構成）
-                        'lstm1', struct('numHiddenUnits', 256, 'OutputMode', 'sequence'), ...
-                        'lstm2', struct('numHiddenUnits', 256, 'OutputMode', 'sequence'), ...
-                        'lstm3', struct('numHiddenUnits', 256, 'OutputMode', 'sequence'), ...
-                        'lstm4', struct('numHiddenUnits', 64,  'OutputMode', 'last') ...
+                    'lstmLayers', struct(...
+                        'lstm1', struct('numHiddenUnits', 128, 'OutputMode', 'sequence'), ... % 1層目：128ユニット
+                        'lstm2', struct('numHiddenUnits', 64,  'OutputMode', 'last') ...      % 2層目：64ユニット
                     ), ...
-                    'dropoutLayers', struct(... % ドロップアウト層設定
-                        'dropout1', 0.3, ...
-                        'dropout2', 0.4, ...
-                        'dropout3', 0.5, ...
-                        'dropout4', 0.5 ...
-                    ) ...
+                    'dropoutLayers', struct(...
+                        'dropout1', 0.4, ...     % 1層目の出力に対するドロップアウト
+                        'dropout2', 0.5 ...      % 2層目の出力に対するドロップアウト
+                    ), ...
+                    'fullyConnected', 64 ...      % LSTMブランチの全結合層ユニット数
                 ), ...
-                'merge', struct(...            % NEW: マージ層の設定を追加
+                'merge', struct(...
                     'concat', struct(...
-                        'dimension', 3, ...     % 結合する次元
-                        'numInputs', 2, ...     % 入力数（CNNとLSTMの2つ）
-                        'name', 'concat' ...    % レイヤー名
+                        'dimension', 3, ...      % 結合する次元
+                        'numInputs', 2, ...      % 入力数（CNNとLSTMの2つ）
+                        'name', 'concat' ...     % レイヤー名
                     ), ...
                     'globalPooling', struct(...
-                        'enable', true, ...     % グローバルプーリングの有効化
-                        'name', 'gavg' ...      % レイヤー名
+                        'enable', true, ...      % グローバルプーリング有効
+                        'name', 'gavg' ...       % レイヤー名
                     ), ...
                     'fullyConnected', struct(...
                         'layers', [...
-                            struct('units', 256, 'name', 'fc_merge1'), ...
-                            struct('units', 128, 'name', 'fc_merge2')
+                            struct('units', 128, 'name', 'fc_merge1') ... % 1層のみで簡素化
                         ], ...
-                        'activation', 'relu' ... % 活性化関数
+                        'activation', 'relu' ...  % 活性化関数
                     ), ...
                     'dropout', struct(...
-                        'rate', 0.5, ...        % ドロップアウト率
-                        'name', 'dropout_merge' ... % レイヤー名
+                        'rate', 0.5, ...         % ドロップアウト率
+                        'name', 'dropout_merge' ...% レイヤー名
                     ), ...
                     'output', struct(...
                         'activation', 'softmax', ... % 出力層の活性化関数
-                        'name', 'output' ...        % レイヤー名
+                        'name', 'output' ...         % レイヤー名
                     ) ...
-                ), ...
-                'fullyConnected', [128 64], ... % 全結合層ユニット数
-                'batchNorm', true ...          % バッチ正規化の使用
+                ) ...
             ), ...
             'training', struct(...
-                'optimizer', struct(... % オプティマイザ設定
-                    'type', 'adam', ... % オプティマイザ: 'adam'/'sgdm'/'rmsprop'
-                    'learningRate', 0.0001, ... % 学習率
-                    'beta1', 0.9, ...   % Adamのβ1パラメータ
-                    'beta2', 0.999, ... % Adamのβ2パラメータ
-                    'epsilon', 1e-8, ... % 数値安定化係数
-                    'gradientThreshold', 1 ... % 勾配クリッピング閾値
+                'optimizer', struct(...
+                    'type', 'adam', ...           % オプティマイザ：adam
+                    'learningRate', 0.0001, ...     % 学習率
+                    'beta1', 0.9, ...             % Adamのβ1
+                    'beta2', 0.999, ...           % Adamのβ2
+                    'epsilon', 1e-8, ...          % 数値安定化係数
+                    'gradientThreshold', 1 ...    % 勾配クリッピング閾値
                 ), ...
-                'maxEpochs', 100, ...    % 最大エポック数
-                'miniBatchSize', 50, ... % バッチサイズ (論文に合わせ50)
-                'frequency', 10, ... % 検証頻度 (エポック)
-                'patience', 10, ... % 早期終了の待機回数
-                'shuffle', 'every-epoch', ... % データシャッフル方法
-                'validation', struct(... % 検証設定
-                    'enable', false, ...  % 検証の有効化
-                    'kfold', 5 ...      % 交差検証分割数
+                'maxEpochs', 100, ...             % 最大エポック数
+                'miniBatchSize', 50, ...
+                'frequency', 5, ...               % 検証頻度（エポック）
+                'patience', 15, ...               % 早期終了待機回数
+                'shuffle', 'every-epoch', ...     % データシャッフル方法
+                'validation', struct(...
+                    'enable', false, ...          % 検証無効（必要なら有効化を検討）
+                    'kfold', 5 ...                % 交差検証分割数
                 ) ...
             ), ...
             'optimization', struct(...
-                'searchSpace', struct(... % パラメータ探索範囲
-                    'learningRate', [0.0001, 0.01], ...  % 学習率範囲
-                    'miniBatchSize', [16, 128], ...      % バッチサイズ範囲
-                    'cnnFilters', [32, 128], ...         % CNNフィルタ数範囲
-                    'filterSize', [3, 7], ...            % フィルタサイズ範囲
-                    'lstmUnits', [32, 256], ...          % LSTMユニット数範囲
-                    'numLayers', [2, 4], ...             % 層数範囲
-                    'dropoutRate', [0.2, 0.7], ...       % ドロップアウト率範囲
-                    'fcUnits', [64, 256] ...             % 全結合層ユニット数範囲
+                'searchSpace', struct(...
+                    'learningRate', [0.0001, 0.01], ...   % 学習率範囲
+                    'miniBatchSize', [16, 128], ...         % バッチサイズ範囲
+                    'numConvLayers', [1, 3], ...            % CNNの畳み込み層数範囲
+                    'cnnFilters', [32, 128], ...            % CNNフィルタ数範囲
+                    'filterSize', [3, 7], ...               % フィルタサイズ範囲
+                    'lstmUnits', [32, 128], ...             % LSTMユニット数範囲
+                    'numLstmLayers', [2, 4], ...            % LSTM層数
+                    'dropoutRate', [0.4, 0.7], ...          % ドロップアウト率範囲
+                    'fcUnits', [64, 256] ...                % 全結合層ユニット数範囲
                 ) ...
             ) ...
         ), ...

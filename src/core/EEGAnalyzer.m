@@ -290,24 +290,6 @@ classdef EEGAnalyzer < handle
             % データの設定
             obj.rawData = loadedData.rawData;
             obj.labels = loadedData.labels;
-            
-            % デバイス設定の確認（デバッグ出力）
-            fprintf('\n[DEBUG] デバイス設定確認:\n');
-            fprintf('  デバイス名: %s\n', obj.params.device.name);
-            fprintf('  設定チャンネル数: %d\n', obj.params.device.channelCount);
-            if isfield(obj.params.device, 'channels') && ~isempty(obj.params.device.channels)
-                % セル配列の場合は strjoin で連結
-                if iscell(obj.params.device.channels)
-                    channelList = strjoin(obj.params.device.channels, ', ');
-                else
-                    channelList = num2str(obj.params.device.channels);
-                end
-                fprintf('  チャンネル配置: %s\n', channelList);
-            else
-                fprintf('  チャンネル配置: 未定義\n');
-            end
-            fprintf('  サンプルレート: %d Hz\n', obj.params.device.sampleRate);
-            fprintf('---------------------------\n');
         end
         
         function executePreprocessingPipeline(obj)

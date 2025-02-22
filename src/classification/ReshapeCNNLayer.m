@@ -1,69 +1,89 @@
 classdef ReshapeCNNLayer < nnet.layer.Layer & nnet.layer.Formattable
-    properties (Learnable)
-        Weights
-        Bias
+    % ReshapeCNNLayer
+    %   CNNブランチの出力を 4 次元テンソル [1 1 NumFeatures N] に
+    %   リシェイプするカスタムレイヤーです。
+    
+    properties
+        NumFeatures   % CNNブランチの最終出力特徴数
+    end
+    
+    properties (Learnable, SetAccess = private)
+        % Learnableパラメータはありません
+    end
+    
+    properties
+        OutputFormat  % 出力のフォーマット（例："SSCB"）
     end
     
     methods
-        function layer = ReshapeCNNLayer(name)
+        function layer = ReshapeCNNLayer(name, numFeatures)
+            % コンストラクタ
+            if nargin < 2
+                numFeatures = [];
+            end
             layer.Name = name;
-            layer.Description = 'Reshape CNN output to 1x1x128 format';
-            layer.Type = 'Reshape';
-            layer.Weights = [];
-            layer.Bias = [];
+            layer.Description = "Reshape CNN branch output to [1 1 NumFeatures N]";
+            layer.NumFeatures = numFeatures;
+            layer.OutputFormat = ""; % 初期は空文字
         end
         
         function Z = predict(layer, X)
-            [h, w, c, b] = size(X);
-            features = reshape(X, [h*w*c, b]);
-            
-            % 初回実行時に重み初期化
-            if isempty(layer.Weights)
-                inputSize = h*w*c;
-                layer.Weights = randn(128, inputSize) * sqrt(2/inputSize);
-                layer.Bias    = zeros(128,1);
+            % 既存の処理で Z を reshape して得る
+            if ismatrix(X)
+                N = size(X,2);
+                if size(X,1) ~= layer.NumFeatures
+                    error('Input first dimension (%d) does not match expected NumFeatures (%d).', ...
+                          size(X,1), layer.NumFeatures);
+                end
+                Z = reshape(X, [1, 1, layer.NumFeatures, N]);
+            elseif ndims(X)==3
+                if size(X,1)==1
+                    N = size(X,3);
+                    if size(X,2) ~= layer.NumFeatures
+                        error('Input second dimension (%d) does not match expected NumFeatures (%d).', ...
+                              size(X,2), layer.NumFeatures);
+                    end
+                    Z = reshape(X, [1, 1, layer.NumFeatures, N]);
+                else
+                    N = size(X,3);
+                    flattened = reshape(X, [], N);
+                    if size(flattened,1) ~= layer.NumFeatures
+                        error('Flattened dimension (%d) does not match expected NumFeatures (%d).', ...
+                              size(flattened,1), layer.NumFeatures);
+                    end
+                    Z = reshape(flattened, [1, 1, layer.NumFeatures, N]);
+                end
+            elseif ndims(X)==4
+                Ztemp = squeeze(mean(mean(X,1),2));  % [C x N]
+                if size(Ztemp,1) ~= layer.NumFeatures
+                    error('Pooled channel dimension (%d) does not match expected NumFeatures (%d).', ...
+                          size(Ztemp,1), layer.NumFeatures);
+                end
+                N = size(Ztemp,2);
+                Z = reshape(Ztemp, [1, 1, layer.NumFeatures, N]);
+            else
+                error('Unsupported input dimensions.');
             end
-            
-            % 全結合 (Weights, Bias) を適用
-            features = layer.Weights * features + layer.Bias;
-            
-            % [1,1,128,batch] へ reshape
-            Z = reshape(features, [1,1,128,b]);
+        
+            % もし入力が dlarray なら、同じフォーマット情報を出力にも付与する
+            if isa(X, 'dlarray')
+                % ここでは必ず 'SSCB' とするか、もしくは X.Format を利用する
+                Z = dlarray(Z, 'SSCB');
+            end
         end
         
         function [Z, memory] = forward(layer, X)
             Z = layer.predict(X);
-            % memory には後方伝搬で必要な情報（ここでは X）を保存
-            memory = X;
+            memory = [];
         end
         
-        function [dLdX, dLdW, dLdB] = backward(layer, X, Z, dLdZ, memory)
-            % 入力 X (memory) の形状
-            [h, w, c, b] = size(memory);
-            
-            % dLdZ (勾配) を [128, b] へ reshape
-            dLdFeatures = reshape(dLdZ, [128, b]);
-            
-            %----------------------
-            % 1) dLdX の計算
-            %----------------------
-            %   dLdX = W' * dLdFeatures
-            dLdX = layer.Weights' * dLdFeatures;
-            dLdX = reshape(dLdX, [h, w, c, b]);
-            
-            %----------------------
-            % 2) dLdW の計算
-            %----------------------
-            %   入力 X を [h*w*c, b] にフラット化しておき、
-            %   dLdW = dLdFeatures * X'
-            features = reshape(memory, [h*w*c, b]);
-            dLdW = dLdFeatures * features';
-            
-            %----------------------
-            % 3) dLdB の計算
-            %----------------------
-            %   dLdB はバッチ方向に勾配を合計
-            dLdB = sum(dLdFeatures, 2);
+        function dX = backward(layer, X, Z, dZ, memory)
+            dX = reshape(dZ, size(X));
+        end
+        
+        function layer = setOutputFormat(layer, format)
+            % 出力フォーマットを設定するメソッド
+            layer.OutputFormat = format;
         end
     end
 end
