@@ -360,6 +360,8 @@ classdef EEGAnalyzer < handle
                 % エポック化
                 [epochs, epochLabels, info] = obj.epoching.epoching(data, obj.labels);
                 obj.processingInfo.epoch = info;
+
+                
                 
                 % データ拡張
                 if obj.params.signal.preprocessing.augmentation.enable

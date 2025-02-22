@@ -36,6 +36,7 @@ classdef EEGAcquisitionManager < handle
         baselineCorrector  % ベースライン補正処理
         downSampler       % ダウンサンプリング処理
         firFilter         % FIRフィルタ処理
+        iirFilter         % IIRフィルタ処理
         notchFilter       % ノッチフィルタ処理
         normalizer        % 信号正規化処理
         
@@ -410,6 +411,7 @@ classdef EEGAcquisitionManager < handle
                 obj.baselineCorrector = BaselineCorrector(obj.params); % ベースライン補正
                 obj.downSampler = DownSampler(obj.params);            % ダウンサンプリング
                 obj.firFilter = FIRFilterDesigner(obj.params);        % FIRフィルタ
+                obj.iirFilter = IIRFilterDesigner(obj.params);        % IIRフィルタ
                 obj.notchFilter = NotchFilterDesigner(obj.params);    % ノッチフィルタ
                 obj.normalizer = EEGNormalizer(obj.params);           % 正規化処理
                 
@@ -1182,6 +1184,9 @@ classdef EEGAcquisitionManager < handle
                     end
                     if obj.params.signal.preprocessing.filter.fir.enable
                         [data, ~] = obj.firFilter.designAndApplyFilter(data);
+                    end
+                    if obj.params.signal.preprocessing.filter.iir.enable
+                        [data, ~] = obj.iirFilter.designAndApplyFilter(data);
                     end
 
                     % 正規化処理

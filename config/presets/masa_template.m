@@ -89,7 +89,7 @@ function preset = template()
             'overlap', 0.5, ...     % オーバーラップ率 (0-0.9) - 区間平均で使用
             'intervalType', 'auto', ... % 区間タイプ: 'auto'/'prepost'/'custom' 'auto': 自動区間分割 (windowSize, overlapを使用) - デフォルト 'prepost': プレ/ポストベースライン区間を使用 'custom': カスタム区間を指定
             'preBaselineDuration', 0.5, ... % プレベースライン区間長 (秒, intervalType='prepost' の場合) - イベント前などのベースライン区間
-            'postBaselineDuration', 0.5, ... % ポストベースライン区間長 (秒, intervalType='prepost' の場合) - イベント後などのベースライン区間
+            'postBaselineDuration', 0, ... % ポストベースライン区間長 (秒, intervalType='prepost' の場合) - イベント後などのベースライン区間
             'baselineIntervals', [], ... % カスタムベースライン区間 (Nx2 行列, intervalType='custom' の場合) 各行が [開始時間(秒), 終了時間(秒)] を表す区間 例: [0, 1; 5, 6; 10, 12]
             'trendType', 'polynomial', ... % トレンド除去タイプ: 'polynomial'/'linear''polynomial': 多項式フィッティング - デフォルト (3次)linear': 線形フィッティング (1次多項式)
             'polynomialOrder', 3 ...      % 多項式次数 (trendType='polynomial' の場合, 1以上の整数) - デフォルトは3
@@ -209,11 +209,18 @@ function preset = template()
                 ), ...
                 'windowSize', 1.0 ...  % 解析窓サイズ (0.5-2.0 秒)
             ), ...
-            'baseline', struct(...    % ベースライン補正
-                'enable', false, ...  % true/false: ベースライン補正有効/無効
+            'baseline', struct(...    % ベースライン補正 (修正後)
+                'enable', true, ...  % true/false: ベースライン補正有効/無効
                 'method', 'interval', ... % 方法: 'interval'/'trend'/'dc'/'moving'
-                'windowSize', 1.0, ... % 窓サイズ (0.5-5.0 秒)
-                'overlap', 0.5 ...     % オーバーラップ率 (0-0.9)
+                'applyToChannels', [], ... % 適用チャネル (空の場合は全チャネル) 例: [1, 3, 5]
+                'windowSize', 1.0, ... % 窓サイズ (秒) - 移動平均、区間平均で使用
+                'overlap', 0.5, ...     % オーバーラップ率 (0-0.9) - 区間平均で使用
+                'intervalType', 'auto', ... % 区間タイプ: 'auto'/'prepost'/'custom' 'auto': 自動区間分割 (windowSize, overlapを使用) - デフォルト 'prepost': プレ/ポストベースライン区間を使用 'custom': カスタム区間を指定
+                'preBaselineDuration', 0.5, ... % プレベースライン区間長 (秒, intervalType='prepost' の場合) - イベント前などのベースライン区間
+                'postBaselineDuration', 0, ... % ポストベースライン区間長 (秒, intervalType='prepost' の場合) - イベント後などのベースライン区間
+                'baselineIntervals', [], ... % カスタムベースライン区間 (Nx2 行列, intervalType='custom' の場合) 各行が [開始時間(秒), 終了時間(秒)] を表す区間 例: [0, 1; 5, 6; 10, 12]
+                'trendType', 'polynomial', ... % トレンド除去タイプ: 'polynomial'/'linear''polynomial': 多項式フィッティング - デフォルト (3次)linear': 線形フィッティング (1次多項式)
+                'polynomialOrder', 3 ...      % 多項式次数 (trendType='polynomial' の場合, 1以上の整数) - デフォルトは3
             ), ...
             'downsample', struct(...  % ダウンサンプリング設定
                 'enable', false, ...  % true/false: ダウンサンプリング有効/無効
