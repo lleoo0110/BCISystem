@@ -15,6 +15,9 @@ classdef LSTMClassifier < handle
 
         % 過学習監視用
         overfitMetrics      % 過学習メトリクス
+
+        % データ拡張コンポーネント
+        dataAugmenter
     end
 
     properties (Access = public)
@@ -29,11 +32,9 @@ classdef LSTMClassifier < handle
             obj.isInitialized = false;
             obj.trainingHistory = struct('loss', [], 'accuracy', []);
             obj.validationHistory = struct('loss', [], 'accuracy', []);
-            obj.bestValAccuracy = 0;
-            obj.patienceCounter = 0;
-            obj.currentEpoch = 0;
             obj.overfitMetrics = struct();
             obj.useGPU = params.classifier.lstm.gpu;
+            obj.dataAugmenter = DataAugmenter(params);
         end
 
         %% LSTMの学習開始
@@ -49,7 +50,14 @@ classdef LSTMClassifier < handle
                 [trainData, trainLabels, valData, valLabels, testData, testLabels] = ...
                     obj.splitDataset(processedData, processedLabel);
 
-                % データ前処理（LSTM用のセル配列に変換）
+                % 学習データのみ拡張
+                if obj.params.signal.preprocessing.augmentation.enable
+                    [trainData, trainLabels, ~] = obj.dataAugmenter.augmentData(trainData, trainLabels);
+                    fprintf('訓練データを拡張しました:\n');
+                    fprintf('  訓練データ: %d サンプル\n', length(trainData));
+                end
+
+                % データ前処理
                 prepTrainData = obj.prepareDataForLSTM(trainData);
                 prepValData   = obj.prepareDataForLSTM(valData);
                 prepTestData  = obj.prepareDataForLSTM(testData);
@@ -283,22 +291,22 @@ classdef LSTMClassifier < handle
                 k = obj.params.classifier.evaluation.kfold;
                 
                 % データサイズの取得
-                [~, ~, numTrials] = size(data);
-                fprintf('Total epochs: %d\n', numTrials);
+                [~, ~, numEpochs] = size(data);
+                fprintf('Total epochs: %d\n', numEpochs);
         
-                % インデックスのシャッフル（再現性のため固定シード）
-                rng('default');
-                shuffledIdx = randperm(numTrials);
+                % インデックスのシャッフル
+                rng('default'); % 再現性のため
+                shuffledIdx = randperm(numEpochs);
         
-                % 分割比率の設定
-                trainRatio = (k-1)/k;  % 訓練データ
-                valRatio = 1/(2*k);    % 検証データ
-                testRatio = 1/(2*k);   % テストデータ
+                % 分割比率の計算
+                trainRatio = (k-1)/k;  % 1-k/k
+                valRatio = 1/(2*k);    % k/2k
+                testRatio = 1/(2*k);   % k/2k
         
                 % データ数の計算
-                numTrain = floor(numTrials * trainRatio);
-                numVal = floor(numTrials * valRatio);
-        
+                numTrain = floor(numEpochs * trainRatio);
+                numVal = floor(numEpochs * valRatio);
+                
                 % インデックスの分割
                 trainIdx = shuffledIdx(1:numTrain);
                 valIdx = shuffledIdx(numTrain+1:numTrain+numVal);
@@ -313,35 +321,34 @@ classdef LSTMClassifier < handle
                 
                 testData = data(:,:,testIdx);
                 testLabels = labels(testIdx);
-        
-                % データ分割情報の表示
+
                 fprintf('データ分割 (k=%d):\n', k);
                 fprintf('  訓練データ: %d サンプル (%.1f%%)\n', ...
-                    length(trainIdx), (length(trainIdx)/numTrials)*100);
+                    length(trainIdx), (length(trainIdx)/numEpochs)*100);
                 fprintf('  検証データ: %d サンプル (%.1f%%)\n', ...
-                    length(valIdx), (length(valIdx)/numTrials)*100);
+                    length(valIdx), (length(valIdx)/numEpochs)*100);
                 fprintf('  テストデータ: %d サンプル (%.1f%%)\n', ...
-                    length(testIdx), (length(testIdx)/numTrials)*100);
-        
-                % クラスの分布を確認
-                obj.displayClassDistribution('訓練データ', trainLabels);
-                obj.displayClassDistribution('検証データ', valLabels);
-                obj.displayClassDistribution('テストデータ', testLabels);
+                    length(testIdx), (length(testIdx)/numEpochs)*100);
         
                 % データの検証
                 if isempty(trainData) || isempty(valData) || isempty(testData)
                     error('一つ以上のデータセットが空です');
                 end
         
+                % クラスの分布を確認
+                obj.checkClassDistribution('訓練', trainLabels);
+                obj.checkClassDistribution('検証', valLabels);
+                obj.checkClassDistribution('テスト', testLabels);
+        
             catch ME
                 error('データ分割に失敗: %s', ME.message);
             end
         end
-
-        % クラスの分布を表示するヘルパーメソッド
-        function displayClassDistribution(~, setName, labels)
+        
+        % クラスの分布を確認するヘルパーメソッド
+        function checkClassDistribution(~, setName, labels)
             uniqueLabels = unique(labels);
-            fprintf('\n%sのクラス分布:\n', setName);
+            fprintf('\n%sデータのクラス分布:\n', setName);
             for i = 1:length(uniqueLabels)
                 count = sum(labels == uniqueLabels(i));
                 fprintf('  クラス %d: %d サンプル (%.1f%%)\n', ...

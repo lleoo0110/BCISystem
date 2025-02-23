@@ -15,6 +15,9 @@ classdef HybridClassifier < handle
         
         % 過学習監視用
         overfitMetrics      % 過学習メトリクス
+
+        % データ拡張コンポーネント
+        dataAugmenter
     end
     
     properties (Access = public)
@@ -28,37 +31,34 @@ classdef HybridClassifier < handle
             obj.isInitialized = false;
             obj.initializeProperties();
             obj.useGPU = params.classifier.hybrid.gpu;
+            obj.dataAugmenter = DataAugmenter(params);
         end
         
-        function results = trainHybrid(obj, processedData, processedLabel)
-            % 入力が1つの場合は、同じデータを両ブランチに供給
-            if ~iscell(processedData)
-                processedData = {processedData, processedData};
-            elseif isscalar(processedData)
-                processedData = {processedData{1}, processedData{1}};
-            elseif numel(processedData) ~= 2
-                error('ProcessedData must be a single array or a cell array with one or two elements.');
-            end
-            
+        function results = trainHybrid(obj, processedData, processedLabel)            
             try
                 fprintf('\n=== Starting Hybrid Training ===\n');
-                
-                cnnData = processedData{1};
-                lstmData = processedData{2};
-                
-                % サンプル数の一致を確認
-                if size(cnnData,3) ~= size(lstmData,3)
-                    error('The number of samples in cnnData and lstmData must be equal');
-                end
-                
+
                 % データ分割
-                numSamples = size(cnnData, 3);
-                [trainIdx, valIdx, testIdx] = obj.splitDatasetIndices(numSamples);
-                
-                % ラベルの分割
-                trainLabels = processedLabel(trainIdx);
-                valLabels = processedLabel(valIdx);
-                testLabels = processedLabel(testIdx);
+                [trainData, trainLabels, valData, valLabels, testData, testLabels] = ...
+                    obj.splitDataset(processedData, processedLabel);
+
+                % 学習データのみ拡張
+                if obj.params.signal.preprocessing.augmentation.enable
+                    [trainData, trainLabels, ~] = obj.dataAugmenter.augmentData(trainData, trainLabels);
+                    fprintf('訓練データを拡張しました:\n');
+                    fprintf('  訓練データ: %d サンプル\n', length(trainData));
+                end
+
+                % データ割り当て
+                % CNN
+                cnnTrainData = trainData;
+                cnnValData = valData;
+                cnnTestData = testData;
+
+                % LSTM
+                lstmTrainData = trainData;
+                lstmValData = valData;
+                lstmTestData = testData;
                 
                 % ラベルを列ベクトルに変換し、categorical にする
                 trainLabels = categorical(trainLabels(:));
@@ -66,14 +66,14 @@ classdef HybridClassifier < handle
                 testLabels  = categorical(testLabels(:));
                 
                 % データの前処理（CNN）
-                prepTrainCNN = obj.prepareDataForCNN(cnnData(:,:,trainIdx));
-                prepValCNN   = obj.prepareDataForCNN(cnnData(:,:,valIdx));
-                prepTestCNN  = obj.prepareDataForCNN(cnnData(:,:,testIdx));
+                prepTrainCNN = obj.prepareDataForCNN(cnnTrainData);
+                prepValCNN   = obj.prepareDataForCNN(cnnValData);
+                prepTestCNN  = obj.prepareDataForCNN(cnnTestData);
                 
                 % データの前処理（LSTM）
-                prepTrainLSTM = obj.prepareDataForLSTM(lstmData(:,:,trainIdx));
-                prepValLSTM   = obj.prepareDataForLSTM(lstmData(:,:,valIdx));
-                prepTestLSTM  = obj.prepareDataForLSTM(lstmData(:,:,testIdx));
+                prepTrainLSTM = obj.prepareDataForLSTM(lstmTrainData);
+                prepValLSTM   = obj.prepareDataForLSTM(lstmValData);
+                prepTestLSTM  = obj.prepareDataForLSTM(lstmTestData);
                 
                 % LSTM 用のセル配列を明示的に縦ベクトルに変換
                 prepTrainLSTM = prepTrainLSTM(:);
@@ -216,6 +216,78 @@ classdef HybridClassifier < handle
             fprintf('  Training: %d samples (%.1f%%)\n', length(trainIdx), (length(trainIdx)/numSamples)*100);
             fprintf('  Validation: %d samples (%.1f%%)\n', length(valIdx), (length(valIdx)/numSamples)*100);
             fprintf('  Test: %d samples (%.1f%%)\n', length(testIdx), (length(testIdx)/numSamples)*100);
+        end
+
+        %% データセットの分割（訓練/検証/テスト）
+        function [trainData, trainLabels, valData, valLabels, testData, testLabels] = splitDataset(obj, data, labels)
+            try
+                % 分割数の取得
+                k = obj.params.classifier.evaluation.kfold;
+                
+                % データサイズの取得
+                [~, ~, numEpochs] = size(data);
+                fprintf('Total epochs: %d\n', numEpochs);
+        
+                % インデックスのシャッフル
+                rng('default'); % 再現性のため
+                shuffledIdx = randperm(numEpochs);
+        
+                % 分割比率の計算
+                trainRatio = (k-1)/k;  % 1-k/k
+                valRatio = 1/(2*k);    % k/2k
+                testRatio = 1/(2*k);   % k/2k
+        
+                % データ数の計算
+                numTrain = floor(numEpochs * trainRatio);
+                numVal = floor(numEpochs * valRatio);
+                
+                % インデックスの分割
+                trainIdx = shuffledIdx(1:numTrain);
+                valIdx = shuffledIdx(numTrain+1:numTrain+numVal);
+                testIdx = shuffledIdx(numTrain+numVal+1:end);
+        
+                % データの分割
+                trainData = data(:,:,trainIdx);
+                trainLabels = labels(trainIdx);
+                
+                valData = data(:,:,valIdx);
+                valLabels = labels(valIdx);
+                
+                testData = data(:,:,testIdx);
+                testLabels = labels(testIdx);
+
+                fprintf('データ分割 (k=%d):\n', k);
+                fprintf('  訓練データ: %d サンプル (%.1f%%)\n', ...
+                    length(trainIdx), (length(trainIdx)/numEpochs)*100);
+                fprintf('  検証データ: %d サンプル (%.1f%%)\n', ...
+                    length(valIdx), (length(valIdx)/numEpochs)*100);
+                fprintf('  テストデータ: %d サンプル (%.1f%%)\n', ...
+                    length(testIdx), (length(testIdx)/numEpochs)*100);
+        
+                % データの検証
+                if isempty(trainData) || isempty(valData) || isempty(testData)
+                    error('一つ以上のデータセットが空です');
+                end
+        
+                % クラスの分布を確認
+                obj.checkClassDistribution('訓練', trainLabels);
+                obj.checkClassDistribution('検証', valLabels);
+                obj.checkClassDistribution('テスト', testLabels);
+        
+            catch ME
+                error('データ分割に失敗: %s', ME.message);
+            end
+        end
+        
+        % クラスの分布を確認するヘルパーメソッド
+        function checkClassDistribution(~, setName, labels)
+            uniqueLabels = unique(labels);
+            fprintf('\n%sデータのクラス分布:\n', setName);
+            for i = 1:length(uniqueLabels)
+                count = sum(labels == uniqueLabels(i));
+                fprintf('  クラス %d: %d サンプル (%.1f%%)\n', ...
+                    uniqueLabels(i), count, (count/length(labels))*100);
+            end
         end
         
         function preparedData = prepareDataForCNN(~, data)

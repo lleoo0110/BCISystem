@@ -15,6 +15,9 @@ classdef CNNClassifier < handle
         
         % 過学習監視用
         overfitMetrics     % 過学習メトリクス
+
+        % データ拡張コンポーネント
+        dataAugmenter
     end
     
     properties (Access = public)
@@ -28,6 +31,7 @@ classdef CNNClassifier < handle
             obj.isInitialized = false;
             obj.initializeProperties();
             obj.useGPU = params.classifier.cnn.gpu;
+            obj.dataAugmenter = DataAugmenter(params);
         end
 
         function results = trainCNN(obj, processedData, processedLabel)
@@ -47,6 +51,13 @@ classdef CNNClassifier < handle
                 % データを3セットに分割
                 [trainData, trainLabels, valData, valLabels, testData, testLabels] = ...
                     obj.splitDataset(processedData, processedLabel);
+
+                % 学習データのみ拡張
+                if obj.params.signal.preprocessing.augmentation.enable
+                    [trainData, trainLabels, ~] = obj.dataAugmenter.augmentData(trainData, trainLabels);
+                    fprintf('訓練データを拡張しました:\n');
+                    fprintf('  訓練データ: %d サンプル\n', length(trainData));
+                end
                 
                 % 各データの準備
                 prepTrainData = obj.prepareDataForCNN(trainData);
@@ -293,8 +304,7 @@ classdef CNNClassifier < handle
                 
                 testData = data(:,:,testIdx);
                 testLabels = labels(testIdx);
-        
-                % 分割情報の表示
+
                 fprintf('データ分割 (k=%d):\n', k);
                 fprintf('  訓練データ: %d サンプル (%.1f%%)\n', ...
                     length(trainIdx), (length(trainIdx)/numEpochs)*100);
