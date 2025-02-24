@@ -3,9 +3,9 @@ function preset = character()
     preset_info = struct(...
         'name', 'character', ...
         'description', 'Character Control preset', ...
-        'version', '3.2', ...
+        'version', '3.3', ...
         'author', 'LLEOO', ...
-        'date', '2025-02-21' ...
+        'date', '2025-02-24' ...
     );
 
     %% === トリガーマッピング設定 ===
@@ -420,7 +420,7 @@ function preset = character()
                 ), ...
                 'maxEpochs', 100, ... % 最大エポック数 (10-1000)
                 'miniBatchSize', 128, ... % ミニバッチサイズ (8-512)
-                'frequency', 50, ... % 検証頻度 (エポック)
+                'frequency', 15, ... % 検証頻度 (エポック)
                 'patience', 20, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
@@ -476,7 +476,7 @@ function preset = character()
                 ), ...
                 'maxEpochs', 100, ...  % 最大エポック数 (5-100)
                 'miniBatchSize', 64, ... % ミニバッチサイズ (8-128)
-                'frequency', 50, ... % 検証頻度 (反復)
+                'frequency', 15, ... % 検証頻度 (反復)
                 'patience', 15, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
@@ -568,7 +568,7 @@ function preset = character()
                 ), ...
                 'maxEpochs', 100, ...             % 最大エポック数
                 'miniBatchSize', 50, ...
-                'frequency', 50, ...               % 検証頻度
+                'frequency', 15, ...               % 検証頻度
                 'patience', 15, ...               % 早期終了待機回数
                 'shuffle', 'every-epoch', ...     % データシャッフル方法
                 'validation', struct(...
@@ -619,10 +619,10 @@ function preset = character()
             'visualization', struct(... % 可視化設定
                 'refreshRate', 0.2, ... % 表示更新レート (0.1-1.0 秒)
                 'enable', struct(...    % 表示項目の有効/無効
-                    'rawData', true, ... % true/false: 生データ表示
-                    'emgData', true, ... % true/false: EMGデータ表示
-                    'spectrum', true, ... % true/false: スペクトル表示
-                    'ersp', true ...     % true/false: ERSP表示
+                    'rawData', false, ... % true/false: 生データ表示
+                    'emgData', false, ... % true/false: EMGデータ表示
+                    'spectrum', false, ... % true/false: スペクトル表示
+                    'ersp', false ...     % true/false: ERSP表示
                 ), ...
                 'channels', struct(...  % チャンネル表示設定
                     'eeg', struct(...   % EEGチャンネル

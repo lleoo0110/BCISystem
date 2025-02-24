@@ -163,15 +163,11 @@ classdef CNNClassifier < handle
                     error('Invalid testMetrics structure');
                 end
                 
-                fprintf('Training Accuracy: %.2f%%\n', trainAcc(end));
                 fprintf('Validation Accuracy: %.2f%%\n', valAcc(end));
                 fprintf('Test Accuracy: %.2f%%\n', testAcc);
         
-                % Generalization GapとPerformance Gapの計算
-                genGap = abs(trainAcc(end) - valAcc(end));
-                perfGap = abs(trainAcc(end) - testAcc);
-                
-                fprintf('Generalization Gap: %.2f%%\n', genGap);
+                % Performance Gapの計算（検証結果とテスト結果の差）
+                perfGap = abs(max(valAcc) - testAcc);
                 fprintf('Performance Gap: %.2f%%\n', perfGap);
         
                 % トレンド分析
@@ -196,7 +192,7 @@ classdef CNNClassifier < handle
                 isLearningProgressing = std(diff(trainAcc)) > 0.01;
                 
                 % 過学習の重大度判定
-                severity = obj.determineOverfittingSeverity(genGap, perfGap, isCompletelyBiased, isLearningProgressing);
+                severity = obj.determineOverfittingSeverity(perfGap, isCompletelyBiased, isLearningProgressing);
                 
                 % 最適エポックの検出
                 [optimalEpoch, totalEpochs] = obj.findOptimalEpoch(valAcc);
@@ -204,7 +200,6 @@ classdef CNNClassifier < handle
                 
                 % メトリクスの構築
                 metrics = struct(...
-                    'generalizationGap', genGap, ...
                     'performanceGap', perfGap, ...
                     'isCompletelyBiased', isCompletelyBiased, ...
                     'isLearningProgressing', isLearningProgressing, ...
@@ -357,6 +352,9 @@ classdef CNNClassifier < handle
                    end
                    valLabels = categorical(valLabels, uniqueLabels);
                end
+
+               % 検証データ
+               valDS = {valData, valLabels};
         
                % トレーニング情報の初期化
                trainInfo = struct(...
@@ -381,12 +379,11 @@ classdef CNNClassifier < handle
                    'Plots', 'none', ...
                    'Shuffle', obj.params.classifier.cnn.training.shuffle, ...
                    'ExecutionEnvironment', executionEnvironment, ...
-                   'Verbose', true);
-        
-               % 検証データの設定
-               options.ValidationData = {valData, valLabels};
-               options.ValidationFrequency = obj.params.classifier.cnn.training.frequency;
-               options.ValidationPatience = obj.params.classifier.cnn.training.patience;
+                   'OutputNetwork', 'best-validation', ...
+                   'Verbose', true, ...
+                   'ValidationData', valDS, ...
+                   'ValidationFrequency', obj.params.classifier.cnn.training.frequency, ...
+                   'ValidationPatience', obj.params.classifier.cnn.training.patience);
        
                % レイヤーの構築とモデルの学習
                layers = obj.buildCNNLayers(trainData);
@@ -721,16 +718,16 @@ classdef CNNClassifier < handle
                 'stopping_efficiency', minLossEpoch / totalEpochs);
         end
 
-        function severity = determineOverfittingSeverity(~, genGap, perfGap, isCompletelyBiased, isLearningProgressing)
+        function severity = determineOverfittingSeverity(~, perfGap, isCompletelyBiased, isLearningProgressing)
             if isCompletelyBiased
                 severity = 'critical';
             elseif ~isLearningProgressing
                 severity = 'failed';
-            elseif genGap > 10 || perfGap > 15
+            elseif perfGap > 15
                 severity = 'severe';
-            elseif genGap > 5 || perfGap > 8
+            elseif perfGap > 8
                 severity = 'moderate';
-            elseif genGap > 3 || perfGap > 5
+            elseif perfGap > 5
                 severity = 'mild';
             else
                 severity = 'none';

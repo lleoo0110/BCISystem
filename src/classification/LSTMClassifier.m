@@ -216,72 +216,28 @@ classdef LSTMClassifier < handle
 
         %% トレーニングオプションの設定（検証データがある場合は自動設定）
         function options = getTrainingOptions(obj, valData, valLabels)
-            training = obj.params.classifier.lstm.training;
             if obj.useGPU
-                execEnv = 'gpu';
-            else
-                execEnv = 'cpu';
+                executionEnvironment = 'cpu';
+               if obj.useGPU
+                   executionEnvironment = 'gpu';
+               end
             end
+
+            valDS = {valData, valLabels};
         
-            options = trainingOptions(training.optimizer.type, ...
-                'InitialLearnRate', training.optimizer.learningRate, ...
-                'MaxEpochs', training.maxEpochs, ...
-                'MiniBatchSize', training.miniBatchSize, ...
-                'GradientThreshold', training.optimizer.gradientThreshold, ...
-                'Shuffle', training.shuffle, ...
-                'Plots', 'none', ...
-                'ExecutionEnvironment', execEnv, ...
-                'Verbose', true);
-
-            % 検証データの設定
-            options.ValidationData = {valData, categorical(valLabels)};
-            options.ValidationFrequency = training.frequency;
-            options.ValidationPatience = training.patience;
+            options = trainingOptions(obj.params.classifier.lstm.training.optimizer.type, ...
+                   'InitialLearnRate', obj.params.classifier.lstm.training.optimizer.learningRate, ...
+                   'MaxEpochs', obj.params.classifier.lstm.training.maxEpochs, ...
+                   'MiniBatchSize', obj.params.classifier.lstm.training.miniBatchSize, ...
+                   'Plots', 'none', ...
+                   'Shuffle', obj.params.classifier.lstm.training.shuffle, ...
+                   'ExecutionEnvironment', executionEnvironment, ...
+                   'OutputNetwork', 'best-validation', ...
+                   'Verbose', true, ...
+                   'ValidationData', valDS, ...
+                   'ValidationFrequency', obj.params.classifier.lstm.training.frequency, ...
+                   'ValidationPatience', obj.params.classifier.lstm.training.patience); 
         end
-
-        %% トレーニング進捗のコールバック関数
-        % function stop = trainingOutputFcn(obj, info)
-        %     stop = false;
-        % 
-        %     if info.State == "start"
-        %         obj.currentEpoch = 0;
-        %         return;
-        %     end
-        % 
-        %     % 学習情報の更新
-        %     obj.currentEpoch = obj.currentEpoch + 1;
-        % 
-        %     % 学習履歴の更新
-        %     if isfield(info, 'TrainingLoss')
-        %         obj.trainingHistory.loss(end+1) = info.TrainingLoss;
-        %     end
-        %     if isfield(info, 'TrainingAccuracy')
-        %         obj.trainingHistory.accuracy(end+1) = info.TrainingAccuracy;
-        %     end
-        % 
-        %     % 検証データがある場合の処理
-        %     if ~isempty(info.ValidationLoss)
-        %         currentAccuracy = info.ValidationAccuracy;
-        % 
-        %         % 検証履歴の更新
-        %         obj.validationHistory.loss(end+1) = info.ValidationLoss;
-        %         obj.validationHistory.accuracy(end+1) = info.ValidationAccuracy;
-        % 
-        %         % Early Stopping判定
-        %         if currentAccuracy > obj.bestValAccuracy
-        %             obj.bestValAccuracy = currentAccuracy;
-        %             obj.patienceCounter = 0;
-        %         else
-        %             obj.patienceCounter = obj.patienceCounter + 1;
-        %             if obj.patienceCounter >= obj.params.classifier.lstm.training.patience
-        %                 fprintf('\nEarly stopping: エポック %d で学習を終了\n', obj.currentEpoch);
-        %                 fprintf('最良検証精度 %.2f%% を %d エポック更新できず\n', ...
-        %                     obj.bestValAccuracy * 100, obj.patienceCounter);
-        %                 stop = true;
-        %             end
-        %         end
-        %     end
-        % end
 
         %% データセットの分割（訓練/検証/テスト）
         function [trainData, trainLabels, valData, valLabels, testData, testLabels] = splitDataset(obj, data, labels)
@@ -668,16 +624,12 @@ classdef LSTMClassifier < handle
                 trainAcc = history.TrainingAccuracy;
                 valAcc = history.ValidationAccuracy;
                 testAcc = testMetrics.accuracy * 100;
-                
-                fprintf('訓練精度: %.2f%%\n', trainAcc(end));
-                fprintf('検証精度: %.2f%%\n', valAcc(end));
-                fprintf('テスト精度: %.2f%%\n', testAcc);
+
+                fprintf('Validation Accuracy: %.2f%%\n', valAcc(end));
+                fprintf('Test Accuracy: %.2f%%\n', testAcc);
         
-                % Generalization GapとPerformance Gapの計算
-                genGap = abs(trainAcc(end) - valAcc(end));
-                perfGap = abs(trainAcc(end) - testAcc);
-                
-                fprintf('\nGeneralization Gap: %.2f%%\n', genGap);
+                % Performance Gapの計算（検証結果とテスト結果の差）
+                perfGap = abs(max(valAcc) - testAcc);
                 fprintf('Performance Gap: %.2f%%\n', perfGap);
         
                 % 完全な偏りの検出
@@ -719,11 +671,10 @@ classdef LSTMClassifier < handle
                 fprintf('Optimal Epoch: %d/%d\n', optimalEpoch, totalEpochs);
         
                 % 過学習の重大度判定
-                severity = obj.determineOverfittingSeverity(genGap, perfGap, isCompletelyBiased, isLearningProgressing);
+                severity = obj.determineOverfittingSeverity(perfGap, isCompletelyBiased, isLearningProgressing);
         
                 % メトリクスの構築
                 metrics = struct(...
-                    'generalizationGap', genGap, ...
                     'performanceGap', perfGap, ...
                     'isCompletelyBiased', isCompletelyBiased, ...
                     'isLearningProgressing', isLearningProgressing, ...
@@ -814,16 +765,16 @@ classdef LSTMClassifier < handle
         end
 
         %% 過学習の重症度判定
-        function severity = determineOverfittingSeverity(~, genGap, perfGap, isCompletelyBiased, isLearningProgressing)
+        function severity = determineOverfittingSeverity(~, perfGap, isCompletelyBiased, isLearningProgressing)
             if isCompletelyBiased
                 severity = 'critical';
             elseif ~isLearningProgressing
                 severity = 'failed';
-            elseif genGap > 10 || perfGap > 15
+            elseif perfGap > 15
                 severity = 'severe';
-            elseif genGap > 5 || perfGap > 8
+            elseif perfGap > 8
                 severity = 'moderate';
-            elseif genGap > 3 || perfGap > 5
+            elseif perfGap > 5
                 severity = 'mild';
             else
                 severity = 'none';

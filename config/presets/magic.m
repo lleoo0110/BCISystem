@@ -3,9 +3,9 @@ function preset = magic()
     preset_info = struct(...
         'name', 'magic', ...
         'description', 'Magic Game preset', ...
-        'version', '1.0', ...
+        'version', '2.0', ...
         'author', 'LLEOO', ...
-        'date', '2025-02-21' ...
+        'date', '2025-02-24' ...
     );
 
     %% === トリガーマッピング設定 ===
@@ -31,7 +31,7 @@ function preset = magic()
     % Lab Streaming Layer通信の設定
     lsl = struct(...
         'simulate', struct(...           % シミュレーションモード設定
-            'enable', true, ...          % true/false: シミュレーション有効/無効
+            'enable', false, ...          % true/false: シミュレーション有効/無効
             'signal', struct(...         % シミュレーション信号の設定
                 'alpha', struct(...      % α波シミュレーション
                     'freq', 10, ...      % 周波数 (8-13 Hz)
@@ -48,7 +48,7 @@ function preset = magic()
     %% === データ収集設定 ===
     % データ収集に関する基本設定
     acquisition = struct(...
-        'mode', 'online', ...           % モード: 'online'/'offline'
+        'mode', 'offline', ...           % モード: 'online'/'offline'
         'emg', struct(...               % EMG計測の設定
             'enable', false, ...        % true/false: EMG計測有効/無効
             'channels', struct(...      % EMGチャンネル設定
@@ -159,14 +159,14 @@ function preset = magic()
             'analysis', 2.0, ...      % 解析窓長 (0.5-10.0 秒)
             'stimulus', 6.0, ...      % 刺激提示時間 (1.0-30.0 秒)
             'bufferSize', 15, ...     % バッファサイズ (5-30 秒)
-            'updateBuffer', 0.75, ...    % バッファ更新間隔 (0.1-2.0 秒)
+            'updateBuffer', 1, ...    % バッファ更新間隔 (0.1-2.0 秒)
             'step', [], ...           % 解析窓シフト幅 (自動計算)
             'updateInterval', [] ...  % 更新間隔 (自動計算)
         ), ...
         'epoch', struct(...           % エポック化設定
             'method', 'time', ...     % 方法: 'time'/'odd-even'
             'storageType', 'array', ... % 保存形式: 'array'/'cell'
-            'overlap', 0, ...      % オーバーラップ率 (0-0.9)
+            'overlap', 0.5, ...      % オーバーラップ率 (0-0.9)
             'visual', struct(...      % 視覚タスク設定
                 'enable', true, ...  % true/false: 視覚タスク有効/無効
                 'taskTypes', {{'observation', 'imagery'}}, ... % タスク種類: 'observation'/'imagery'
@@ -198,7 +198,7 @@ function preset = magic()
                 'windowSize', 1.0 ...  % 解析窓サイズ (0.5-2.0 秒)
             ), ...
             'baseline', struct(...    % ベースライン補正 (修正後)
-                'enable', true, ...  % true/false: ベースライン補正有効/無効
+                'enable', false, ...  % true/false: ベースライン補正有効/無効
                 'method', 'interval', ... % 方法: 'interval'/'trend'/'dc'/'moving'
                 'applyToChannels', [], ... % 適用チャネル (空の場合は全チャネル) 例: [1, 3, 5]
                 'windowSize', 1.0, ... % 窓サイズ (秒) - 移動平均、区間平均で使用
@@ -230,8 +230,8 @@ function preset = magic()
                     'passbandRipple', 1, ... % パスバンドリップル (0.5-3 dB)
                     'stopbandAttenuation', 60 ... % 阻止域減衰量 (40-80 dB)
                 ), ...
-                'iir', struct(...       % IIRフィルタ  **追加**
-                    'enable', true, ...    % IIRフィルタの有効/無効
+                'iir', struct(...       % IIRフィルタ
+                    'enable', false, ...    % IIRフィルタの有効/無効
                     'filterOrder', 4, ...     % IIRフィルタの次数
                     'designMethod', 'butterworth', ... % 'butterworth', 'chebyshev1', 'chebyshev2', 'ellip'
                     'filterType', 'bandpass', ...     % 'bandpass', 'lowpass', 'highpass', 'bandstop'
@@ -246,7 +246,7 @@ function preset = magic()
             ), ...
             'augmentation', struct(... % データ拡張設定
                 'enable', true, ...   % true/false: データ拡張有効/無効
-                'augmentationRatio', 4, ... % 拡張比率 (2-10)
+                'augmentationRatio', 7, ... % 拡張比率 (2-10)
                 'combinationLimit', 3, ... % 最大手法数 (1-5)
                 'methods', struct(...   % 拡張手法設定
                     'noise', struct(...  % ノイズ付加
@@ -375,7 +375,7 @@ function preset = magic()
         ), ...
         'ecoc', struct(...            % ECOC設定
             'enable', false, ...      % true/false: ECOC有効/無効
-            'optimize', false, ...    % true/false: パラメータ最適化有効/無効
+            'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'probability', true, ...  % true/false: 確率出力有効/無効
             'kernel', 'rbf', ...      % カーネル関数: 'linear'/'rbf'/'polynomial'
             'coding', 'onevsall', ... % コーディング: 'onevsall'/'allpairs'
@@ -407,7 +407,7 @@ function preset = magic()
                     'dropout2', 0.4, ...
                     'dropout3', 0.5 ...
                 ), ...
-                'batchNorm', true, ... % true/false: バッチ正規化有効/無効
+                'batchNorm', false, ... % true/false: バッチ正規化有効/無効
                 'fullyConnected', [128 64] ... % 全結合層ユニット数 (配列)
             ), ...
             'training', struct(...    % 学習設定
@@ -420,7 +420,7 @@ function preset = magic()
                 ), ...
                 'maxEpochs', 100, ... % 最大エポック数 (10-1000)
                 'miniBatchSize', 128, ... % ミニバッチサイズ (8-512)
-                'frequency', 5, ... % 検証頻度 (エポック)
+                'frequency', 15, ... % 検証頻度 (エポック)
                 'patience', 20, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
@@ -462,7 +462,7 @@ function preset = magic()
                     'dropout2', 0.4, ...
                     'dropout3', 0.5 ...
                 ), ...
-                'batchNorm', true, ... % true/false: バッチ正規化有効/無効
+                'batchNorm', false, ... % true/false: バッチ正規化有効/無効
                 'fullyConnected', [128 64] ... % 全結合層ユニット数 (配列)
             ), ...
             'training', struct(...    % 学習設定
@@ -476,7 +476,7 @@ function preset = magic()
                 ), ...
                 'maxEpochs', 100, ...  % 最大エポック数 (5-100)
                 'miniBatchSize', 64, ... % ミニバッチサイズ (8-128)
-                'frequency', 5, ... % 検証頻度 (エポック)
+                'frequency', 15, ... % 検証頻度 (反復)
                 'patience', 15, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
@@ -497,11 +497,11 @@ function preset = magic()
         ), ...
        'hybrid', struct(...
             'enable', true, ...       % ハイブリッドモデル有効
-            'gpu', false, ...          % GPU使用有効
-            'optimize', false, ...     % パラメータ最適化有効
+            'gpu', true, ...          % GPU使用有効
+            'optimize', true, ...     % パラメータ最適化有効
             'architecture', struct(...
                 'numClasses', num_classes, ... % クラス数（自動設定）
-                'batchNorm', true, ...         % バッチ正規化の使用
+                'batchNorm', false, ...         % バッチ正規化の使用
                 'cnn', struct(...
                     'inputSize', [], ...       % 入力サイズ（自動設定）
                     'convLayers', struct(...
@@ -513,7 +513,7 @@ function preset = magic()
                     'dropoutLayers', struct(...
                         'dropout1', 0.4 ...      % ドロップアウト率を0.3から0.4に増加
                     ), ...
-                    'fullyConnected', [64] ...   % 全結合層のユニット数を削減
+                    'fullyConnected', 64 ...   % 全結合層のユニット数を削減
                 ), ...
                 'lstm', struct(...
                     'sequenceInputLayer', struct(...
@@ -568,7 +568,7 @@ function preset = magic()
                 ), ...
                 'maxEpochs', 100, ...             % 最大エポック数
                 'miniBatchSize', 50, ...
-                'frequency', 5, ...               % 検証頻度（エポック）
+                'frequency', 15, ...               % 検証頻度
                 'patience', 15, ...               % 早期終了待機回数
                 'shuffle', 'every-epoch', ...     % データシャッフル方法
                 'validation', struct(...
@@ -619,10 +619,10 @@ function preset = magic()
             'visualization', struct(... % 可視化設定
                 'refreshRate', 0.2, ... % 表示更新レート (0.1-1.0 秒)
                 'enable', struct(...    % 表示項目の有効/無効
-                    'rawData', true, ... % true/false: 生データ表示
-                    'emgData', true, ... % true/false: EMGデータ表示
-                    'spectrum', true, ... % true/false: スペクトル表示
-                    'ersp', true ...     % true/false: ERSP表示
+                    'rawData', false, ... % true/false: 生データ表示
+                    'emgData', false, ... % true/false: EMGデータ表示
+                    'spectrum', false, ... % true/false: スペクトル表示
+                    'ersp', false ...     % true/false: ERSP表示
                 ), ...
                 'channels', struct(...  % チャンネル表示設定
                     'eeg', struct(...   % EEGチャンネル

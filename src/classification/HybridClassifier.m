@@ -580,10 +580,11 @@ classdef HybridClassifier < handle
                     'Plots', 'none', ...
                     'Verbose', true, ...
                     'ExecutionEnvironment', executionEnvironment, ...
+                    'OutputNetwork', 'best-validation', ...
                     'ValidationData', valDS, ...
                     'ValidationFrequency', obj.params.classifier.hybrid.training.frequency, ...
-                    'ValidationPatience', obj.params.classifier.hybrid.training.patience, ...
-                    'GradientThreshold', obj.params.classifier.hybrid.training.optimizer.gradientThreshold);
+                    'ValidationPatience', obj.params.classifier.hybrid.training.patience);
+
 
                 % レイヤーグラフの構築とトレーニング実行
                 layers = obj.buildHybridLayers(cnnInputSize, lstmInputSize);
@@ -737,37 +738,45 @@ classdef HybridClassifier < handle
         function [isOverfit, metrics] = validateOverfitting(obj, trainInfo, testMetrics)
             try
                 fprintf('\n=== Validating Overfitting ===\n');
+
                 history = trainInfo.History;
                 trainAcc = history.TrainingAccuracy;
                 valAcc = history.ValidationAccuracy;
                 testAcc = testMetrics.accuracy * 100;
-                fprintf('Final Training Accuracy: %.2f%%\n', trainAcc(end));
-                fprintf('Final Validation Accuracy: %.2f%%\n', valAcc(end));
+
+                fprintf('Validation Accuracy: %.2f%%\n', valAcc(end));
                 fprintf('Test Accuracy: %.2f%%\n', testAcc);
-                genGap = abs(trainAcc(end) - valAcc(end));
-                perfGap = abs(trainAcc(end) - testAcc);
-                fprintf('Generalization Gap: %.2f%%\n', genGap);
+        
+                % Performance Gapの計算（検証結果とテスト結果の差）
+                perfGap = abs(max(valAcc) - testAcc);
                 fprintf('Performance Gap: %.2f%%\n', perfGap);
+
                 [trainTrend, valTrend] = obj.analyzeLearningCurves(trainAcc, valAcc);
                 isCompletelyBiased = false;
+
                 if isfield(testMetrics, 'confusionMat')
                     cm = testMetrics.confusionMat;
                     missingActual = any(sum(cm, 2) == 0);
                     missingPredicted = any(sum(cm, 1) == 0);
                     isCompletelyBiased = missingActual || missingPredicted;
                 end
+
                 isLearningProgressing = std(diff(trainAcc)) > 0.01;
+
                 [optimalEpoch, totalEpochs] = obj.findOptimalEpoch(valAcc);
-                severity = obj.determineOverfittingSeverity(genGap, perfGap, isCompletelyBiased, isLearningProgressing);
-                metrics = struct('generalizationGap', genGap, ...
-                                 'performanceGap', perfGap, ...
-                                 'isCompletelyBiased', isCompletelyBiased, ...
-                                 'isLearningProgressing', isLearningProgressing, ...
-                                 'validationTrend', valTrend, ...
-                                 'trainingTrend', trainTrend, ...
-                                 'severity', severity, ...
-                                 'optimalEpoch', optimalEpoch, ...
-                                 'totalEpochs', totalEpochs);
+
+                severity = obj.determineOverfittingSeverity(perfGap, isCompletelyBiased, isLearningProgressing);
+
+                metrics = struct( ...
+                     'performanceGap', perfGap, ...
+                     'isCompletelyBiased', isCompletelyBiased, ...
+                     'isLearningProgressing', isLearningProgressing, ...
+                     'validationTrend', valTrend, ...
+                     'trainingTrend', trainTrend, ...
+                     'severity', severity, ...
+                     'optimalEpoch', optimalEpoch, ...
+                     'totalEpochs', totalEpochs);
+                
                 isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
                 fprintf('Overfitting Status: %s (Severity: %s)\n', mat2str(isOverfit), severity);
             catch ME
@@ -838,16 +847,16 @@ classdef HybridClassifier < handle
                               'increasing_ratio', sum(valDiff > 0) / length(valDiff));
         end
         
-        function severity = determineOverfittingSeverity(~, genGap, perfGap, isCompletelyBiased, isLearningProgressing)
+        function severity = determineOverfittingSeverity(~, perfGap, isCompletelyBiased, isLearningProgressing)
             if isCompletelyBiased
                 severity = 'critical';
             elseif ~isLearningProgressing
                 severity = 'failed';
-            elseif genGap > 10 || perfGap > 15
+            elseif perfGap > 15
                 severity = 'severe';
-            elseif genGap > 5 || perfGap > 8
+            elseif perfGap > 8
                 severity = 'moderate';
-            elseif genGap > 3 || perfGap > 5
+            elseif perfGap > 5
                 severity = 'mild';
             else
                 severity = 'none';
