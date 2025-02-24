@@ -231,8 +231,7 @@ classdef LSTMClassifier < handle
                 'Shuffle', training.shuffle, ...
                 'Plots', 'none', ...
                 'ExecutionEnvironment', execEnv, ...
-                'Verbose', true, ...
-                'OutputFcn', @(info)obj.trainingOutputFcn(info));
+                'Verbose', true);
 
             % 検証データの設定
             options.ValidationData = {valData, categorical(valLabels)};
@@ -241,48 +240,48 @@ classdef LSTMClassifier < handle
         end
 
         %% トレーニング進捗のコールバック関数
-        function stop = trainingOutputFcn(obj, info)
-            stop = false;
-            
-            if info.State == "start"
-                obj.currentEpoch = 0;
-                return;
-            end
-            
-            % 学習情報の更新
-            obj.currentEpoch = obj.currentEpoch + 1;
-            
-            % 学習履歴の更新
-            if isfield(info, 'TrainingLoss')
-                obj.trainingHistory.loss(end+1) = info.TrainingLoss;
-            end
-            if isfield(info, 'TrainingAccuracy')
-                obj.trainingHistory.accuracy(end+1) = info.TrainingAccuracy;
-            end
-            
-            % 検証データがある場合の処理
-            if ~isempty(info.ValidationLoss)
-                currentAccuracy = info.ValidationAccuracy;
-                
-                % 検証履歴の更新
-                obj.validationHistory.loss(end+1) = info.ValidationLoss;
-                obj.validationHistory.accuracy(end+1) = info.ValidationAccuracy;
-                
-                % Early Stopping判定
-                if currentAccuracy > obj.bestValAccuracy
-                    obj.bestValAccuracy = currentAccuracy;
-                    obj.patienceCounter = 0;
-                else
-                    obj.patienceCounter = obj.patienceCounter + 1;
-                    if obj.patienceCounter >= obj.params.classifier.lstm.training.patience
-                        fprintf('\nEarly stopping: エポック %d で学習を終了\n', obj.currentEpoch);
-                        fprintf('最良検証精度 %.2f%% を %d エポック更新できず\n', ...
-                            obj.bestValAccuracy * 100, obj.patienceCounter);
-                        stop = true;
-                    end
-                end
-            end
-        end
+        % function stop = trainingOutputFcn(obj, info)
+        %     stop = false;
+        % 
+        %     if info.State == "start"
+        %         obj.currentEpoch = 0;
+        %         return;
+        %     end
+        % 
+        %     % 学習情報の更新
+        %     obj.currentEpoch = obj.currentEpoch + 1;
+        % 
+        %     % 学習履歴の更新
+        %     if isfield(info, 'TrainingLoss')
+        %         obj.trainingHistory.loss(end+1) = info.TrainingLoss;
+        %     end
+        %     if isfield(info, 'TrainingAccuracy')
+        %         obj.trainingHistory.accuracy(end+1) = info.TrainingAccuracy;
+        %     end
+        % 
+        %     % 検証データがある場合の処理
+        %     if ~isempty(info.ValidationLoss)
+        %         currentAccuracy = info.ValidationAccuracy;
+        % 
+        %         % 検証履歴の更新
+        %         obj.validationHistory.loss(end+1) = info.ValidationLoss;
+        %         obj.validationHistory.accuracy(end+1) = info.ValidationAccuracy;
+        % 
+        %         % Early Stopping判定
+        %         if currentAccuracy > obj.bestValAccuracy
+        %             obj.bestValAccuracy = currentAccuracy;
+        %             obj.patienceCounter = 0;
+        %         else
+        %             obj.patienceCounter = obj.patienceCounter + 1;
+        %             if obj.patienceCounter >= obj.params.classifier.lstm.training.patience
+        %                 fprintf('\nEarly stopping: エポック %d で学習を終了\n', obj.currentEpoch);
+        %                 fprintf('最良検証精度 %.2f%% を %d エポック更新できず\n', ...
+        %                     obj.bestValAccuracy * 100, obj.patienceCounter);
+        %                 stop = true;
+        %             end
+        %         end
+        %     end
+        % end
 
         %% データセットの分割（訓練/検証/テスト）
         function [trainData, trainLabels, valData, valLabels, testData, testLabels] = splitDataset(obj, data, labels)
@@ -735,7 +734,7 @@ classdef LSTMClassifier < handle
                     'totalEpochs', totalEpochs);
                 
                 % 過学習判定
-                isOverfit = ismember(severity, {'critical', 'severe', 'moderate', 'mild'});
+                isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
                 fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
         
                 % 詳細な分析結果の表示

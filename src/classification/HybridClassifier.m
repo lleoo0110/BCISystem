@@ -12,6 +12,7 @@ classdef HybridClassifier < handle
         bestValAccuracy     % 最良の検証精度
         patienceCounter     % Early Stopping用カウンター
         currentEpoch        % 現在のエポック
+        lastEpoch
         
         % 過学習監視用
         overfitMetrics      % 過学習メトリクス
@@ -582,8 +583,7 @@ classdef HybridClassifier < handle
                     'ValidationData', valDS, ...
                     'ValidationFrequency', obj.params.classifier.hybrid.training.frequency, ...
                     'ValidationPatience', obj.params.classifier.hybrid.training.patience, ...
-                    'GradientThreshold', obj.params.classifier.hybrid.training.optimizer.gradientThreshold, ...
-                    'OutputFcn', @(info)obj.trainingOutputFcn(info));
+                    'GradientThreshold', obj.params.classifier.hybrid.training.optimizer.gradientThreshold);
 
                 % レイヤーグラフの構築とトレーニング実行
                 layers = obj.buildHybridLayers(cnnInputSize, lstmInputSize);
@@ -591,8 +591,6 @@ classdef HybridClassifier < handle
                 [hybridModel, trainHistory] = trainNetwork(trainDS, layers, options);
 
                 trainInfo.History = trainHistory;
-                trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
-                fprintf('\nTraining completed: %d epochs\n', trainInfo.FinalEpoch);
 
             catch ME
                 fprintf('\n=== Error in trainHybridModel: %s\n', ME.message);
@@ -647,27 +645,37 @@ classdef HybridClassifier < handle
             end
         end
 
-        function stop = trainingOutputFcn(obj, info)
-            stop = false;
-            if info.State == "start"
-                obj.currentEpoch = 0;
-                return;
-            end
-            obj.currentEpoch = obj.currentEpoch + 1;
-            if ~isempty(info.ValidationLoss)
-                currentAccuracy = info.ValidationAccuracy;
-                if currentAccuracy > obj.bestValAccuracy
-                    obj.bestValAccuracy = currentAccuracy;
-                    obj.patienceCounter = 0;
-                else
-                    obj.patienceCounter = obj.patienceCounter + 1;
-                    if obj.patienceCounter >= obj.params.classifier.hybrid.training.patience
-                        fprintf('\nEarly stopping triggered at epoch %d\n', obj.currentEpoch);
-                        stop = true;
-                    end
-                end
-            end
-        end
+        % function stop = trainingOutputFcn(obj, info)
+        %     stop = false;
+        %     % 初回呼び出し時はエポック番号を初期化
+        %     if info.State == "start"
+        %         obj.currentEpoch = info.Epoch;  % 初期エポック番号を設定
+        %         obj.lastEpoch = info.Epoch;       % 最後に記録したエポック番号
+        %         return;
+        %     end
+        % 
+        %     % エポックが変わったかどうかチェック
+        %     if info.Epoch > obj.lastEpoch
+        %         obj.currentEpoch = info.Epoch;
+        %         obj.lastEpoch = info.Epoch;
+        %         % 検証結果があれば早期終了の判定を行う
+        %         if ~isempty(info.ValidationLoss)
+        %             currentAccuracy = info.ValidationAccuracy;
+        %             if currentAccuracy > obj.bestValAccuracy
+        %                 obj.bestValAccuracy = currentAccuracy;
+        %                 obj.patienceCounter = 0;
+        %             else
+        %                 obj.patienceCounter = obj.patienceCounter + 1;
+        %                 fprintf('\nCurrent patienceCounter %d\n', obj.patienceCounter);
+        %                 if obj.patienceCounter >= obj.params.classifier.hybrid.training.patience
+        %                     fprintf('\nLast patienceCounter %d\n', obj.patienceCounter);
+        %                     fprintf('\nEarly stopping triggered at epoch %d\n', obj.currentEpoch);
+        %                     stop = true;
+        %                 end
+        %             end
+        %         end
+        %     end
+        % end
         
         function metrics = evaluateModel(~, model, testData, testLabels)
             metrics = struct(...
@@ -760,7 +768,7 @@ classdef HybridClassifier < handle
                                  'severity', severity, ...
                                  'optimalEpoch', optimalEpoch, ...
                                  'totalEpochs', totalEpochs);
-                isOverfit = ismember(severity, {'critical', 'severe', 'moderate', 'mild'});
+                isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
                 fprintf('Overfitting Status: %s (Severity: %s)\n', mat2str(isOverfit), severity);
             catch ME
                 fprintf('Error in validateOverfitting: %s\n', ME.message);

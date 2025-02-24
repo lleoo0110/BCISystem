@@ -215,7 +215,7 @@ classdef CNNClassifier < handle
                     'totalEpochs', totalEpochs);
                 
                 % 過学習判定
-                isOverfit = ismember(severity, {'critical', 'severe', 'moderate', 'mild'});
+                isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
                 fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
                 
             catch ME
@@ -380,7 +380,6 @@ classdef CNNClassifier < handle
                    'MiniBatchSize', obj.params.classifier.cnn.training.miniBatchSize, ...
                    'Plots', 'none', ...
                    'Shuffle', obj.params.classifier.cnn.training.shuffle, ...
-                   'OutputFcn', @(info)obj.trainingOutputFcn(info), ...
                    'ExecutionEnvironment', executionEnvironment, ...
                    'Verbose', true);
         
@@ -787,34 +786,34 @@ classdef CNNClassifier < handle
             end
         end
         
-        function stop = trainingOutputFcn(obj, info)
-            % 初期化
-            stop = false;
-
-            if info.State == "start"
-                obj.currentEpoch = 0;
-                return;
-            end
-
-            % 学習情報の更新
-            obj.currentEpoch = obj.currentEpoch + 1;
-
-            % 検証データがある場合のEarly Stopping
-            if ~isempty(info.ValidationLoss)
-                currentAccuracy = info.ValidationAccuracy;
-
-                if currentAccuracy > obj.bestValAccuracy
-                    obj.bestValAccuracy = currentAccuracy;
-                    obj.patienceCounter = 0;
-                else
-                    obj.patienceCounter = obj.patienceCounter + 1;
-                    if obj.patienceCounter >= obj.params.classifier.cnn.training.patience
-                        fprintf('\nEarly stopping triggered at epoch %d\n', obj.currentEpoch);
-                        stop = true;
-                    end
-                end
-            end
-        end
+        % function stop = trainingOutputFcn(obj, info)
+        %     % 初期化
+        %     stop = false;
+        % 
+        %     if info.State == "start"
+        %         obj.currentEpoch = 0;
+        %         return;
+        %     end
+        % 
+        %     % 学習情報の更新
+        %     obj.currentEpoch = obj.currentEpoch + 1;
+        % 
+        %     % 検証データがある場合のEarly Stopping
+        %     if ~isempty(info.ValidationLoss)
+        %         currentAccuracy = info.ValidationAccuracy;
+        % 
+        %         if currentAccuracy > obj.bestValAccuracy
+        %             obj.bestValAccuracy = currentAccuracy;
+        %             obj.patienceCounter = 0;
+        %         else
+        %             obj.patienceCounter = obj.patienceCounter + 1;
+        %             if obj.patienceCounter >= obj.params.classifier.cnn.training.patience
+        %                 fprintf('\nEarly stopping triggered at epoch %d\n', obj.currentEpoch);
+        %                 stop = true;
+        %             end
+        %         end
+        %     end
+        % end
         
         function cvResults = performCrossValidation(obj, data, labels)
             try

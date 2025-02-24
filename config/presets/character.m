@@ -166,7 +166,7 @@ function preset = character()
         'epoch', struct(...           % エポック化設定
             'method', 'time', ...     % 方法: 'time'/'odd-even'
             'storageType', 'array', ... % 保存形式: 'array'/'cell'
-            'overlap', 0.25, ...      % オーバーラップ率 (0-0.9)
+            'overlap', 0.5, ...      % オーバーラップ率 (0-0.9)
             'visual', struct(...      % 視覚タスク設定
                 'enable', false, ...  % true/false: 視覚タスク有効/無効
                 'taskTypes', {{'observation', 'imagery'}}, ... % タスク種類: 'observation'/'imagery'
@@ -198,7 +198,7 @@ function preset = character()
                 'windowSize', 1.0 ...  % 解析窓サイズ (0.5-2.0 秒)
             ), ...
             'baseline', struct(...    % ベースライン補正 (修正後)
-                'enable', true, ...  % true/false: ベースライン補正有効/無効
+                'enable', false, ...  % true/false: ベースライン補正有効/無効
                 'method', 'interval', ... % 方法: 'interval'/'trend'/'dc'/'moving'
                 'applyToChannels', [], ... % 適用チャネル (空の場合は全チャネル) 例: [1, 3, 5]
                 'windowSize', 1.0, ... % 窓サイズ (秒) - 移動平均、区間平均で使用
@@ -231,7 +231,7 @@ function preset = character()
                     'stopbandAttenuation', 60 ... % 阻止域減衰量 (40-80 dB)
                 ), ...
                 'iir', struct(...       % IIRフィルタ
-                    'enable', true, ...    % IIRフィルタの有効/無効
+                    'enable', false, ...    % IIRフィルタの有効/無効
                     'filterOrder', 4, ...     % IIRフィルタの次数
                     'designMethod', 'butterworth', ... % 'butterworth', 'chebyshev1', 'chebyshev2', 'ellip'
                     'filterType', 'bandpass', ...     % 'bandpass', 'lowpass', 'highpass', 'bandstop'
@@ -246,7 +246,7 @@ function preset = character()
             ), ...
             'augmentation', struct(... % データ拡張設定
                 'enable', true, ...   % true/false: データ拡張有効/無効
-                'augmentationRatio', 4, ... % 拡張比率 (2-10)
+                'augmentationRatio', 7, ... % 拡張比率 (2-10)
                 'combinationLimit', 3, ... % 最大手法数 (1-5)
                 'methods', struct(...   % 拡張手法設定
                     'noise', struct(...  % ノイズ付加
@@ -375,7 +375,7 @@ function preset = character()
         ), ...
         'ecoc', struct(...            % ECOC設定
             'enable', false, ...      % true/false: ECOC有効/無効
-            'optimize', false, ...    % true/false: パラメータ最適化有効/無効
+            'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'probability', true, ...  % true/false: 確率出力有効/無効
             'kernel', 'rbf', ...      % カーネル関数: 'linear'/'rbf'/'polynomial'
             'coding', 'onevsall', ... % コーディング: 'onevsall'/'allpairs'
@@ -387,7 +387,7 @@ function preset = character()
             ) ...
         ), ...
         'cnn', struct(...             % CNN設定
-            'enable', true, ...      % true/false: CNN有効/無効
+            'enable', false, ...      % true/false: CNN有効/無効
             'gpu', true, ...          % true/false: GPU使用有効/無効
             'optimize', true, ...     % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
@@ -407,7 +407,7 @@ function preset = character()
                     'dropout2', 0.4, ...
                     'dropout3', 0.5 ...
                 ), ...
-                'batchNorm', true, ... % true/false: バッチ正規化有効/無効
+                'batchNorm', false, ... % true/false: バッチ正規化有効/無効
                 'fullyConnected', [128 64] ... % 全結合層ユニット数 (配列)
             ), ...
             'training', struct(...    % 学習設定
@@ -420,7 +420,7 @@ function preset = character()
                 ), ...
                 'maxEpochs', 100, ... % 最大エポック数 (10-1000)
                 'miniBatchSize', 128, ... % ミニバッチサイズ (8-512)
-                'frequency', 5, ... % 検証頻度 (エポック)
+                'frequency', 50, ... % 検証頻度 (エポック)
                 'patience', 20, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
@@ -442,7 +442,7 @@ function preset = character()
             ) ...
         ), ...
         'lstm', struct(...            % LSTM設定
-            'enable', true, ...      % true/false: LSTM有効/無効
+            'enable', false, ...      % true/false: LSTM有効/無効
             'gpu', true, ...         % true/false: GPU使用有効/無効
             'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
@@ -462,7 +462,7 @@ function preset = character()
                     'dropout2', 0.4, ...
                     'dropout3', 0.5 ...
                 ), ...
-                'batchNorm', true, ... % true/false: バッチ正規化有効/無効
+                'batchNorm', false, ... % true/false: バッチ正規化有効/無効
                 'fullyConnected', [128 64] ... % 全結合層ユニット数 (配列)
             ), ...
             'training', struct(...    % 学習設定
@@ -476,7 +476,7 @@ function preset = character()
                 ), ...
                 'maxEpochs', 100, ...  % 最大エポック数 (5-100)
                 'miniBatchSize', 64, ... % ミニバッチサイズ (8-128)
-                'frequency', 5, ... % 検証頻度 (エポック)
+                'frequency', 50, ... % 検証頻度 (反復)
                 'patience', 15, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
@@ -501,7 +501,7 @@ function preset = character()
             'optimize', true, ...     % パラメータ最適化有効
             'architecture', struct(...
                 'numClasses', num_classes, ... % クラス数（自動設定）
-                'batchNorm', true, ...         % バッチ正規化の使用
+                'batchNorm', false, ...         % バッチ正規化の使用
                 'cnn', struct(...
                     'inputSize', [], ...       % 入力サイズ（自動設定）
                     'convLayers', struct(...
@@ -568,7 +568,7 @@ function preset = character()
                 ), ...
                 'maxEpochs', 100, ...             % 最大エポック数
                 'miniBatchSize', 50, ...
-                'frequency', 5, ...               % 検証頻度（エポック）
+                'frequency', 50, ...               % 検証頻度
                 'patience', 15, ...               % 早期終了待機回数
                 'shuffle', 'every-epoch', ...     % データシャッフル方法
                 'validation', struct(...
