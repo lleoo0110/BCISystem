@@ -163,7 +163,7 @@ classdef CNNClassifier < handle
                     error('Invalid testMetrics structure');
                 end
                 
-                fprintf('Validation Accuracy: %.2f%%\n', valAcc(end));
+                fprintf('Validation Accuracy: %.2f%%\n', max(valAcc));
                 fprintf('Test Accuracy: %.2f%%\n', testAcc);
         
                 % Performance Gapの計算（検証結果とテスト結果の差）
@@ -972,7 +972,6 @@ classdef CNNClassifier < handle
                 % 過学習分析の表示
                 if ~isempty(obj.overfitMetrics) && isstruct(obj.overfitMetrics)
                     fprintf('\nOverfitting Analysis:\n');
-                    fprintf('Generalization Gap: %.4f\n', obj.overfitMetrics.generalizationGap);
                     fprintf('Performance Gap: %.4f\n', obj.overfitMetrics.performanceGap);
                     fprintf('Severity: %s\n', obj.overfitMetrics.severity);
 

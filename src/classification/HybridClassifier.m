@@ -646,38 +646,6 @@ classdef HybridClassifier < handle
             end
         end
 
-        % function stop = trainingOutputFcn(obj, info)
-        %     stop = false;
-        %     % 初回呼び出し時はエポック番号を初期化
-        %     if info.State == "start"
-        %         obj.currentEpoch = info.Epoch;  % 初期エポック番号を設定
-        %         obj.lastEpoch = info.Epoch;       % 最後に記録したエポック番号
-        %         return;
-        %     end
-        % 
-        %     % エポックが変わったかどうかチェック
-        %     if info.Epoch > obj.lastEpoch
-        %         obj.currentEpoch = info.Epoch;
-        %         obj.lastEpoch = info.Epoch;
-        %         % 検証結果があれば早期終了の判定を行う
-        %         if ~isempty(info.ValidationLoss)
-        %             currentAccuracy = info.ValidationAccuracy;
-        %             if currentAccuracy > obj.bestValAccuracy
-        %                 obj.bestValAccuracy = currentAccuracy;
-        %                 obj.patienceCounter = 0;
-        %             else
-        %                 obj.patienceCounter = obj.patienceCounter + 1;
-        %                 fprintf('\nCurrent patienceCounter %d\n', obj.patienceCounter);
-        %                 if obj.patienceCounter >= obj.params.classifier.hybrid.training.patience
-        %                     fprintf('\nLast patienceCounter %d\n', obj.patienceCounter);
-        %                     fprintf('\nEarly stopping triggered at epoch %d\n', obj.currentEpoch);
-        %                     stop = true;
-        %                 end
-        %             end
-        %         end
-        %     end
-        % end
-        
         function metrics = evaluateModel(~, model, testData, testLabels)
             metrics = struct(...
                 'accuracy', [], ...
@@ -744,7 +712,7 @@ classdef HybridClassifier < handle
                 valAcc = history.ValidationAccuracy;
                 testAcc = testMetrics.accuracy * 100;
 
-                fprintf('Validation Accuracy: %.2f%%\n', valAcc(end));
+                fprintf('Validation Accuracy: %.2f%%\n', max(valAcc));
                 fprintf('Test Accuracy: %.2f%%\n', testAcc);
         
                 % Performance Gapの計算（検証結果とテスト結果の差）
@@ -810,7 +778,6 @@ classdef HybridClassifier < handle
                 end
                 if ~isempty(obj.overfitMetrics)
                     fprintf('\nOverfitting Analysis:\n');
-                    fprintf('Generalization Gap: %.2f%%\n', obj.overfitMetrics.generalizationGap);
                     fprintf('Performance Gap: %.2f%%\n', obj.overfitMetrics.performanceGap);
                     fprintf('Severity: %s\n', obj.overfitMetrics.severity);
                     if isfield(obj.overfitMetrics, 'validationTrend')

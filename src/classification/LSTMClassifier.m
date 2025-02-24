@@ -625,7 +625,7 @@ classdef LSTMClassifier < handle
                 valAcc = history.ValidationAccuracy;
                 testAcc = testMetrics.accuracy * 100;
 
-                fprintf('Validation Accuracy: %.2f%%\n', valAcc(end));
+                fprintf('Validation Accuracy: %.2f%%\n', max(valAcc));
                 fprintf('Test Accuracy: %.2f%%\n', testAcc);
         
                 % Performance Gapの計算（検証結果とテスト結果の差）
@@ -810,7 +810,6 @@ classdef LSTMClassifier < handle
 
                 if ~isempty(obj.overfitMetrics)
                     fprintf('\nOverfitting Analysis:\n');
-                    fprintf('Generalization Gap: %.2f%%\n', obj.overfitMetrics.generalizationGap * 100);
                     fprintf('Performance Gap: %.2f%%\n', obj.overfitMetrics.performanceGap * 100);
                     fprintf('Severity: %s\n', obj.overfitMetrics.severity);
                     if isfield(obj.overfitMetrics, 'validationTrend')
