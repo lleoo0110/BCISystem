@@ -1390,11 +1390,6 @@ classdef EEGAcquisitionManager < handle
                             currentFeatures, obj.classifiers.hybrid.model);
                 end
         
-                % categorical型の場合、double型に変換
-                if isa(label, 'categorical')
-                    label = double(label);
-                end
-        
                 % 予測結果の保存
                 if ~isempty(label)
                     currentTime = toc(obj.processingTimer) * 1000;
