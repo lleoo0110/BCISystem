@@ -301,11 +301,11 @@ classdef HybridClassifier < handle
         
             [channels, timepoints, samples] = size(data);
         
-            % 入力データを4次元テンソルに変換: [timepoints x channels x 1 x samples]
-            preparedData = zeros(timepoints, channels, 1, samples);
+            % 変更: 転置せずに4次元テンソルに変換
+            preparedData = zeros(channels, timepoints, 1, samples);
         
             for i = 1:samples
-                preparedData(:,:,1,i) = data(:,:,i)';
+                preparedData(:,:,1,i) = data(:,:,i);
             end
         end
         
