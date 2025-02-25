@@ -12,7 +12,7 @@ function preset = magic()
     % トリガー値とクラスラベルの対応付け
     % 形式: {'状態名', トリガー値}
     trigger_mappings = {
-        '安静', 1;         % クラス1: 安静状態 (ベースライン)
+        % '安静', 1;         % クラス1: 安静状態 (ベースライン)
         '炎魔法', 2;      % クラス2: 炎魔法想起
         '雷魔法', 3;      % クラス3: 雷魔法想起
     };
@@ -31,7 +31,7 @@ function preset = magic()
     % Lab Streaming Layer通信の設定
     lsl = struct(...
         'simulate', struct(...           % シミュレーションモード設定
-            'enable', false, ...          % true/false: シミュレーション有効/無効
+            'enable', true, ...          % true/false: シミュレーション有効/無効
             'signal', struct(...         % シミュレーション信号の設定
                 'alpha', struct(...      % α波シミュレーション
                     'freq', 10, ...      % 周波数 (8-13 Hz)
@@ -48,7 +48,7 @@ function preset = magic()
     %% === データ収集設定 ===
     % データ収集に関する基本設定
     acquisition = struct(...
-        'mode', 'offline', ...           % モード: 'online'/'offline'
+        'mode', 'online', ...           % モード: 'online'/'offline'
         'emg', struct(...               % EMG計測の設定
             'enable', false, ...        % true/false: EMG計測有効/無効
             'channels', struct(...      % EMGチャンネル設定
@@ -176,7 +176,7 @@ function preset = magic()
             ) ...
         ), ...
         'frequency', struct(...       % 周波数解析設定
-            'min', 1, ...             % 最小周波数 (0.1-100 Hz)
+            'min', 8, ...             % 最小周波数 (0.1-100 Hz)
             'max', 30, ...            % 最大周波数 (1-200 Hz)
             'bands', struct(...       % 周波数帯域定義
                 'delta', [1 4], ...   % デルタ波帯域 (0.5-4 Hz)
@@ -242,28 +242,28 @@ function preset = magic()
             'normalize', struct(...    % 正規化設定
                 'enable', false, ...    % true/false: 正規化有効/無効
                 'type', 'all', ...     % 正規化範囲: 'all'/'epoch'
-                'method', 'zscore' ... % 正規化方法: 'zscore'/'minmax'/'robust'
+                'method', 'robust' ... % 正規化方法: 'zscore'/'minmax'/'robust'
             ), ...
             'augmentation', struct(... % データ拡張設定
-                'enable', true, ...   % true/false: データ拡張有効/無効
-                'augmentationRatio', 5, ... % 拡張比率 (2-10)
+                'enable', false, ...   % true/false: データ拡張有効/無効
+                'augmentationRatio', 2, ... % 拡張比率 (2-10)
                 'combinationLimit', 3, ... % 最大手法数 (1-5)
                 'methods', struct(...   % 拡張手法設定
                     'noise', struct(...  % ノイズ付加
                         'enable', true, ... % true/false: ノイズ付加有効/無効
                         'types', {{'gaussian', 'pink'}}, ... % 'gaussian'/'pink'/'white'
-                        'variance', 0.01, ... % 分散 (0.001-0.1)
+                        'variance', 0.1, ... % 分散 (0.001-0.1)
                         'probability', 0.5 ... % 適用確率 (0-1)
                     ), ...
                     'scaling', struct(... % スケーリング
                         'enable', true, ... % true/false: スケーリング有効/無効
-                        'range', [0.9 1.1], ... % スケール範囲 (0.5-1.5)
-                        'probability', 0.3 ... % 適用確率 (0-1)
+                        'range', [0.5 1.5], ... % スケール範囲 (0.5-1.5)
+                        'probability', 0.5 ... % 適用確率 (0-1)
                     ), ...
                     'timeshift', struct(... % 時間シフト
                         'enable', true, ... % true/false: 時間シフト有効/無効
-                        'maxShift', 0.1, ... % 最大シフト量 (0.05-0.5 秒)
-                        'probability', 0.3 ... % 適用確率 (0-1)
+                        'maxShift', 0.25, ... % 最大シフト量 (0.05-0.5 秒)
+                        'probability', 0.5 ... % 適用確率 (0-1)
                     ), ...
                     'mirror', struct(...    % 反転
                         'enable', false, ... % true/false: 反転有効/無効
@@ -345,7 +345,7 @@ function preset = magic()
         ), ...
         'csp', struct(...            % CSP特徴抽出設定
             'enable', true, ...      % true/false: CSP解析有効/無効
-            'patterns', 3, ...        % パターン数 (3-10)
+            'patterns', 8, ...        % パターン数 (3-10)
             'regularization', 0.05 ... % 正則化パラメータ (0.01-0.1)
         ) ...
     );
@@ -357,7 +357,7 @@ function preset = magic()
     classifier = struct(...
         'activeClassifier', 'hybrid', ... % 使用分類器: 'svm'/'ecoc'/'cnn'/'lstm'/'hybrid'
         'svm', struct(...              % SVMの設定
-            'enable', false, ...       % true/false: SVM有効/無効
+            'enable', true, ...       % true/false: SVM有効/無効
             'optimize', true, ...      % true/false: パラメータ最適化有効/無効
             'probability', true, ...   % true/false: 確率出力有効/無効
             'kernel', 'rbf', ...       % カーネル関数: 'linear'/'rbf'/'polynomial'
@@ -374,7 +374,7 @@ function preset = magic()
             ) ...
         ), ...
         'ecoc', struct(...            % ECOC設定
-            'enable', true, ...      % true/false: ECOC有効/無効
+            'enable', false, ...      % true/false: ECOC有効/無効
             'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'probability', true, ...  % true/false: 確率出力有効/無効
             'kernel', 'rbf', ...      % カーネル関数: 'linear'/'rbf'/'polynomial'
@@ -420,8 +420,8 @@ function preset = magic()
                 ), ...
                 'maxEpochs', 100, ... % 最大エポック数 (10-1000)
                 'miniBatchSize', 128, ... % ミニバッチサイズ (8-512)
-                'frequency', 15, ... % 検証頻度 (エポック)
-                'patience', 20, ... % 早期終了の待機回数
+                'frequency', 5, ... % 検証頻度 (エポック)
+                'patience', 30, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
                     'enable', false, ... % true/false: 検証有効/無効
@@ -519,7 +519,7 @@ function preset = magic()
                     'sequenceInputLayer', struct(...
                         'inputSize', [], ...         % 入力サイズ（自動設定）
                         'sequenceLength', [], ...    % シーケンス長（自動設定）
-                        'normalization', 'none' ...      % 正規化方法
+                        'normalization', 'zscore' ...      % 正規化方法('zerocenter', 'zscore', 'rescale-symmetric', 'rescale-zero-one', 'none')
                     ), ...
                     'lstmLayers', struct(...
                         'lstm1', struct('numHiddenUnits', 256, 'OutputMode', 'sequence'), ...
@@ -583,13 +583,13 @@ function preset = magic()
             'optimization', struct(...
                 'searchSpace', struct(...
                     'learningRate', [0.0001, 0.001], ...  % 学習率範囲（狭く設定）
-                    'miniBatchSize', [32, 64], ...        % バッチサイズ範囲
+                    'miniBatchSize', [32, 128], ...        % バッチサイズ範囲
                     'numConvLayers', [1, 1], ...          % CNN層数を1に固定
                     'cnnFilters', [16, 32], ...           % CNNフィルタ数範囲
                     'filterSize', [3, 5], ...             % フィルタサイズ範囲
                     'lstmUnits', [128, 256], ...          % LSTMユニット数範囲
-                    'numLstmLayers', [3, 4], ...          % LSTM層数範囲（論文に基づく）
-                    'dropoutRate', [0.4, 0.5], ...        % ドロップアウト率範囲
+                    'numLstmLayers', [4, 4], ...          % LSTM層数範囲（論文に基づく）
+                    'dropoutRate', [0.4, 0.7], ...        % ドロップアウト率範囲
                     'fcUnits', [32, 64] ...                  % 全結合層ユニット数範囲
                 ) ...
             ) ...

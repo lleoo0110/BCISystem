@@ -291,7 +291,7 @@ classdef HybridOptimizer < handle
                         fprintf('\nハイパーパラメータ設定:\n');
                         fprintf('  学習率: %.6f\n', result.params(1));
                         fprintf('  バッチサイズ: %d\n', result.params(2));
-                        printf('  CNN層数: %d\n', result.params(3));
+                        fprintf('  CNN層数: %d\n', result.params(3));
                         fprintf('  CNNフィルタ数: %d\n', result.params(4));
                         fprintf('  フィルタサイズ: %d\n', result.params(5));
                         fprintf('  LSTMユニット数: %d\n', result.params(6));
@@ -304,9 +304,6 @@ classdef HybridOptimizer < handle
                         end
                         if isOverfit
                             fprintf('\n警告: このモデルは過学習の兆候を示しています\n');
-                            if isfield(result.overfitting, 'generalizationGap')
-                                fprintf('  - Generalization Gap: %.2f%%\n', result.overfitting.generalizationGap);
-                            end
                             if isfield(result.overfitting, 'performanceGap')
                                 fprintf('  - Performance Gap: %.2f%%\n', result.overfitting.performanceGap);
                             end
