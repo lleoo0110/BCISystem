@@ -248,6 +248,7 @@ classdef HybridOptimizer < handle
                     'mean_accuracy', 0, ...
                     'learning_rates', [], ...
                     'batch_sizes', [], ...
+                    'num_conv_layers', [], ...
                     'cnn_filters', [], ...
                     'filter_sizes', [], ...
                     'lstm_units', [], ...
@@ -270,12 +271,13 @@ classdef HybridOptimizer < handle
                         
                         summary.learning_rates(end+1) = result.params(1);
                         summary.batch_sizes(end+1) = result.params(2);
-                        summary.cnn_filters(end+1) = result.params(3);
-                        summary.filter_sizes(end+1) = result.params(4);
-                        summary.lstm_units(end+1) = result.params(5);
-                        summary.num_lstm_layers(end+1) = result.params(6);
-                        summary.dropout_rates(end+1) = result.params(7);
-                        summary.fc_units(end+1) = result.params(8);
+                        summary.num_conv_layers(end+1) = result.params(3);
+                        summary.cnn_filters(end+1) = result.params(4);
+                        summary.filter_sizes(end+1) = result.params(5);
+                        summary.lstm_units(end+1) = result.params(6);
+                        summary.num_lstm_layers(end+1) = result.params(7);
+                        summary.dropout_rates(end+1) = result.params(8);
+                        summary.fc_units(end+1) = result.params(9);
                         
                         if isOverfit
                             summary.overfit_models = summary.overfit_models + 1;
@@ -289,12 +291,13 @@ classdef HybridOptimizer < handle
                         fprintf('\nハイパーパラメータ設定:\n');
                         fprintf('  学習率: %.6f\n', result.params(1));
                         fprintf('  バッチサイズ: %d\n', result.params(2));
-                        fprintf('  CNNフィルタ数: %d\n', result.params(3));
-                        fprintf('  フィルタサイズ: %d\n', result.params(4));
-                        fprintf('  LSTMユニット数: %d\n', result.params(5));
-                        fprintf('  LSTM層数: %d\n', result.params(6));
-                        fprintf('  ドロップアウト率: %.2f\n', result.params(7));
-                        fprintf('  全結合層ユニット数: %d\n', result.params(8));
+                        printf('  CNN層数: %d\n', result.params(3));
+                        fprintf('  CNNフィルタ数: %d\n', result.params(4));
+                        fprintf('  フィルタサイズ: %d\n', result.params(5));
+                        fprintf('  LSTMユニット数: %d\n', result.params(6));
+                        fprintf('  LSTM層数: %d\n', result.params(7));
+                        fprintf('  ドロップアウト率: %.2f\n', result.params(8));
+                        fprintf('  全結合層ユニット数: %d\n', result.params(9));
                         fprintf('\n学習統計:\n');
                         if isfield(result.trainInfo, 'FinalEpoch')
                             fprintf('  最終エポック: %d\n', result.trainInfo.FinalEpoch);
@@ -389,6 +392,13 @@ classdef HybridOptimizer < handle
             fprintf('  標準偏差: %.1f\n', std(summary.batch_sizes));
             fprintf('  最小: %d\n', min(summary.batch_sizes));
             fprintf('  最大: %d\n', max(summary.batch_sizes));
+
+            % CNNの層数の統計
+            fprintf('\nCNN層数:\n');
+            fprintf('  平均: %.1f\n', mean(summary.num_conv_layers));
+            fprintf('  標準偏差: %.1f\n', std(summary.num_conv_layers));
+            fprintf('  最小: %d\n', min(summary.num_conv_layers));
+            fprintf('  最大: %d\n', max(summary.num_conv_layers));
             
             % CNNフィルタ数の統計
             fprintf('\nCNNフィルタ数:\n');
@@ -475,12 +485,13 @@ classdef HybridOptimizer < handle
                 fprintf('\n=== 最適なパラメータ ===\n');
                 fprintf('学習率: %.6f\n', obj.bestParams(1));
                 fprintf('バッチサイズ: %d\n', obj.bestParams(2));
-                fprintf('CNNフィルタ数: %d\n', obj.bestParams(3));
-                fprintf('フィルタサイズ: %d\n', obj.bestParams(4));
-                fprintf('LSTMユニット数: %d\n', obj.bestParams(5));
-                fprintf('LSTM層数: %d\n', obj.bestParams(6));
-                fprintf('ドロップアウト率: %.2f\n', obj.bestParams(7));
-                fprintf('全結合層ユニット数: %d\n', obj.bestParams(8));
+                fprintf('CNN層数: %d\n', obj.bestParams(3));
+                fprintf('CNNフィルタ数: %d\n', obj.bestParams(4));
+                fprintf('フィルタサイズ: %d\n', obj.bestParams(5));
+                fprintf('LSTMユニット数: %d\n', obj.bestParams(6));
+                fprintf('LSTM層数: %d\n', obj.bestParams(7));
+                fprintf('ドロップアウト率: %.2f\n', obj.bestParams(8));
+                fprintf('全結合層ユニット数: %d\n', obj.bestParams(9));
                 fprintf('達成精度: %.4f\n', obj.bestPerformance);
             end
         end
