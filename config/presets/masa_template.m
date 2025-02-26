@@ -168,8 +168,8 @@ function preset = template()
     signal = struct(...
         'enable', true, ...           % true/false: 信号処理有効/無効
         'window', struct(...          % 解析窓の設定
-            'analysis', 1.0, ...      % 解析窓長 (0.5-10.0 秒)
-            'stimulus',  2.0, ...      % 刺激提示時間 (1.0-30.0 秒)
+            'analysis', 6.2, ...      % 解析窓長 (0.5-10.0 秒)
+            'stimulus',  [-0.2 6.0], ...      % 刺激提示時間 (1.0-30.0 秒)
             'bufferSize', 15, ...     % バッファサイズ (5-30 秒)
             'updateBuffer', 1, ...    % バッファ更新間隔 (0.1-2.0 秒)
             'step', [], ...           % 解析窓シフト幅 (自動計算)
