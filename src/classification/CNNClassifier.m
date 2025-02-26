@@ -16,8 +16,9 @@ classdef CNNClassifier < handle
         % 過学習監視用
         overfitMetrics     % 過学習メトリクス
 
-        % データ拡張コンポーネント
+        % コンポーネント
         dataAugmenter
+        normalizer
     end
     
     properties (Access = public)
@@ -32,6 +33,7 @@ classdef CNNClassifier < handle
             obj.initializeProperties();
             obj.useGPU = params.classifier.cnn.gpu;
             obj.dataAugmenter = DataAugmenter(params);
+            obj.normalizer = EEGNormalizer(params);
         end
 
         function results = trainCNN(obj, processedData, processedLabel)
@@ -58,6 +60,15 @@ classdef CNNClassifier < handle
                     fprintf('訓練データを拡張しました:\n');
                     fprintf('  訓練データ: %d サンプル\n', length(trainData));
                 end
+
+                % 正規化
+                if obj.params.signal.preprocessing.normalize.enable
+                    [trainData, normParams] = obl.normalizer.normalize(trainData);
+                end
+
+                % 検証データと評価データにも同じ正規化パラメータで正規化
+                valData = obj.normalizer.normalizeOnline(valData, normParams);
+                testData = obj.normalizer.normalizeOnline(testData, normParams);
                 
                 % 各データの準備
                 prepTrainData = obj.prepareDataForCNN(trainData);

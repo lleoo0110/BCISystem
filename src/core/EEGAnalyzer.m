@@ -332,27 +332,11 @@ classdef EEGAnalyzer < handle
                     obj.processingInfo.iirFilter = info;
                 end
 
-                % 正規化
-                if obj.params.signal.preprocessing.normalize.enable
-                    [data, info] = obj.normalizer.normalize(data);
-                    obj.processingInfo.normalize = info;
-                end
-
                 % エポック化
                 [epochs, epochLabels, info] = obj.epoching.epoching(data, obj.labels);
                 obj.processedData = epochs;
                 obj.processedLabel = epochLabels;
                 obj.processingInfo.epoch = info;
-                
-                % % データ拡張←Classifierに移動
-                % if obj.params.signal.preprocessing.augmentation.enable
-                %     [augData, augLabels, info] = obj.dataAugmenter.augmentData(epochs, epochLabels);
-                %     obj.processingInfo.augmentation = info;
-                %     obj.processedLabel = augLabels;
-                %     epochs = augData;
-                % else
-                %     obj.processedLabel = epochLabels;
-                % end
 
             catch ME
                 error('Preprocessing pipeline failed: %s', ME.message);
