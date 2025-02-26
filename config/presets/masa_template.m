@@ -169,7 +169,7 @@ function preset = template()
         'enable', true, ...           % true/false: 信号処理有効/無効
         'window', struct(...          % 解析窓の設定
             'analysis', 1.0, ...      % 解析窓長 (0.5-10.0 秒)
-            'stimulus', 2.0, ...      % 刺激提示時間 (1.0-30.0 秒)
+            'stimulus',  2.0, ...      % 刺激提示時間 (1.0-30.0 秒)
             'bufferSize', 15, ...     % バッファサイズ (5-30 秒)
             'updateBuffer', 1, ...    % バッファ更新間隔 (0.1-2.0 秒)
             'step', [], ...           % 解析窓シフト幅 (自動計算)
@@ -257,7 +257,7 @@ function preset = template()
                 'method', 'zscore' ... % 正規化方法: 'zscore'/'minmax'/'robust'
             ), ...
             'augmentation', struct(... % データ拡張設定
-                'enable', true, ...   % true/false: データ拡張有効/無効
+                'enable', false, ...   % true/false: データ拡張有効/無効
                 'augmentationRatio', 7, ... % 拡張比率 (2-10)
                 'combinationLimit', 3, ... % 最大手法数 (1-5)
                 'methods', struct(...   % 拡張手法設定
