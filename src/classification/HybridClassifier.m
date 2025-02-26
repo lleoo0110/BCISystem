@@ -57,12 +57,11 @@ classdef HybridClassifier < handle
 
                 % 正規化
                 if obj.params.signal.preprocessing.normalize.enable
-                    [trainData, normParams] = obl.normalizer.normalize(trainData);
+                    [trainData, normParams] = obj.normalizer.normalize(trainData);
+                    % 検証データと評価データにも同じ正規化パラメータで正規化
+                    valData = obj.normalizer.normalizeOnline(valData, normParams);
+                    testData = obj.normalizer.normalizeOnline(testData, normParams);
                 end
-
-                % 検証データと評価データにも同じ正規化パラメータで正規化
-                valData = obj.normalizer.normalizeOnline(valData, normParams);
-                testData = obj.normalizer.normalizeOnline(testData, normParams);
 
                 % データ前処理
                 prepTrainCNN = obj.prepareDataForCNN(trainData);
@@ -145,7 +144,8 @@ classdef HybridClassifier < handle
                         'confusionMatrix', confMat ...
                     ), ...
                     'trainInfo', trainInfo, ...
-                    'overfitting', obj.overfitMetrics ...
+                    'overfitting', obj.overfitMetrics, ...
+                    'normParams', normParams ...
                 );
                 
                 % 性能指標の更新
@@ -237,7 +237,7 @@ classdef HybridClassifier < handle
         end
         
         % ハイブリッドレイヤーの構築
-        function layers = buildHybridLayers(obj, cnnInputSize, lstmInputSize)
+        function lgraph = buildHybridLayers(obj, cnnInputSize, lstmInputSize)
             try
                 arch = obj.params.classifier.hybrid.architecture;
                 numClasses = arch.numClasses;
@@ -415,14 +415,19 @@ classdef HybridClassifier < handle
                 mergeLayers = [mergeLayers; fcFinal];
                     
                 %% === レイヤーグラフの構築と接続 ===
-                layers = layerGraph();
-                layers = addLayers(layers, cnnLayers);
-                layers = addLayers(layers, lstmLayers);
-                layers = addLayers(layers, mergeLayers);
+                lgraph = layerGraph();
+        
+                % 各ブランチのレイヤーを追加
+                lgraph = addLayers(lgraph, cnnLayers);
+                lgraph = addLayers(lgraph, lstmLayers);
+                lgraph = addLayers(lgraph, mergeLayers);
                 
                 % ブランチの接続
-                layers = connectLayers(layers, 'reshape_cnn', 'concat/in1');
-                layers = connectLayers(layers, 'reshape_lstm', 'concat/in2');
+                lgraph = connectLayers(lgraph, 'reshape_cnn', 'concat/in1');
+                lgraph = connectLayers(lgraph, 'reshape_lstm', 'concat/in2');
+                
+                % レイヤーグラフの作成に関するデバッグ情報
+                fprintf('Created layerGraph with %d layers\n', numel(lgraph.Layers));
                 
                 % デバッグ情報の出力
                 fprintf('\nNetwork architecture summary (Feature Extractor):\n');
@@ -472,7 +477,7 @@ classdef HybridClassifier < handle
                     'GradientThreshold', 1);
                 
                 % レイヤーグラフにトレーニング用の分類層を追加
-                tempLayers = layerGraph(layers);
+                tempLayers = layers;
                 
                 % 一時的に分類用の層を追加
                 fcFinalClass = fullyConnectedLayer(length(unique(trainLabels)), 'Name', 'fc_final_class');

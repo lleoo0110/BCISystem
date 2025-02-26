@@ -44,7 +44,10 @@ classdef SVMClassifier < handle
                     obj.performance.optimalThreshold = bestThreshold;
                 end
 
-                results = struct('performance', obj.performance, 'model', obj.svmModel);
+                results = struct( ...
+                    'performance', obj.performance, ...
+                    'model', obj.svmModel ...
+                );
                 obj.displayResults();
 
             catch ME

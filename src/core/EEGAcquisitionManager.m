@@ -1160,9 +1160,11 @@ classdef EEGAcquisitionManager < handle
                     if obj.params.signal.preprocessing.filter.notch.enable
                         [data, ~] = obj.notchFilter.designAndApplyFilter(data);
                     end
+
                     if obj.params.signal.preprocessing.filter.fir.enable
                         [data, ~] = obj.firFilter.designAndApplyFilter(data);
                     end
+
                     if obj.params.signal.preprocessing.filter.iir.enable
                         [data, ~] = obj.iirFilter.designAndApplyFilter(data);
                     end
@@ -1180,10 +1182,13 @@ classdef EEGAcquisitionManager < handle
 
                     % 正規化処理
                     if obj.params.signal.preprocessing.normalize.enable
-                        if strcmpi(obj.params.acquisition.mode, 'online')
+                        if isfield(obj, 'normParams') && ~isempty(obj.normParams)
                             data = obj.normalizer.normalizeOnline(data, obj.normParams);
                         else
-                            [data, ~] = obj.normalizer.normalize(data);
+                            warning('オンラインモードで正規化パラメータが見つかりません。正規化をスキップします。');
+                            fprintf('正規化パラメータを含む分析結果を読み込む必要があります。\n');
+                            % ここでGUIにエラーメッセージを表示することも検討
+                            % obj.guiController.showError('正規化エラー', '正規化パラメータが見つかりません。');
                         end
                     end
                     

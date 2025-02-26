@@ -442,6 +442,11 @@ classdef EEGAnalyzer < handle
                     else
                         obj.cnn = obj.cnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
                     end
+
+                    % 正規化パラメータの保存
+                    if isfield(obj.cnn, 'normParams')
+                        obj.processingInfo.normalize = obj.cnn.normParams;
+                    end
                 end
         
                 % LSTM分類
@@ -452,6 +457,11 @@ classdef EEGAnalyzer < handle
                     else
                         obj.lstm = obj.lstmClassifier.trainLSTM(obj.processedData, obj.processedLabel);
                     end
+
+                    % 正規化パラメータの保存
+                    if isfield(obj.lstm, 'normParams')
+                        obj.processingInfo.normalize = obj.lstm.normParams;
+                    end
                 end
         
                 % Hybrid分類
@@ -461,6 +471,11 @@ classdef EEGAnalyzer < handle
                         obj.hybrid = hybridOptimizer.optimize(obj.processedData, obj.processedLabel);
                     else
                         obj.hybrid = obj.hybridClassifier.trainHybrid(obj.processedData, obj.processedLabel);
+                    end
+
+                    % 正規化パラメータの保存
+                    if isfield(obj.hybrid, 'normParams')
+                        obj.processingInfo.normalize = obj.hybrid.normParams;
                     end
                 end
         
@@ -768,11 +783,17 @@ classdef EEGAnalyzer < handle
                 saveData.processedData = obj.processedData;
                 saveData.processedLabel = obj.processedLabel;
                 saveData.processingInfo = obj.processingInfo;
+                
+                % 正規化情報がない場合は初期化
+                if ~isfield(saveData.processingInfo, 'normalize')
+                    saveData.processingInfo.normalize = struct();
+                end
+                
                 % 特徴抽出結果
                 if ~isempty(obj.results)
                     saveData.results = obj.results;
                 end
-
+        
                 % 分類器結果の保存
                 saveData.classifier = struct();
                 
@@ -781,15 +802,25 @@ classdef EEGAnalyzer < handle
                     saveData.classifier.svm = struct(...
                         'model', obj.svm.model, ...
                         'performance', obj.svm.performance);
+                        
+                    % 正規化パラメータの保存
+                    if isfield(obj.svm, 'normParams')
+                        saveData.processingInfo.normalize = obj.svm.normParams;
+                    end
                 end
-
+        
                 % ECOC結果
                 if obj.params.classifier.ecoc.enable && ~isempty(obj.ecoc)
                     saveData.classifier.ecoc = struct(...
                         'model', obj.ecoc.model, ...
                         'performance', obj.ecoc.performance);
+                        
+                    % 正規化パラメータの保存
+                    if isfield(obj.ecoc, 'normParams')
+                        saveData.processingInfo.normalize = obj.ecoc.normParams;
+                    end
                 end
-
+        
                 % CNN結果
                 if obj.params.classifier.cnn.enable && ~isempty(obj.cnn)
                     saveData.classifier.cnn = struct(...
@@ -798,8 +829,13 @@ classdef EEGAnalyzer < handle
                         'trainInfo', obj.cnn.trainInfo, ...
                         'overfitting', obj.cnn.overfitting ...
                     );
+                    
+                    % 正規化パラメータの保存
+                    if isfield(obj.cnn, 'normParams')
+                        saveData.processingInfo.normalize = obj.cnn.normParams;
+                    end
                 end
-
+        
                 % LSTM結果
                 if obj.params.classifier.lstm.enable && ~isempty(obj.lstm)
                     saveData.classifier.lstm = struct(...
@@ -808,8 +844,13 @@ classdef EEGAnalyzer < handle
                         'trainInfo', obj.lstm.trainInfo, ...
                         'overfitting', obj.lstm.overfitting ...
                     );
+                    
+                    % 正規化パラメータの保存
+                    if isfield(obj.lstm, 'normParams')
+                        saveData.processingInfo.normalize = obj.lstm.normParams;
+                    end
                 end
-
+        
                 % Hybrid結果
                 if obj.params.classifier.hybrid.enable && ~isempty(obj.hybrid)
                     saveData.classifier.hybrid = struct(...
@@ -818,12 +859,17 @@ classdef EEGAnalyzer < handle
                         'trainInfo', obj.hybrid.trainInfo, ...
                         'overfitting', obj.hybrid.overfitting ...
                     );
+                    
+                    % 正規化パラメータの保存
+                    if isfield(obj.hybrid, 'normParams')
+                        saveData.processingInfo.normalize = obj.hybrid.normParams;
+                    end
                 end
-
+        
                 % DataManagerを使用して保存
                 obj.dataManager.saveDataset(saveData, savePath);
                 fprintf('Results saved to: %s\n', savePath);
-
+        
             catch ME
                 error('Failed to save results: %s', ME.message);
             end
