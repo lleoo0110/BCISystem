@@ -247,7 +247,8 @@ classdef LSTMClassifier < handle
                    'Verbose', true, ...
                    'ValidationData', valDS, ...
                    'ValidationFrequency', obj.params.classifier.lstm.training.frequency, ...
-                   'ValidationPatience', obj.params.classifier.lstm.training.patience); 
+                   'ValidationPatience', obj.params.classifier.lstm.training.patience, ...
+                   'GradientThreshold', 1);); 
         end
 
         %% データセットの分割（訓練/検証/テスト）
@@ -703,7 +704,6 @@ classdef LSTMClassifier < handle
                 if isOverfit
                     fprintf('\n=== 詳細な過学習分析 ===\n');
                     fprintf('1. 汎化性能:\n');
-                    fprintf('  - Generalization Gap: %.2f%%\n', genGap);
                     fprintf('  - Performance Gap: %.2f%%\n', perfGap);
                     
                     fprintf('\n2. 学習の進行状況:\n');
@@ -717,10 +717,6 @@ classdef LSTMClassifier < handle
                     fprintf('  - 学習の進行: %s\n', mat2str(isLearningProgressing));
                     
                     fprintf('\n推奨される対策:\n');
-                    if genGap > 5
-                        fprintf('- 正則化の強化を検討\n');
-                        fprintf('- ドロップアウト率の調整\n');
-                    end
                     if ~isLearningProgressing
                         fprintf('- 学習率の調整\n');
                         fprintf('- モデル容量の見直し\n');
