@@ -71,7 +71,7 @@ classdef LSTMOptimizer < handle
                             trainResults.performance.overallAccuracy);
 
                         if obj.useGPU
-                            gpuDevice([]);
+                            reset(gpuDevice);
                         end
 
                     catch ME
@@ -79,7 +79,7 @@ classdef LSTMOptimizer < handle
                         trialResults{i} = [];
 
                         if obj.useGPU
-                            gpuDevice([]);
+                            reset(gpuDevice);
                         end
                     end
                 end

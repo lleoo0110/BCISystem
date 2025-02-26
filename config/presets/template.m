@@ -3,9 +3,9 @@ function preset = template()
     preset_info = struct(...
         'name', 'template', ...
         'description', 'Default template preset', ...
-        'version', '3.1', ...
+        'version', '3.2', ...
         'author', 'LLEOO', ...
-        'date', '2025-02-21' ...
+        'date', '2025-02-24' ...
     );
 
     %% === トリガーマッピング設定 ===
@@ -48,7 +48,7 @@ function preset = template()
     %% === データ収集設定 ===
     % データ収集に関する基本設定
     acquisition = struct(...
-        'mode', 'online', ...           % モード: 'online'/'offline'
+        'mode', 'offline', ...           % モード: 'online'/'offline'
         'emg', struct(...               % EMG計測の設定
             'enable', false, ...        % true/false: EMG計測有効/無効
             'channels', struct(...      % EMGチャンネル設定
@@ -156,8 +156,8 @@ function preset = template()
     signal = struct(...
         'enable', true, ...           % true/false: 信号処理有効/無効
         'window', struct(...          % 解析窓の設定
-            'analysis', 1.0, ...      % 解析窓長 (0.5-10.0 秒)
-            'stimulus', 2.0, ...      % 刺激提示時間 (1.0-30.0 秒)
+            'analysis', 2.0, ...      % 解析窓長 (0.5-10.0 秒)
+            'stimulus', 5.0, ...      % 刺激提示時間 (1.0-30.0 秒)
             'bufferSize', 15, ...     % バッファサイズ (5-30 秒)
             'updateBuffer', 1, ...    % バッファ更新間隔 (0.1-2.0 秒)
             'step', [], ...           % 解析窓シフト幅 (自動計算)
@@ -166,7 +166,7 @@ function preset = template()
         'epoch', struct(...           % エポック化設定
             'method', 'time', ...     % 方法: 'time'/'odd-even'
             'storageType', 'array', ... % 保存形式: 'array'/'cell'
-            'overlap', 0, ...      % オーバーラップ率 (0-0.9)
+            'overlap', 0.5, ...      % オーバーラップ率 (0-0.9)
             'visual', struct(...      % 視覚タスク設定
                 'enable', false, ...  % true/false: 視覚タスク有効/無効
                 'taskTypes', {{'observation', 'imagery'}}, ... % タスク種類: 'observation'/'imagery'
@@ -176,7 +176,7 @@ function preset = template()
             ) ...
         ), ...
         'frequency', struct(...       % 周波数解析設定
-            'min', 1, ...             % 最小周波数 (0.1-100 Hz)
+            'min', 8, ...             % 最小周波数 (0.1-100 Hz)
             'max', 30, ...            % 最大周波数 (1-200 Hz)
             'bands', struct(...       % 周波数帯域定義
                 'delta', [1 4], ...   % デルタ波帯域 (0.5-4 Hz)
@@ -197,11 +197,18 @@ function preset = template()
                 ), ...
                 'windowSize', 1.0 ...  % 解析窓サイズ (0.5-2.0 秒)
             ), ...
-            'baseline', struct(...    % ベースライン補正
+            'baseline', struct(...    % ベースライン補正 (修正後)
                 'enable', false, ...  % true/false: ベースライン補正有効/無効
                 'method', 'interval', ... % 方法: 'interval'/'trend'/'dc'/'moving'
-                'windowSize', 1.0, ... % 窓サイズ (0.5-5.0 秒)
-                'overlap', 0.5 ...     % オーバーラップ率 (0-0.9)
+                'applyToChannels', [], ... % 適用チャネル (空の場合は全チャネル) 例: [1, 3, 5]
+                'windowSize', 1.0, ... % 窓サイズ (秒) - 移動平均、区間平均で使用
+                'overlap', 0.5, ...     % オーバーラップ率 (0-0.9) - 区間平均で使用
+                'intervalType', 'auto', ... % 区間タイプ: 'auto'/'prepost'/'custom' 'auto': 自動区間分割 (windowSize, overlapを使用) - デフォルト 'prepost': プレ/ポストベースライン区間を使用 'custom': カスタム区間を指定
+                'preBaselineDuration', 0.5, ... % プレベースライン区間長 (秒, intervalType='prepost' の場合) - イベント前などのベースライン区間
+                'postBaselineDuration', 0, ... % ポストベースライン区間長 (秒, intervalType='prepost' の場合) - イベント後などのベースライン区間
+                'baselineIntervals', [], ... % カスタムベースライン区間 (Nx2 行列, intervalType='custom' の場合) 各行が [開始時間(秒), 終了時間(秒)] を表す区間 例: [0, 1; 5, 6; 10, 12]
+                'trendType', 'polynomial', ... % トレンド除去タイプ: 'polynomial'/'linear''polynomial': 多項式フィッティング - デフォルト (3次)linear': 線形フィッティング (1次多項式)
+                'polynomialOrder', 3 ...      % 多項式次数 (trendType='polynomial' の場合, 1以上の整数) - デフォルトは3
             ), ...
             'downsample', struct(...  % ダウンサンプリング設定
                 'enable', false, ...  % true/false: ダウンサンプリング有効/無効
@@ -223,7 +230,7 @@ function preset = template()
                     'passbandRipple', 1, ... % パスバンドリップル (0.5-3 dB)
                     'stopbandAttenuation', 60 ... % 阻止域減衰量 (40-80 dB)
                 ), ...
-                'iir', struct(...       % IIRフィルタ  **追加**
+                'iir', struct(...       % IIRフィルタ
                     'enable', false, ...    % IIRフィルタの有効/無効
                     'filterOrder', 4, ...     % IIRフィルタの次数
                     'designMethod', 'butterworth', ... % 'butterworth', 'chebyshev1', 'chebyshev2', 'ellip'
@@ -368,7 +375,7 @@ function preset = template()
         ), ...
         'ecoc', struct(...            % ECOC設定
             'enable', false, ...      % true/false: ECOC有効/無効
-            'optimize', false, ...    % true/false: パラメータ最適化有効/無効
+            'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'probability', true, ...  % true/false: 確率出力有効/無効
             'kernel', 'rbf', ...      % カーネル関数: 'linear'/'rbf'/'polynomial'
             'coding', 'onevsall', ... % コーディング: 'onevsall'/'allpairs'
@@ -380,7 +387,7 @@ function preset = template()
             ) ...
         ), ...
         'cnn', struct(...             % CNN設定
-            'enable', true, ...      % true/false: CNN有効/無効
+            'enable', false, ...      % true/false: CNN有効/無効
             'gpu', true, ...          % true/false: GPU使用有効/無効
             'optimize', true, ...     % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
@@ -400,7 +407,7 @@ function preset = template()
                     'dropout2', 0.4, ...
                     'dropout3', 0.5 ...
                 ), ...
-                'batchNorm', true, ... % true/false: バッチ正規化有効/無効
+                'batchNorm', false, ... % true/false: バッチ正規化有効/無効
                 'fullyConnected', [128 64] ... % 全結合層ユニット数 (配列)
             ), ...
             'training', struct(...    % 学習設定
@@ -413,7 +420,7 @@ function preset = template()
                 ), ...
                 'maxEpochs', 100, ... % 最大エポック数 (10-1000)
                 'miniBatchSize', 128, ... % ミニバッチサイズ (8-512)
-                'frequency', 5, ... % 検証頻度 (エポック)
+                'frequency', 15, ... % 検証頻度 (エポック)
                 'patience', 20, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
@@ -435,7 +442,7 @@ function preset = template()
             ) ...
         ), ...
         'lstm', struct(...            % LSTM設定
-            'enable', true, ...      % true/false: LSTM有効/無効
+            'enable', false, ...      % true/false: LSTM有効/無効
             'gpu', true, ...         % true/false: GPU使用有効/無効
             'optimize', true, ...    % true/false: パラメータ最適化有効/無効
             'architecture', struct(... % ネットワークアーキテクチャ
@@ -455,7 +462,7 @@ function preset = template()
                     'dropout2', 0.4, ...
                     'dropout3', 0.5 ...
                 ), ...
-                'batchNorm', true, ... % true/false: バッチ正規化有効/無効
+                'batchNorm', false, ... % true/false: バッチ正規化有効/無効
                 'fullyConnected', [128 64] ... % 全結合層ユニット数 (配列)
             ), ...
             'training', struct(...    % 学習設定
@@ -469,7 +476,7 @@ function preset = template()
                 ), ...
                 'maxEpochs', 100, ...  % 最大エポック数 (5-100)
                 'miniBatchSize', 64, ... % ミニバッチサイズ (8-128)
-                'frequency', 5, ... % 検証頻度 (エポック)
+                'frequency', 15, ... % 検証頻度 (反復)
                 'patience', 15, ... % 早期終了の待機回数
                 'shuffle', 'every-epoch', ... % シャッフル: 'never'/'once'/'every-epoch'
                 'validation', struct(... % 検証設定
@@ -494,7 +501,7 @@ function preset = template()
             'optimize', true, ...     % パラメータ最適化有効
             'architecture', struct(...
                 'numClasses', num_classes, ... % クラス数（自動設定）
-                'batchNorm', true, ...         % バッチ正規化の使用
+                'batchNorm', false, ...         % バッチ正規化の使用
                 'cnn', struct(...
                     'inputSize', [], ...       % 入力サイズ（自動設定）
                     'convLayers', struct(...
@@ -506,7 +513,7 @@ function preset = template()
                     'dropoutLayers', struct(...
                         'dropout1', 0.4 ...      % ドロップアウト率を0.3から0.4に増加
                     ), ...
-                    'fullyConnected', [64] ...   % 全結合層のユニット数を削減
+                    'fullyConnected', 64 ...   % 全結合層のユニット数を削減
                 ), ...
                 'lstm', struct(...
                     'sequenceInputLayer', struct(...
@@ -561,7 +568,7 @@ function preset = template()
                 ), ...
                 'maxEpochs', 100, ...             % 最大エポック数
                 'miniBatchSize', 50, ...
-                'frequency', 5, ...               % 検証頻度（エポック）
+                'frequency', 15, ...               % 検証頻度
                 'patience', 15, ...               % 早期終了待機回数
                 'shuffle', 'every-epoch', ...     % データシャッフル方法
                 'validation', struct(...
@@ -612,10 +619,10 @@ function preset = template()
             'visualization', struct(... % 可視化設定
                 'refreshRate', 0.2, ... % 表示更新レート (0.1-1.0 秒)
                 'enable', struct(...    % 表示項目の有効/無効
-                    'rawData', true, ... % true/false: 生データ表示
-                    'emgData', true, ... % true/false: EMGデータ表示
-                    'spectrum', true, ... % true/false: スペクトル表示
-                    'ersp', true ...     % true/false: ERSP表示
+                    'rawData', false, ... % true/false: 生データ表示
+                    'emgData', false, ... % true/false: EMGデータ表示
+                    'spectrum', false, ... % true/false: スペクトル表示
+                    'ersp', false ...     % true/false: ERSP表示
                 ), ...
                 'channels', struct(...  % チャンネル表示設定
                     'eeg', struct(...   % EEGチャンネル

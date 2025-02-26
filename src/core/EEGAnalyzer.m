@@ -153,7 +153,6 @@ classdef EEGAnalyzer < handle
                             end
                         end
                     end
-
                 else
                     % 単一ファイルの処理
                     fprintf('\n=== 単一ファイル処理開始 ===\n');
@@ -341,21 +340,19 @@ classdef EEGAnalyzer < handle
 
                 % エポック化
                 [epochs, epochLabels, info] = obj.epoching.epoching(data, obj.labels);
-                obj.processingInfo.epoch = info;
-
-                
-                
-                % データ拡張
-                if obj.params.signal.preprocessing.augmentation.enable
-                    [augData, augLabels, info] = obj.dataAugmenter.augmentData(epochs, epochLabels);
-                    obj.processingInfo.augmentation = info;
-                    obj.processedLabel = augLabels;
-                    epochs = augData;
-                else
-                    obj.processedLabel = epochLabels;
-                end
-                
                 obj.processedData = epochs;
+                obj.processedLabel = epochLabels;
+                obj.processingInfo.epoch = info;
+                
+                % % データ拡張←Classifierに移動
+                % if obj.params.signal.preprocessing.augmentation.enable
+                %     [augData, augLabels, info] = obj.dataAugmenter.augmentData(epochs, epochLabels);
+                %     obj.processingInfo.augmentation = info;
+                %     obj.processedLabel = augLabels;
+                %     epochs = augData;
+                % else
+                %     obj.processedLabel = epochLabels;
+                % end
 
             catch ME
                 error('Preprocessing pipeline failed: %s', ME.message);
