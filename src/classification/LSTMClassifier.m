@@ -250,7 +250,8 @@ classdef LSTMClassifier < handle
                    'ValidationData', valDS, ...
                    'ValidationFrequency', obj.params.classifier.lstm.training.frequency, ...
                    'ValidationPatience', obj.params.classifier.lstm.training.patience, ...
-                   'GradientThreshold', 1);
+                   'GradientThreshold', 1 ...
+               );
         end
 
         %% データセットの分割（訓練/検証/テスト）
@@ -270,7 +271,7 @@ classdef LSTMClassifier < handle
                 % 分割比率の計算
                 trainRatio = (k-1)/k;  % 1-k/k
                 valRatio = 1/(2*k);    % k/2k
-                testRatio = 1/(2*k);   % k/2k
+                % testRatio = 1/(2*k);   % k/2k
         
                 % データ数の計算
                 numTrain = floor(numEpochs * trainRatio);
@@ -326,7 +327,7 @@ classdef LSTMClassifier < handle
         end
 
         %% LSTM用のデータ前処理（セル配列へ変換）
-        function preparedData = prepareDataForLSTM(obj, data)
+        function preparedData = prepareDataForLSTM(~, data)
             try
                 if iscell(data)
                     % 入力が既にセル配列の場合
@@ -350,7 +351,7 @@ classdef LSTMClassifier < handle
                     end
                 else
                     % 入力が数値配列の場合（3次元: channels x timepoints x trials）
-                    [channels, timepoints, trials] = size(data);
+                    [~, ~, trials] = size(data);
                     preparedData = cell(trials, 1);
                     for i = 1:trials
                         currentData = data(:, :, i);

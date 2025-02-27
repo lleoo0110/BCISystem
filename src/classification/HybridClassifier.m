@@ -58,7 +58,7 @@ classdef HybridClassifier < handle
                 % 正規化
                 if obj.params.signal.preprocessing.normalize.enable
                     [trainData, normParams] = obj.normalizer.normalize(trainData);
-                    
+
                     % 検証データと評価データにも同じ正規化パラメータで正規化
                     valData = obj.normalizer.normalizeOnline(valData, normParams);
                     testData = obj.normalizer.normalizeOnline(testData, normParams);
@@ -202,11 +202,11 @@ classdef HybridClassifier < handle
                 end
 
                 % 入力が2次元の場合は、サンプル数1として3次元に変換
-                if ndims(data{1}) == 2
+                if ismatrix(data{1})
                     data{1} = reshape(data{1}, size(data{1},1), size(data{1},2), 1);
                 end
 
-                if ndims(data{2}) == 2
+                if ismatrix(data{2})
                     data{2} = reshape(data{2}, size(data{2},1), size(data{2},2), 1);
                 end
 
