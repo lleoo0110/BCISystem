@@ -44,7 +44,10 @@ classdef SVMClassifier < handle
                     obj.performance.optimalThreshold = bestThreshold;
                 end
 
-                results = struct('performance', obj.performance, 'model', obj.svmModel);
+                results = struct( ...
+                    'performance', obj.performance, ...
+                    'model', obj.svmModel ...
+                );
                 obj.displayResults();
 
             catch ME
@@ -115,10 +118,6 @@ classdef SVMClassifier < handle
                 end
 
             catch ME
-                % エラー情報の詳細化
-                errorMsg = sprintf('SVM prediction failed: %s\nInput size: [%s]', ...
-                    ME.message, mat2str(size(features)));
-
                 % エラースタックの表示（デバッグ用）
                 fprintf('Error details:\n');
                 fprintf('  Message: %s\n', ME.message);
@@ -130,8 +129,6 @@ classdef SVMClassifier < handle
                     end
                     fprintf('  Score values: [%.3f, %.3f]\n', scores(1,1), scores(1,2));
                 end
-
-                error('SVMClassifier:PredictionError', errorMsg);
             end
         end
     end

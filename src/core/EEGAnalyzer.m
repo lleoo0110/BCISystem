@@ -21,6 +21,7 @@ classdef EEGAnalyzer < handle
         dataAugmenter      % データ拡張
         downSampler        % ダウンサンプリング
         firFilter          % FIRフィルタ
+        iirFilter          % IIRフィルタ
         notchFilter        % ノッチフィルタ
         normalizer         % 正規化
         epoching          % エポック化コンポーネント
@@ -152,7 +153,6 @@ classdef EEGAnalyzer < handle
                             end
                         end
                     end
-
                 else
                     % 単一ファイルの処理
                     fprintf('\n=== 単一ファイル処理開始 ===\n');
@@ -202,6 +202,7 @@ classdef EEGAnalyzer < handle
             obj.dataAugmenter = DataAugmenter(obj.params);
             obj.downSampler = DownSampler(obj.params);
             obj.firFilter = FIRFilterDesigner(obj.params);
+            obj.iirFilter = IIRFilterDesigner(obj.params);
             obj.notchFilter = NotchFilterDesigner(obj.params);
             obj.normalizer = EEGNormalizer(obj.params);
             obj.epoching = Epoching(obj.params);
@@ -265,7 +266,8 @@ classdef EEGAnalyzer < handle
                 ), ...
                 'trainingInfo', [], ...
                 'crossValidation', [], ...
-                'overfitting', [] ...
+                'overfitting', [], ...
+                'normParams', [] ...
             );
 
             % 各分類器の結果を初期化
@@ -284,10 +286,10 @@ classdef EEGAnalyzer < handle
                     error('Required field %s not found in loaded data', requiredFields{i});
                 end
             end
-
+        
             % データの設定
             obj.rawData = loadedData.rawData;
-            obj.labels = loadedData.labels;           
+            obj.labels = loadedData.labels;
         end
         
         function executePreprocessingPipeline(obj)
@@ -319,32 +321,23 @@ classdef EEGAnalyzer < handle
                     obj.processingInfo.notchFilter = info;
                 end
 
+                % FIRフィルタ
                 if obj.params.signal.preprocessing.filter.fir.enable
                     [data, info] = obj.firFilter.designAndApplyFilter(data);
                     obj.processingInfo.firFilter = info;
                 end
 
-                % 正規化
-                if obj.params.signal.preprocessing.normalize.enable
-                    [data, info] = obj.normalizer.normalize(data);
-                    obj.processingInfo.normalize = info;
+                % IIRフィルタ
+                if obj.params.signal.preprocessing.filter.iir.enable
+                    [data, info] = obj.iirFilter.designAndApplyFilter(data);
+                    obj.processingInfo.iirFilter = info;
                 end
 
                 % エポック化
                 [epochs, epochLabels, info] = obj.epoching.epoching(data, obj.labels);
-                obj.processingInfo.epoch = info;
-                
-                % データ拡張
-                if obj.params.signal.preprocessing.augmentation.enable
-                    [augData, augLabels, info] = obj.dataAugmenter.augmentData(epochs, epochLabels);
-                    obj.processingInfo.augmentation = info;
-                    obj.processedLabel = augLabels;
-                    epochs = augData;
-                else
-                    obj.processedLabel = epochLabels;
-                end
-                
                 obj.processedData = epochs;
+                obj.processedLabel = epochLabels;
+                obj.processingInfo.epoch = info;
 
             catch ME
                 error('Preprocessing pipeline failed: %s', ME.message);
@@ -425,69 +418,68 @@ classdef EEGAnalyzer < handle
             end
         end
         
-        function performClassification(obj)
+       function performClassification(obj)
             try
+                % CSP特徴量に基づく分類
                 if ~isempty(obj.results.csp.features)
                     % SVM分類
                     if obj.params.classifier.svm.enable
                         obj.svm = obj.svmClassifier.trainSVM(...
                             obj.results.csp.features, obj.processedLabel);
                     end
-
+        
                     % ECOC分類
                     if obj.params.classifier.ecoc.enable
                         obj.ecoc = obj.ecocClassifier.trainECOC(...
                             obj.results.csp.features, obj.processedLabel);
                     end
                 end
-
+        
                 % CNN分類
-                
                 if obj.params.classifier.cnn.enable
-                    cnnOptimizer = CNNOptimizer(obj.params);
-                    [cnnOptimizedParams, ~, ~] = cnnOptimizer.optimize(obj.processedData, obj.processedLabel);
-
-                    if obj.params.classifier.cnn.optimize && ~isempty(cnnOptimizedParams)
-                        updatedParams = obj.params;
-                        updatedParams.classifier.cnn = obj.updateCNNParams(obj.params.classifier.cnn, cnnOptimizedParams);
-                        updatedCnnClassifier = CNNClassifier(updatedParams);
-                        obj.cnn = updatedCnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
+                    if obj.params.classifier.cnn.optimize
+                        cnnOptimizer = CNNOptimizer(obj.params);
+                        obj.cnn = cnnOptimizer.optimize(obj.processedData, obj.processedLabel);
                     else
                         obj.cnn = obj.cnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
                     end
-                end
 
+                    % 正規化パラメータの保存
+                    if isfield(obj.cnn, 'normParams')
+                        obj.processingInfo.normalize = obj.cnn.normParams;
+                    end
+                end
+        
                 % LSTM分類
                 if obj.params.classifier.lstm.enable
-                    lstmOptimizer = LSTMOptimizer(obj.params);
-                    [lstmOptimizedParams, ~, ~] = lstmOptimizer.optimize(obj.processedData, obj.processedLabel);
-
-                    if obj.params.classifier.lstm.optimize && ~isempty(lstmOptimizedParams)
-                        updatedParams = obj.params;
-                        updatedParams.classifier.lstm = obj.updateLSTMParams(obj.params.classifier.lstm, lstmOptimizedParams);
-                        updatedLstmClassifier = LSTMClassifier(updatedParams);
-                        obj.lstm = updatedLstmClassifier.trainLSTM(obj.processedData, obj.processedLabel);
+                    if obj.params.classifier.lstm.optimize
+                        lstmOptimizer = LSTMOptimizer(obj.params);
+                        obj.lstm = lstmOptimizer.optimize(obj.processedData, obj.processedLabel);
                     else
                         obj.lstm = obj.lstmClassifier.trainLSTM(obj.processedData, obj.processedLabel);
                     end
-                end
 
-                % Hybrid分類
-                if obj.params.classifier.hybrid.enable
-                    hybridOptimizer = HybridOptimizer(obj.params);
-                    [hybridOptimizedParams, ~, ~] = hybridOptimizer.optimize(obj.processedData, obj.processedLabel);
-    
-                    if obj.params.classifier.hybrid.optimize && ~isempty(hybridOptimizedParams)
-                        updatedParams = obj.params;
-                        updatedParams.classifier.hybrid = obj.updateHybridParams(obj.params.classifier.hybrid, hybridOptimizedParams);
-                        updatedHybridClassifier = HybridClassifier(updatedParams);
-                        obj.hybrid = updatedHybridClassifier.trainHybrid(obj.processedData, obj.processedLabel);
-                    else
-                        obj.hybridClassifier = HybridClassifier(obj.params);
-                        obj.hybrid = obj.hybridClassifier.trainHybrid(obj.processedData, obj.processedLabel);
+                    % 正規化パラメータの保存
+                    if isfield(obj.lstm, 'normParams')
+                        obj.processingInfo.normalize = obj.lstm.normParams;
                     end
                 end
-                
+        
+                % Hybrid分類
+                if obj.params.classifier.hybrid.enable
+                    if obj.params.classifier.hybrid.optimize
+                        hybridOptimizer = HybridOptimizer(obj.params);
+                        obj.hybrid = hybridOptimizer.optimize(obj.processedData, obj.processedLabel);
+                    else
+                        obj.hybrid = obj.hybridClassifier.trainHybrid(obj.processedData, obj.processedLabel);
+                    end
+
+                    % 正規化パラメータの保存
+                    if isfield(obj.hybrid, 'normParams')
+                        obj.processingInfo.normalize = obj.hybrid.normParams;
+                    end
+                end
+        
             catch ME
                 error('Classification failed: %s', ME.message);
             end
@@ -792,11 +784,17 @@ classdef EEGAnalyzer < handle
                 saveData.processedData = obj.processedData;
                 saveData.processedLabel = obj.processedLabel;
                 saveData.processingInfo = obj.processingInfo;
+                
+                % 正規化情報がない場合は初期化
+                if ~isfield(saveData.processingInfo, 'normalize')
+                    saveData.processingInfo.normalize = struct();
+                end
+                
                 % 特徴抽出結果
                 if ~isempty(obj.results)
                     saveData.results = obj.results;
                 end
-
+        
                 % 分類器結果の保存
                 saveData.classifier = struct();
                 
@@ -806,38 +804,51 @@ classdef EEGAnalyzer < handle
                         'model', obj.svm.model, ...
                         'performance', obj.svm.performance);
                 end
-
+        
                 % ECOC結果
                 if obj.params.classifier.ecoc.enable && ~isempty(obj.ecoc)
                     saveData.classifier.ecoc = struct(...
                         'model', obj.ecoc.model, ...
                         'performance', obj.ecoc.performance);
                 end
-
+        
                 % CNN結果
                 if obj.params.classifier.cnn.enable && ~isempty(obj.cnn)
                     saveData.classifier.cnn = struct(...
                         'model', obj.cnn.model, ...
                         'performance', obj.cnn.performance, ...
                         'trainInfo', obj.cnn.trainInfo, ...
-                        'overfitting', obj.cnn.overfitting ...
+                        'overfitting', obj.cnn.overfitting, ...
+                        'normParams',  obj.cnn.normParams ...
                     );
                 end
-
-                % LSTM結果（追加）
+        
+                % LSTM結果
                 if obj.params.classifier.lstm.enable && ~isempty(obj.lstm)
                     saveData.classifier.lstm = struct(...
                         'model', obj.lstm.model, ...
                         'performance', obj.lstm.performance, ...
                         'trainInfo', obj.lstm.trainInfo, ...
-                        'overfitting', obj.lstm.overfitting ...
+                        'overfitting', obj.lstm.overfitting, ...
+                        'normParams',  obj.cnn.normParams ...
                     );
                 end
-
+        
+                % Hybrid結果
+                if obj.params.classifier.hybrid.enable && ~isempty(obj.hybrid)
+                    saveData.classifier.hybrid = struct(...
+                        'model', obj.hybrid.model, ...
+                        'performance', obj.hybrid.performance, ...
+                        'trainInfo', obj.hybrid.trainInfo, ...
+                        'overfitting', obj.hybrid.overfitting, ...
+                        'normParams',  obj.cnn.normParams ...
+                    );
+                end
+        
                 % DataManagerを使用して保存
                 obj.dataManager.saveDataset(saveData, savePath);
                 fprintf('Results saved to: %s\n', savePath);
-
+        
             catch ME
                 error('Failed to save results: %s', ME.message);
             end
