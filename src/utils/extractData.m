@@ -23,16 +23,10 @@ function [extractedData, extractedLabels] = extractData(varargin)
     % 6. クラス抽出と番号変更の組み合わせ
     % [data, labels] = extractData('Classes', [1 2 4], 'ClassMap', [4, 3], 'SaveExtracted', true);
     %
-    % 7. 保存モードの選択（一括保存モード）
-    % [data, labels] = extractData('SaveExtracted', true, 'SaveMode', 'batch');
-    %
-    % 8. 保存モードの選択（個別保存モード）
-    % [data, labels] = extractData('SaveExtracted', true, 'SaveMode', 'individual');
-    %
-    % 9. クラス数を均衡にして抽出
+    % 7. クラス数を均衡にして抽出
     % [data, labels] = extractData('SaveExtracted', true, 'BalanceClasses', true);
     %
-    % 10. 特定のチャンネルのみ抽出
+    % 8. 特定のチャンネルのみ抽出
     % [data, labels] = extractData('Channels', [1, 2, 6, 8, 27, 29], 'SaveExtracted', true);
     
     % 入力パーサーの初期化
@@ -80,7 +74,7 @@ function [extractedData, extractedLabels] = extractData(varargin)
             else
                 % 複数ファイルの場合は通常の questdlg を使用
                 saveMode = questdlg('保存モードを選択してください:', ...
-                    '保存モードの選択', '個別保存', '一括保存', 'キャンセル', '個別保存');
+                    '保存モードの選択', '一括保存', '個別保存', 'キャンセル', '個別保存');
                 if strcmp(saveMode, 'キャンセル')
                     fprintf('処理がキャンセルされました。\n');
                     return;

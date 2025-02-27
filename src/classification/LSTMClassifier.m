@@ -16,8 +16,9 @@ classdef LSTMClassifier < handle
         % 過学習監視用
         overfitMetrics      % 過学習メトリクス
 
-        % データ拡張コンポーネント
+        % コンポーネント
         dataAugmenter
+        normalizer
     end
 
     properties (Access = public)
@@ -35,6 +36,7 @@ classdef LSTMClassifier < handle
             obj.overfitMetrics = struct();
             obj.useGPU = params.classifier.lstm.gpu;
             obj.dataAugmenter = DataAugmenter(params);
+            obj.normalizer = EEGNormalizer(params);
         end
 
         %% LSTMの学習開始
@@ -56,6 +58,15 @@ classdef LSTMClassifier < handle
                     fprintf('訓練データを拡張しました:\n');
                     fprintf('  訓練データ: %d サンプル\n', length(trainData));
                 end
+
+                % 正規化
+                if obj.params.signal.preprocessing.normalize.enable
+                    [trainData, normParams] = obj.normalizer.normalize(trainData);
+                end
+
+                % 検証データと評価データにも同じ正規化パラメータで正規化
+                valData = obj.normalizer.normalizeOnline(valData, normParams);
+                testData = obj.normalizer.normalizeOnline(testData, normParams);
 
                 % データ前処理
                 prepTrainData = obj.prepareDataForLSTM(trainData);
@@ -103,7 +114,9 @@ classdef LSTMClassifier < handle
                         'auc', aucValue, ...
                         'confusionMatrix', testMetrics.confusionMat), ...
                     'trainInfo', trainInfo, ...
-                    'overfitting', obj.overfitMetrics);
+                    'overfitting', obj.overfitMetrics, ...
+                    'normParams', normParams ...
+                );
 
                 obj.displayResults();
 
@@ -236,7 +249,9 @@ classdef LSTMClassifier < handle
                    'Verbose', true, ...
                    'ValidationData', valDS, ...
                    'ValidationFrequency', obj.params.classifier.lstm.training.frequency, ...
-                   'ValidationPatience', obj.params.classifier.lstm.training.patience); 
+                   'ValidationPatience', obj.params.classifier.lstm.training.patience, ...
+                   'GradientThreshold', 1 ...
+               );
         end
 
         %% データセットの分割（訓練/検証/テスト）
@@ -256,7 +271,7 @@ classdef LSTMClassifier < handle
                 % 分割比率の計算
                 trainRatio = (k-1)/k;  % 1-k/k
                 valRatio = 1/(2*k);    % k/2k
-                testRatio = 1/(2*k);   % k/2k
+                % testRatio = 1/(2*k);   % k/2k
         
                 % データ数の計算
                 numTrain = floor(numEpochs * trainRatio);
@@ -312,7 +327,7 @@ classdef LSTMClassifier < handle
         end
 
         %% LSTM用のデータ前処理（セル配列へ変換）
-        function preparedData = prepareDataForLSTM(obj, data)
+        function preparedData = prepareDataForLSTM(~, data)
             try
                 if iscell(data)
                     % 入力が既にセル配列の場合
@@ -336,7 +351,7 @@ classdef LSTMClassifier < handle
                     end
                 else
                     % 入力が数値配列の場合（3次元: channels x timepoints x trials）
-                    [channels, timepoints, trials] = size(data);
+                    [~, ~, trials] = size(data);
                     preparedData = cell(trials, 1);
                     for i = 1:trials
                         currentData = data(:, :, i);
@@ -692,7 +707,6 @@ classdef LSTMClassifier < handle
                 if isOverfit
                     fprintf('\n=== 詳細な過学習分析 ===\n');
                     fprintf('1. 汎化性能:\n');
-                    fprintf('  - Generalization Gap: %.2f%%\n', genGap);
                     fprintf('  - Performance Gap: %.2f%%\n', perfGap);
                     
                     fprintf('\n2. 学習の進行状況:\n');
@@ -706,10 +720,6 @@ classdef LSTMClassifier < handle
                     fprintf('  - 学習の進行: %s\n', mat2str(isLearningProgressing));
                     
                     fprintf('\n推奨される対策:\n');
-                    if genGap > 5
-                        fprintf('- 正則化の強化を検討\n');
-                        fprintf('- ドロップアウト率の調整\n');
-                    end
                     if ~isLearningProgressing
                         fprintf('- 学習率の調整\n');
                         fprintf('- モデル容量の見直し\n');

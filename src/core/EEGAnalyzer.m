@@ -266,7 +266,8 @@ classdef EEGAnalyzer < handle
                 ), ...
                 'trainingInfo', [], ...
                 'crossValidation', [], ...
-                'overfitting', [] ...
+                'overfitting', [], ...
+                'normParams', [] ...
             );
 
             % 各分類器の結果を初期化
@@ -332,27 +333,11 @@ classdef EEGAnalyzer < handle
                     obj.processingInfo.iirFilter = info;
                 end
 
-                % 正規化
-                if obj.params.signal.preprocessing.normalize.enable
-                    [data, info] = obj.normalizer.normalize(data);
-                    obj.processingInfo.normalize = info;
-                end
-
                 % エポック化
                 [epochs, epochLabels, info] = obj.epoching.epoching(data, obj.labels);
                 obj.processedData = epochs;
                 obj.processedLabel = epochLabels;
                 obj.processingInfo.epoch = info;
-                
-                % % データ拡張←Classifierに移動
-                % if obj.params.signal.preprocessing.augmentation.enable
-                %     [augData, augLabels, info] = obj.dataAugmenter.augmentData(epochs, epochLabels);
-                %     obj.processingInfo.augmentation = info;
-                %     obj.processedLabel = augLabels;
-                %     epochs = augData;
-                % else
-                %     obj.processedLabel = epochLabels;
-                % end
 
             catch ME
                 error('Preprocessing pipeline failed: %s', ME.message);
@@ -458,6 +443,11 @@ classdef EEGAnalyzer < handle
                     else
                         obj.cnn = obj.cnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
                     end
+
+                    % 正規化パラメータの保存
+                    if isfield(obj.cnn, 'normParams')
+                        obj.processingInfo.normalize = obj.cnn.normParams;
+                    end
                 end
         
                 % LSTM分類
@@ -468,6 +458,11 @@ classdef EEGAnalyzer < handle
                     else
                         obj.lstm = obj.lstmClassifier.trainLSTM(obj.processedData, obj.processedLabel);
                     end
+
+                    % 正規化パラメータの保存
+                    if isfield(obj.lstm, 'normParams')
+                        obj.processingInfo.normalize = obj.lstm.normParams;
+                    end
                 end
         
                 % Hybrid分類
@@ -477,6 +472,11 @@ classdef EEGAnalyzer < handle
                         obj.hybrid = hybridOptimizer.optimize(obj.processedData, obj.processedLabel);
                     else
                         obj.hybrid = obj.hybridClassifier.trainHybrid(obj.processedData, obj.processedLabel);
+                    end
+
+                    % 正規化パラメータの保存
+                    if isfield(obj.hybrid, 'normParams')
+                        obj.processingInfo.normalize = obj.hybrid.normParams;
                     end
                 end
         
@@ -784,11 +784,17 @@ classdef EEGAnalyzer < handle
                 saveData.processedData = obj.processedData;
                 saveData.processedLabel = obj.processedLabel;
                 saveData.processingInfo = obj.processingInfo;
+                
+                % 正規化情報がない場合は初期化
+                if ~isfield(saveData.processingInfo, 'normalize')
+                    saveData.processingInfo.normalize = struct();
+                end
+                
                 % 特徴抽出結果
                 if ~isempty(obj.results)
                     saveData.results = obj.results;
                 end
-
+        
                 % 分類器結果の保存
                 saveData.classifier = struct();
                 
@@ -798,48 +804,51 @@ classdef EEGAnalyzer < handle
                         'model', obj.svm.model, ...
                         'performance', obj.svm.performance);
                 end
-
+        
                 % ECOC結果
                 if obj.params.classifier.ecoc.enable && ~isempty(obj.ecoc)
                     saveData.classifier.ecoc = struct(...
                         'model', obj.ecoc.model, ...
                         'performance', obj.ecoc.performance);
                 end
-
+        
                 % CNN結果
                 if obj.params.classifier.cnn.enable && ~isempty(obj.cnn)
                     saveData.classifier.cnn = struct(...
                         'model', obj.cnn.model, ...
                         'performance', obj.cnn.performance, ...
                         'trainInfo', obj.cnn.trainInfo, ...
-                        'overfitting', obj.cnn.overfitting ...
+                        'overfitting', obj.cnn.overfitting, ...
+                        'normParams',  obj.cnn.normParams ...
                     );
                 end
-
+        
                 % LSTM結果
                 if obj.params.classifier.lstm.enable && ~isempty(obj.lstm)
                     saveData.classifier.lstm = struct(...
                         'model', obj.lstm.model, ...
                         'performance', obj.lstm.performance, ...
                         'trainInfo', obj.lstm.trainInfo, ...
-                        'overfitting', obj.lstm.overfitting ...
+                        'overfitting', obj.lstm.overfitting, ...
+                        'normParams',  obj.cnn.normParams ...
                     );
                 end
-
+        
                 % Hybrid結果
                 if obj.params.classifier.hybrid.enable && ~isempty(obj.hybrid)
                     saveData.classifier.hybrid = struct(...
                         'model', obj.hybrid.model, ...
                         'performance', obj.hybrid.performance, ...
                         'trainInfo', obj.hybrid.trainInfo, ...
-                        'overfitting', obj.hybrid.overfitting ...
+                        'overfitting', obj.hybrid.overfitting, ...
+                        'normParams',  obj.cnn.normParams ...
                     );
                 end
-
+        
                 % DataManagerを使用して保存
                 obj.dataManager.saveDataset(saveData, savePath);
                 fprintf('Results saved to: %s\n', savePath);
-
+        
             catch ME
                 error('Failed to save results: %s', ME.message);
             end
