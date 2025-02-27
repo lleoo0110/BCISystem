@@ -58,6 +58,7 @@ classdef HybridClassifier < handle
                 % 正規化
                 if obj.params.signal.preprocessing.normalize.enable
                     [trainData, normParams] = obj.normalizer.normalize(trainData);
+                    
                     % 検証データと評価データにも同じ正規化パラメータで正規化
                     valData = obj.normalizer.normalizeOnline(valData, normParams);
                     testData = obj.normalizer.normalizeOnline(testData, normParams);
