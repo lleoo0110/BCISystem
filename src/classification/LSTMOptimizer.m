@@ -17,7 +17,7 @@ classdef LSTMOptimizer < handle
             obj.bestPerformance = -inf;
             obj.optimizationHistory = struct('params', {}, 'performance', {}, 'model', {});
             obj.useGPU = params.classifier.lstm.gpu;
-            obj.maxTrials = 30;  % デフォルトの試行回数
+            obj.maxTrials = 15;  % デフォルトの試行回数
         end
         
         function results = optimize(obj, data, labels)
@@ -268,8 +268,6 @@ classdef LSTMOptimizer < handle
                         
                         if isOverfit
                             fprintf('\n警告: このモデルは過学習の兆候を示しています\n');
-                            fprintf('  - Generalization Gap: %.2f%%\n', ...
-                                result.overfitting.generalizationGap);
                             fprintf('  - Performance Gap: %.2f%%\n', ...
                                 result.overfitting.performanceGap);
                         end

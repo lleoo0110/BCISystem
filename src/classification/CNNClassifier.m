@@ -63,7 +63,7 @@ classdef CNNClassifier < handle
 
                 % 正規化
                 if obj.params.signal.preprocessing.normalize.enable
-                    [trainData, normParams] = obl.normalizer.normalize(trainData);
+                    [trainData, normParams] = obj.normalizer.normalize(trainData);
                 end
 
                 % 検証データと評価データにも同じ正規化パラメータで正規化

@@ -908,6 +908,12 @@ classdef EEGAcquisitionManager < handle
                         if isempty(obj.optimalThreshold)
                             obj.optimalThreshold = obj.params.classifier.svm.threshold.rest;
                         end
+
+                     case 'cnn'
+                        % LSTMパラメータの設定
+                        if isfield(loadedData.classifier.cnn, 'params')
+                            obj.params.classifier.cnn = loadedData.classifier.cnn.params;
+                        end
                         
                     case 'lstm'
                         % LSTMパラメータの設定
@@ -1181,15 +1187,11 @@ classdef EEGAcquisitionManager < handle
                     end
 
                     % 正規化処理
-                    if obj.params.signal.preprocessing.normalize.enable
-                        if isfield(obj, 'normParams') && ~isempty(obj.normParams)
-                            data = obj.normalizer.normalizeOnline(data, obj.normParams);
-                        else
-                            warning('オンラインモードで正規化パラメータが見つかりません。正規化をスキップします。');
-                            fprintf('正規化パラメータを含む分析結果を読み込む必要があります。\n');
-                            % ここでGUIにエラーメッセージを表示することも検討
-                            % obj.guiController.showError('正規化エラー', '正規化パラメータが見つかりません。');
-                        end
+                    if ~isempty(obj.normParams)
+                        data = obj.normalizer.normalizeOnline(data, obj.normParams);
+                    else
+                        warning('オンラインモードで正規化パラメータが見つかりません。正規化をスキップします。');
+                        fprintf('正規化パラメータを含む分析結果を読み込む必要があります。\n');
                     end
                     
                     preprocessedSegment = data;
