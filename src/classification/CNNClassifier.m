@@ -577,7 +577,7 @@ classdef CNNClassifier < handle
                    'ValidationData', valDS, ...
                    'ValidationFrequency', obj.params.classifier.cnn.training.frequency, ...
                    'ValidationPatience', obj.params.classifier.cnn.training.patience, ...
-                   'GradientThreshold', obj.params.classifier.cnn.training.patience);
+                   'GradientThreshold', 1);
        
                % レイヤーの構築
                fprintf('CNNアーキテクチャを構築中...\n');
@@ -1459,14 +1459,14 @@ classdef CNNClassifier < handle
                     error('データとラベルのサンプル数が一致しません');
                 end
         
-                % cvResultsの初期化
+                % cvResultsの初期化 - 修正部分
                 cvResults = struct();
-                cvResults.folds = struct(...
-                    'accuracy', zeros(1, k), ...
-                    'confusionMat', cell(1, k), ...
-                    'classwise', cell(1, k), ...
-                    'validation_curve', cell(1, k) ...
-                );
+                % 各フィールドを個別に初期化
+                cvResults.folds = struct();
+                cvResults.folds.accuracy = zeros(1, k);
+                cvResults.folds.confusionMat = cell(1, k);
+                cvResults.folds.classwise = cell(1, k);
+                cvResults.folds.validation_curve = cell(1, k);
                 
                 % 分割設定
                 cvp = cvpartition(length(labels), 'KFold', k);
@@ -1525,7 +1525,10 @@ classdef CNNClassifier < handle
         
                     catch ME
                         warning('フォールド %d でエラーが発生: %s', i, ME.message);
-                        % エラーが発生したフォールドは精度0として記録
+                        fprintf('エラー詳細:\n');
+                        disp(getReport(ME, 'extended'));
+                        
+                        % エラーが発生したフォールドは明示的にデフォルト値を設定
                         cvResults.folds.accuracy(i) = 0;
                         cvResults.folds.confusionMat{i} = [];
                         cvResults.folds.classwise{i} = [];
@@ -1601,6 +1604,7 @@ classdef CNNClassifier < handle
                 fprintf('エラー詳細:\n');
                 disp(getReport(ME, 'extended'));
                 
+                % エラー時は最小限の結果構造体を返す
                 cvResults = struct('meanAccuracy', 0, 'stdAccuracy', 0);
             end
         end
