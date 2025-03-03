@@ -167,6 +167,7 @@ function preset = template()
     % 信号処理パラメータの設定
     signal = struct(...
         'enable', true, ...           % true/false: 信号処理有効/無効
+        'createEEGLABset',true, ...   % EEGLABのsetfileを作るか
         'window', struct(...          % 解析窓の設定
             'analysis', 6.2, ...      % 解析窓長 (0.5-10.0 秒)
             'stimulus',  [-0.2 6.0], ...      % 刺激提示時間 (1.0-30.0 秒)

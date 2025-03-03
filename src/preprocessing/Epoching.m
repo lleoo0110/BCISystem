@@ -167,7 +167,7 @@ classdef Epoching < handle
                     nTrials = length(labels); % トライアル数を取得
                     stepSize = round(analysisWindow * (1 - overlapRatio) * fs); % ステップサイズを計算
 
-                    startOffset = startTime * fs;
+                    startOffset = round(startTime * fs);
                     if strcmpi(obj.params.signal.epoch.storageType, 'cell')
                         obj.epochingCell(nTrials, nSteps, fs, samplesPerEpoch, stepSize, labels, data,startOffset); % Cell形式でエポック抽出
                     else
