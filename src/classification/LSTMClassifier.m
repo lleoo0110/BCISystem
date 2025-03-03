@@ -142,10 +142,17 @@ classdef LSTMClassifier < handle
             if ~obj.isEnabled
                 error('LSTM is disabled');
             end
-
+        
             try
-                % データの整形（時系列データ用）
-                prepData = obj.prepareDataForLSTM(data);
+                % 2次元配列の場合（チャネル×時間）、セル配列に変換
+                % LSTMのpredict関数はセル配列形式を想定
+                if ismatrix(data)
+                    % 単一のトライアルとしてセル配列に変換
+                    prepData = {data};
+                else
+                    % 既存のprepareDataForLSTM関数を使用
+                    prepData = obj.prepareDataForLSTM(data);
+                end
                 
                 % モデルの存在確認
                 if isempty(lstmModel)
@@ -155,13 +162,16 @@ classdef LSTMClassifier < handle
                 % 予測の実行
                 [label, scores] = classify(lstmModel, prepData);
                 
-                % クラス1（安静状態）の確率を取得
-                score = scores(:,1);
+                % スコアの取得（すべてのクラススコアを保持）
+                score = scores;
+                
             catch ME
                 fprintf('Error in LSTM online prediction: %s\n', ME.message);
                 fprintf('Error details:\n');
                 disp(getReport(ME, 'extended'));
-                rethrow(ME);
+                % エラー時には空の結果を明示的に返す
+                label = [];
+                score = [];
             end
         end
 
