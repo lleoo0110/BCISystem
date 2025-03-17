@@ -19,9 +19,6 @@ classdef CNNClassifier < handle
     %   cnn = CNNClassifier(params);
     %   results = cnn.trainCNN(processedData, processedLabel);
     %   [label, score] = cnn.predictOnline(newData, results.model);
-    %
-    % 作成者: LLEOO
-    % バージョン: 2.0
     
     properties (Access = private)
         params              % システム設定パラメータ
@@ -258,7 +255,7 @@ classdef CNNClassifier < handle
         end
 
         %% オンライン予測メソッド - 新しいデータの分類を実行
-        function [label, score] = predictOnline(obj, data, cnnModel)
+        function [label, score] = predictOnline(obj, data, cnnl)
             % 学習済みモデルを使用して新しいEEGデータを分類
             %
             % 入力:
@@ -272,20 +269,36 @@ classdef CNNClassifier < handle
             if ~obj.isEnabled
                 error('CNN分類器は設定で無効化されています');
             end
-
+        
             try
-                % データの前処理と整形
-                prepData = obj.prepareDataForCNN(data);
+                % 正規化パラメータを取得して正規化を実行
+                if obj.params.classifier.cnn.normalize.enable
+                    if isfield(cnn, 'normParams') && ~isempty(cnn.normParams)
+                        data = obj.normalizer.normalizeOnline(data, cnnl.normParams);
+                    else
+                        warning('CNNClassifier:NoNormParams', ...
+                            '正規化パラメータが見つかりません。正規化をスキップします。');
+                    end
+                end
+
+                % データの形状変換（必要に応じて）
+                if ndims(data) ~= 4
+                    prepData = obj.prepareDataForCNN(data);
+                else
+                    prepData = data;
+                end
+                
+                % モデルの存在確認
+                if isempty(cnnModel)
+                    error('CNN model is not available');
+                end
                 
                 % 予測の実行
-                [label, scores] = classify(cnnModel, prepData);
-                
-                % クラス1（安静状態）の確率を取得
-                score = scores(:,1);
-
+                [label, score] = classify(cnn.model, prepData);
+        
             catch ME
-                fprintf('オンライン予測でエラーが発生: %s\n', ME.message);
-                fprintf('エラー詳細:\n');
+                fprintf('Error in CNN online prediction: %s\n', ME.message);
+                fprintf('Error details:\n');
                 disp(getReport(ME, 'extended'));
                 rethrow(ME);
             end
@@ -346,7 +359,7 @@ classdef CNNClassifier < handle
             normParams = [];
             
             % データ拡張処理
-            if obj.params.signal.preprocessing.augmentation.enable
+            if obj.params.classifier.augmentation.enable
                 fprintf('\nデータ拡張を実行...\n');
                 [procTrainData, procTrainLabels, ~] = obj.dataAugmenter.augmentData(trainData, trainLabels);
                 fprintf('  - 拡張前: %d サンプル\n', length(trainLabels));
@@ -355,7 +368,7 @@ classdef CNNClassifier < handle
             end
             
             % 正規化処理
-            if obj.params.signal.preprocessing.normalize.enable
+            if obj.params.classifier.normalize.enable
                 [procTrainData, normParams] = obj.normalizer.normalize(procTrainData);
                 
                 % 正規化パラメータの検証
@@ -577,7 +590,7 @@ classdef CNNClassifier < handle
                    'ValidationData', valDS, ...
                    'ValidationFrequency', obj.params.classifier.cnn.training.frequency, ...
                    'ValidationPatience', obj.params.classifier.cnn.training.patience, ...
-                   'GradientThreshold', 1);
+                   'GradientThreshold', obj.params.classifier.cnn.training.patience);
        
                % レイヤーの構築
                fprintf('CNNアーキテクチャを構築中...\n');
@@ -1459,14 +1472,14 @@ classdef CNNClassifier < handle
                     error('データとラベルのサンプル数が一致しません');
                 end
         
-                % cvResultsの初期化 - 修正部分
+                % cvResultsの初期化
                 cvResults = struct();
-                % 各フィールドを個別に初期化
-                cvResults.folds = struct();
-                cvResults.folds.accuracy = zeros(1, k);
-                cvResults.folds.confusionMat = cell(1, k);
-                cvResults.folds.classwise = cell(1, k);
-                cvResults.folds.validation_curve = cell(1, k);
+                cvResults.folds = struct(...
+                    'accuracy', zeros(1, k), ...
+                    'confusionMat', cell(1, k), ...
+                    'classwise', cell(1, k), ...
+                    'validation_curve', cell(1, k) ...
+                );
                 
                 % 分割設定
                 cvp = cvpartition(length(labels), 'KFold', k);
@@ -1525,10 +1538,7 @@ classdef CNNClassifier < handle
         
                     catch ME
                         warning('フォールド %d でエラーが発生: %s', i, ME.message);
-                        fprintf('エラー詳細:\n');
-                        disp(getReport(ME, 'extended'));
-                        
-                        % エラーが発生したフォールドは明示的にデフォルト値を設定
+                        % エラーが発生したフォールドは精度0として記録
                         cvResults.folds.accuracy(i) = 0;
                         cvResults.folds.confusionMat{i} = [];
                         cvResults.folds.classwise{i} = [];
@@ -1604,7 +1614,6 @@ classdef CNNClassifier < handle
                 fprintf('エラー詳細:\n');
                 disp(getReport(ME, 'extended'));
                 
-                % エラー時は最小限の結果構造体を返す
                 cvResults = struct('meanAccuracy', 0, 'stdAccuracy', 0);
             end
         end

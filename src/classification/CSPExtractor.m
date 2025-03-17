@@ -8,24 +8,25 @@ classdef CSPExtractor < handle
     methods (Access = public)
         function obj = CSPExtractor(params)
             obj.params = params;
-            obj.patterns = params.feature.csp.patterns;
-            obj.regParam = params.feature.csp.regularization;
+            obj.patterns = params.classifier.csp.patterns;
+            obj.regParam = params.classifier.csp.regularization;
         end
         
-        function [filters, parameters] = trainCSP(obj, data, labels)
+        function [filters, cspParameters] = trainCSP(obj, data, labels)
            try
                % クラスごとのデータを分離
                classes = unique(labels);
-               covMatrices = cell(length(classes), 1);
-
+               
+               
                % 各クラスの共分散行列を計算
+               covMatrices = cell(length(classes), 1);
                for i = 1:length(classes)
                    classData = obj.getClassData(data, labels, classes(i));
                    covMatrices{i} = obj.calculateCovarianceMatrix(classData);
                end
 
                % CSPフィルタの計算
-               [filters, parameters] = obj.computeCSPFilters(covMatrices);
+               [filters, cspParameters] = obj.computeCSPFilters(covMatrices);
 
            catch ME
                error('CSP training failed: %s', ME.message);
@@ -34,6 +35,7 @@ classdef CSPExtractor < handle
         
         function features = extractFeatures(obj, data, filters)
             try
+                
                 if iscell(data)
                     % セル配列の場合
                     numEpochs = length(data);
@@ -52,7 +54,7 @@ classdef CSPExtractor < handle
 
                 elseif ismatrix(data)
                     % 2次元配列の場合（オンライン処理）
-                    features(1, :) = obj.computeFeatures(data, filters);
+                    features = obj.computeFeatures(data, filters);
 
                 else
                     error('Unsupported data format. Expected cell array, 3D array, or 2D array.');

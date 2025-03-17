@@ -18,12 +18,12 @@ classdef DataAugmenter < handle
 
                info = struct('originalSize', size(data), 'augmentationApplied', false);
 
-               if ~obj.params.signal.preprocessing.augmentation.enable
+               if ~obj.params.classifier.augmentation.enable
                    augData = data;
                    augLabels = labels;
                    return;
                end
-               augRatio = obj.params.signal.preprocessing.augmentation.augmentationRatio;
+               augRatio = obj.params.classifier.augmentation.augmentationRatio;
                targetTotalEpochs = round(epochs * (1 + augRatio));
                uniqueLabels = unique(labels);
 
@@ -102,7 +102,7 @@ classdef DataAugmenter < handle
         end
         
         function methods = selectAugmentationMethods(obj)
-            augParams = obj.params.signal.preprocessing.augmentation;
+            augParams = obj.params.classifier.augmentation;
             availableMethods = {'noise', 'scaling', 'timeshift', 'mirror', 'channelSwap'};
             methods = {};
 
@@ -125,12 +125,12 @@ classdef DataAugmenter < handle
         end
         
         function shouldApply = shouldApplyMethod(obj, method)
-            methodParams = obj.params.signal.preprocessing.augmentation.methods.(method);
+            methodParams = obj.params.classifier.augmentation.methods.(method);
             shouldApply = methodParams.enable && rand(obj.rng) < methodParams.probability;
         end
         
         function augmented = applyAugmentation(obj, data, method)
-            methodParams = obj.params.signal.preprocessing.augmentation.methods.(method);
+            methodParams = obj.params.classifier.augmentation.methods.(method);
             
             switch method
                 case 'noise'
