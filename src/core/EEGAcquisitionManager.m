@@ -17,91 +17,79 @@
 % - サンプリングレート: デバイスに依存
 % - バッファサイズ: 設定可能
 % - 保存形式: .mat形式
-%
-% Author: LLEOO
-% Date: 2025/02/13
-% Version: 1.0
 
 classdef EEGAcquisitionManager < handle
     %% Properties Definition
     properties (Access = private)
-        % システムマネージャー群
-        lslManager       % Lab Streaming Layer通信管理
-        udpManager      % UDP通信とトリガー管理
-        guiController   % GUI表示制御
-        dataManager     % データ保存・読み込み管理
-        
-        % 前処理用コンポーネント群
-        artifactRemover    % アーティファクト(ノイズ)除去
-        baselineCorrector  % ベースライン補正処理
-        downSampler       % ダウンサンプリング処理
-        firFilter         % FIRフィルタ処理
-        iirFilter         % IIRフィルタ処理
-        notchFilter       % ノッチフィルタ処理
-        normalizer        % 信号正規化処理
-        
-        % 特徴抽出コンポーネント群
-        powerExtractor     % パワースペクトル解析用
-        faaExtractor      % 前頭部α波非対称性分析用
-        abRatioExtractor  % α/β比解析用
-        cspExtractor      % 共通空間パターン抽出用
-        emotionExtractor  % 感情状態推定用
-        
-        % 分類器コンポーネント群
-        svmClassifier      % サポートベクターマシン
-        ecocClassifier     % Error-Correcting Output Codes
-        cnnClassifier      % 畳み込みニューラルネットワーク
-        lstmClassifier     % 長短期記憶ネットワーク
-        hybridClassifier   % ハイブリッドモデル分類器
-        
-        % データ管理・設定関連
-        params              % システム設定パラメータ
-        rawData            % 生脳波データ格納用
-        labels             % イベントマーカー/トリガー情報
-        emgData            % 筋電図データ格納用
-        emgLabels          % 筋電図用マーカー情報
-        classifiers        % 学習済み分類器モデル群
-        results            % 解析結果保持用構造体
-        normParams         % 正規化パラメータ群
-        optimalThreshold   % 最適分類閾値
-       
-        % システム状態管理フラグ
-        isRunning           % 実行中フラグ
-        isPaused            % 一時停止フラグ
-        currentTotalSamples % 現在の累積サンプル数
-        isDestroying        % オブジェクト破棄フラグ
-        
-        % データバッファ管理
-        dataBuffer         % メインEEGデータバッファ
-        emgBuffer         % EMGデータバッファ
-        emgBufferSize     % EMGバッファサイズ(サンプル数)
-        bufferSize        % メインバッファサイズ(サンプル数)
-        processingWindow  % 処理ウィンドウサイズ(サンプル数)
-        slidingStep       % スライディングステップ幅(サンプル数)
-        
-        % タイマー管理
-        acquisitionTimer   % データ取得用タイマーオブジェクト
-        processingTimer   % 処理時間計測用タイマー
-        
-        % ファイル管理
-        tempDataFiles      % 一時保存ファイルリスト
-        fileIndex         % ファイル連番管理用インデックス
-        lastSaveTime      % 最終保存時刻
-        lastSavedFilePath % 最終保存ファイルパス
-        latestResults     % UDP送信用最新結果バッファ
-        
-        % サンプル管理カウンタ
-        totalSampleCount       % 総取得サンプル数
-        lastResetSampleCount   % 最終リセット時のサンプル数
-        emgSampleCount        % EMG総サンプル数
-
-        % EOG（眼電図）関連
-        eogExtractor      % EOG解析用インスタンス
-        lastEOGDirection  % 前回の視線方向情報
-        eogResults       % EOG解析結果保持用
-        eogBuffer        % EOG信号バッファ
-        eogBufferSize    % EOGバッファサイズ
-    end
+    % システムマネージャー群
+    lslManager       % Lab Streaming Layer通信管理
+    udpManager      % UDP通信とトリガー管理
+    guiController   % GUI表示制御
+    dataManager     % データ保存・読み込み管理
+    dataLoader      % データ読み込み・検証（追加）
+    
+    % 前処理用コンポーネント群
+    artifactRemover    % アーティファクト(ノイズ)除去
+    baselineCorrector  % ベースライン補正処理
+    downSampler       % ダウンサンプリング処理
+    firFilter         % FIRフィルタ処理
+    iirFilter         % IIRフィルタ処理
+    notchFilter       % ノッチフィルタ処理
+    
+    % 特徴抽出コンポーネント群
+    powerExtractor     % パワースペクトル解析用
+    faaExtractor      % 前頭部α波非対称性分析用
+    abRatioExtractor  % α/β比解析用
+    cspExtractor      % 共通空間パターン抽出用
+    emotionExtractor  % 感情状態推定用
+    
+    % 分類器コンポーネント群
+    svmClassifier      % サポートベクターマシン
+    ecocClassifier     % Error-Correcting Output Codes
+    cnnClassifier      % 畳み込みニューラルネットワーク
+    lstmClassifier     % 長短期記憶ネットワーク
+    hybridClassifier   % ハイブリッドモデル分類器
+    
+    % データ管理・設定関連
+    params              % システム設定パラメータ
+    rawData            % 生脳波データ格納用
+    labels             % イベントマーカー/トリガー情報
+    emgData            % 筋電図データ格納用
+    emgLabels          % 筋電図用マーカー情報
+    classifiers        % 学習済み分類器モデル群
+    results            % 解析結果保持用構造体
+    optimalThreshold   % 最適分類閾値
+    
+    % システム状態管理フラグ
+    isRunning           % 実行中フラグ
+    isPaused            % 一時停止フラグ
+    currentTotalSamples % 現在の累積サンプル数
+    isDestroying        % オブジェクト破棄フラグ
+    
+    % データバッファ管理
+    dataBuffer         % メインEEGデータバッファ
+    emgBuffer         % EMGデータバッファ
+    emgBufferSize     % EMGバッファサイズ(サンプル数)
+    bufferSize        % メインバッファサイズ(サンプル数)
+    processingWindow  % 処理ウィンドウサイズ(サンプル数)
+    slidingStep       % スライディングステップ幅(サンプル数)
+    
+    % タイマー管理
+    acquisitionTimer   % データ取得用タイマーオブジェクト
+    processingTimer   % 処理時間計測用タイマー
+    
+    % ファイル管理
+    tempDataFiles      % 一時保存ファイルリスト
+    fileIndex         % ファイル連番管理用インデックス
+    lastSaveTime      % 最終保存時刻
+    lastSavedFilePath % 最終保存ファイルパス
+    latestResults     % UDP送信用最新結果バッファ
+    
+    % サンプル管理カウンタ
+    totalSampleCount       % 総取得サンプル数
+    lastResetSampleCount   % 最終リセット時のサンプル数
+    emgSampleCount        % EMG総サンプル数
+end
     
     %% Public Methods - システム制御用メソッド群
     methods (Access = public)
@@ -117,12 +105,6 @@ classdef EEGAcquisitionManager < handle
             obj.initializeDataBuffers();    % バッファ初期化
             obj.initializeResults();        % 結果構造体初期化
             obj.initializeManagers();       % マネージャー初期化
-            obj.setupTimers();             % タイマー設定
-
-            % 保存用ディレクトリの作成確認
-            if ~exist(params.acquisition.save.path, 'dir')
-                mkdir(params.acquisition.save.path);
-            end
             
             % データ管理システムの初期化
             obj.tempDataFiles = {};
@@ -132,7 +114,6 @@ classdef EEGAcquisitionManager < handle
             obj.totalSampleCount = 0;
             obj.lastResetSampleCount = 0;
             obj.emgSampleCount = 0;
-            obj.lastEOGDirection = 'center';
         end
         
         %% デストラクタ - システムリソースの解放
@@ -189,23 +170,47 @@ classdef EEGAcquisitionManager < handle
         %% データ収集開始メソッド
         function start(obj)
             if ~obj.isRunning
-                % システム状態の初期化
-                obj.isRunning = true;
-                obj.isPaused = false;
-                
-                % データバッファの初期化
-                obj.rawData = [];
-                obj.labels = [];
-                obj.tempDataFiles = {};
-                obj.fileIndex = 1;
-                
-                % タイマー関連の初期化
-                obj.lastSaveTime = uint64(tic);
-                obj.processingTimer = tic;
-                
-                % GUI状態の更新とタイマー開始
-                obj.guiController.updateStatus('Recording');
-                start(obj.acquisitionTimer);
+                try
+                    % タイマーを初期化して計測開始
+                    obj.setupTimers();
+                    
+                    % システム状態の初期化
+                    obj.isRunning = true;
+                    obj.isPaused = false;
+                    
+                    % データバッファの初期化
+                    obj.rawData = [];
+                    obj.labels = [];
+                    obj.tempDataFiles = {};
+                    obj.fileIndex = 1;
+                    
+                    % タイマー関連の初期化
+                    obj.lastSaveTime = uint64(tic);
+                    obj.processingTimer = tic;
+                    
+                    % GUI状態の更新
+                    obj.guiController.updateStatus('Recording');
+
+                    % 保存先を指定
+                    timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+                    defaultFileName = sprintf('eeg_recording_%s.mat', timestamp);
+                    
+                    % 保存先選択ダイアログの表示
+                    [saveName, saveDir] = uiputfile('*.mat', '記録データの保存先を選択してください', defaultFileName);
+                    
+                    if isequal(saveName, 0)
+                        fprintf('保存先が選択されませんでした。処理を中止します。\n');
+                        return;
+                    end
+                    
+                    % 保存先パスを保存
+                    obj.lastSavedFilePath = fullfile(saveDir, saveName);
+                    fprintf('記録データは次の場所に保存されます: %s\n', obj.lastSavedFilePath);
+                    
+                catch ME
+                    fprintf('処理の開始に失敗しました: %s\n', ME.message);
+                    fprintf('スタックトレース:\n%s\n', getReport(ME, 'extended'));
+                end
             end
         end
         
@@ -401,9 +406,10 @@ classdef EEGAcquisitionManager < handle
         function initializeManagers(obj)
             try
                 % 基本マネージャーの初期化
-                obj.lslManager = LSLManager(obj.params);          % LSL通信管理
-                obj.udpManager = UDPManager(obj.params);          % UDP通信管理
-                obj.dataManager = DataManager(obj.params);        % データ管理
+                obj.lslManager = LSLManager(obj.params);         % LSL通信管理
+                obj.udpManager = UDPManager(obj.params);         % UDP通信管理
+                obj.dataManager = DataManager(obj.params);       % データ管理
+                obj.dataLoader = DataLoader(obj.params);         % データ読み込み
                 obj.guiController = GUIControllerManager(obj.params); % GUI管理
                 
                 % 前処理コンポーネントの初期化
@@ -413,7 +419,6 @@ classdef EEGAcquisitionManager < handle
                 obj.firFilter = FIRFilterDesigner(obj.params);        % FIRフィルタ
                 obj.iirFilter = IIRFilterDesigner(obj.params);        % IIRフィルタ
                 obj.notchFilter = NotchFilterDesigner(obj.params);    % ノッチフィルタ
-                obj.normalizer = EEGNormalizer(obj.params);           % 正規化処理
                 
                 % 特徴抽出コンポーネントの初期化
                 obj.powerExtractor = PowerExtractor(obj.params);      % パワー解析
@@ -421,11 +426,6 @@ classdef EEGAcquisitionManager < handle
                 obj.abRatioExtractor = ABRatioExtractor(obj.params); % α/β比解析
                 obj.cspExtractor = CSPExtractor(obj.params);         % CSP解析
                 obj.emotionExtractor = EmotionExtractor(obj.params); % 感情解析
-                
-                % EOG処理の初期化（有効な場合）
-                if obj.params.acquisition.eog.enable
-                    obj.eogExtractor = EOGExtractor(obj.params);
-                end
                 
                 % 分類器コンポーネントの初期化
                 obj.svmClassifier = SVMClassifier(obj.params);       % SVM分類器
@@ -462,17 +462,7 @@ classdef EEGAcquisitionManager < handle
                 'faa', [], ...      % FAA解析結果
                 'abRatio', [], ...  % α/β比解析結果
                 'emotion', [], ...  % 感情解析結果
-                'csp', struct(...   % CSP解析関連
-                    'filters', [], ...          % CSPフィルタ
-                    'features', [], ...         % CSP特徴量
-                    'parameters', struct(...     % CSPパラメータ
-                        'numFilters', obj.params.feature.csp.patterns, ...
-                        'regularization', obj.params.feature.csp.regularization, ...
-                        'method', 'standard' ...
-                    ) ...
-                ), ...
-                'predict', [], ...  % 分類予測結果
-                'eog', [] ...      % EOG解析結果
+                'predict', [] ...  % 分類予測結果
             );
         end
         
@@ -504,14 +494,18 @@ classdef EEGAcquisitionManager < handle
                     end
                     obj.acquisitionTimer = [];
                 end
-
-                % 新規タイマーの設定
+        
+                % 新規タイマーの設定 - StartFcnをfalseに設定して自動スタートを防止
                 updateInterval = 0.15;  % 更新間隔（秒）
                 obj.acquisitionTimer = timer(...
                     'ExecutionMode', 'fixedRate', ...  % 固定レート実行
-                    'Period', updateInterval, ...       % 実行間隔
+                    'Period', updateInterval, ...      % 実行間隔
                     'TimerFcn', @(src, event) obj.safeAcquireData(), ...  % メイン処理関数
                     'ErrorFcn', @(src, event) obj.handleTimerError(event)); % エラー処理関数
+
+                fprintf('=== データ収集を開始します ===\n');
+                start(obj.acquisitionTimer);
+
             catch ME
                 warning(ME.identifier, '%s', ME.message);
                 disp(getReport(ME, 'extended'));
@@ -609,68 +603,77 @@ classdef EEGAcquisitionManager < handle
             try
                 % データ存在チェック
                 if isempty(obj.rawData) && isempty(obj.emgData)
-                    fprintf('No new data to save\n');
+                    fprintf('保存する新しいデータがありません\n');
                     return;
                 end
-
+        
                 % 最小データ長チェック
                 minSamples = obj.params.device.sampleRate;
                 if size(obj.rawData, 2) < minSamples
-                    fprintf('Insufficient data length for saving (%d < %d samples)\n', ...
+                    fprintf('データ長が不十分です (%d < %d samples)\n', ...
                         size(obj.rawData, 2), minSamples);
                     return;
                 end
-
+        
+                % 保存ディレクトリの決定
+                if ~isempty(obj.lastSavedFilePath)
+                    % メインの保存先が設定されている場合、そのディレクトリを使用
+                    saveDir = fileparts(obj.lastSavedFilePath);
+                else
+                    % メインの保存先が設定されていない場合は現在のディレクトリを使用
+                    saveDir = pwd;
+                    fprintf('警告: メインの保存先が指定されていません。現在のディレクトリを使用します: %s\n', saveDir);
+                end
+        
                 % 一時ファイル名の生成
-                tempFilename = sprintf('%s_temp_%d.mat', ...
-                    obj.params.acquisition.save.name, obj.fileIndex);
-                tempFilePath = fullfile(obj.params.acquisition.save.path, tempFilename);
-
+                timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+                tempFilename = sprintf('eeg_temp_%s_%d.mat', timestamp, obj.fileIndex);
+                
+                % 保存先パスの設定
+                tempFilePath = fullfile(saveDir, tempFilename);
+        
                 % 保存データの構造体作成
                 tempData = struct();
-
+        
                 % EEGデータの保存準備
                 if ~isempty(obj.rawData)
                     tempData.rawData = obj.rawData;
                     tempData.labels = obj.labels;
-                    fprintf('Saving EEG data: %d samples\n', size(obj.rawData, 2));
+                    fprintf('保存するEEGデータ: %d サンプル\n', size(obj.rawData, 2));
                 end
-
+        
                 % EMGデータの保存準備
                 if obj.params.acquisition.emg.enable && ~isempty(obj.emgData)
                     tempData.emgData = obj.emgData;
                     tempData.emgLabels = obj.emgLabels;
-                    fprintf('Saving EMG data: %d samples\n', size(obj.emgData, 2));
+                    fprintf('保存するEMGデータ: %d サンプル\n', size(obj.emgData, 2));
                 end
-
+        
                 % メタデータの追加
                 tempData.savingInfo = struct(...
                     'timestamp', datetime('now'), ...
                     'totalSamples', obj.totalSampleCount + size(obj.rawData, 2), ...
                     'fileIndex', obj.fileIndex, ...
                     'sampleRate', obj.params.device.sampleRate);
-
+        
                 % データの保存実行
                 obj.dataManager.saveDataset(tempData, tempFilePath);
                 obj.tempDataFiles{end+1} = tempFilePath;
-
+        
                 % メモリのクリア
                 obj.rawData = [];
                 obj.emgData = [];
                 obj.labels = [];
                 obj.emgLabels = [];
-
+        
                 % カウンタの更新
                 obj.fileIndex = obj.fileIndex + 1;
                 obj.lastSaveTime = tic;
-
-                fprintf('Temporary data saved: %s\n', tempFilename);
-                fprintf('Total temp files: %d\n', length(obj.tempDataFiles));
-
+        
+                fprintf('一時データを保存しました: %s\n', tempFilePath);
             catch ME
-                warning(ME.identifier, 'Failed to save temporary data: %s', ME.message);
-                fprintf('Error stack:\n');
-                disp(getReport(ME, 'extended'));
+                fprintf('一時データの保存に失敗: %s\n', ME.message);
+                fprintf('エラー詳細:\n%s\n', getReport(ME, 'extended'));
             end
         end
 
@@ -817,37 +820,78 @@ classdef EEGAcquisitionManager < handle
         % 全データの統合と最終保存を実行
         function mergeAndSaveData(obj)
             try
-                fprintf('Merging data files...\n');
-
+                fprintf('データファイルを統合中...\n');
+        
                 % 一時ファイルからデータを統合
                 [mergedEEG, mergedEMG, mergedLabels, mergedEMGLabels] = obj.mergeTempFiles();
-
+        
                 % 保存データ構造体の作成
                 saveData = struct();
                 saveData.params = obj.params;         % パラメータ設定
                 saveData.rawData = mergedEEG;         % EEGデータ
                 saveData.labels = mergedLabels;       % ラベル情報
                 saveData.results = obj.results;       % 解析結果
-
+        
                 % EMGデータの保存（有効な場合のみ）
                 if obj.params.acquisition.emg.enable
                     saveData.emgData = mergedEMG;
                     saveData.emgLabels = mergedEMGLabels;
                 end
-
-                % データの最終保存
-                savedFile = obj.dataManager.saveDataset(saveData);
-                fprintf('Final data saved to: %s\n', savedFile);
-
-                % 一時ファイルの削除
-                for i = 1:length(obj.tempDataFiles)
-                    if exist(obj.tempDataFiles{i}, 'file')
-                        delete(obj.tempDataFiles{i});
+                
+                % 既に指定済みの保存先に保存
+                if ~isempty(obj.lastSavedFilePath)
+                    % データの最終保存
+                    obj.dataManager.saveDataset(saveData, obj.lastSavedFilePath);
+                    fprintf('データを保存しました: %s\n', obj.lastSavedFilePath);
+                else
+                    % 保存先が指定されていない場合は改めて選択
+                    timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+                    defaultFileName = sprintf('eeg_recording_%s.mat', timestamp);
+                    
+                    [saveName, saveDir] = uiputfile('*.mat', '記録データの保存先を選択してください', defaultFileName);
+                    
+                    if saveName == 0
+                        fprintf('保存がキャンセルされました。データは保存されませんでした。\n');
+                        return;
+                    end
+                    
+                    saveFilePath = fullfile(saveDir, saveName);
+                    obj.dataManager.saveDataset(saveData, saveFilePath);
+                    fprintf('データを保存しました: %s\n', saveFilePath);
+                end
+        
+                % 一時ファイルの削除処理
+                % deleteTempFilesパラメータの明示的なチェック
+                shouldDeleteTempFiles = false;
+                
+                % パラメータ構造のチェック
+                if isfield(obj.params, 'acquisition') && ...
+                   isfield(obj.params.acquisition, 'save') && ...
+                   isfield(obj.params.acquisition.save, 'deleteTempFiles')
+                    shouldDeleteTempFiles = obj.params.acquisition.save.deleteTempFiles;
+                end
+                
+                fprintf('一時ファイル削除設定: %s\n', mat2str(shouldDeleteTempFiles));
+                
+                if shouldDeleteTempFiles
+                    fprintf('一時ファイルを削除します...\n');
+                    for i = 1:length(obj.tempDataFiles)
+                        if exist(obj.tempDataFiles{i}, 'file')
+                            delete(obj.tempDataFiles{i});
+                            fprintf('  - 一時ファイルを削除しました: %s\n', obj.tempDataFiles{i});
+                        end
+                    end
+                    fprintf('一時ファイル削除完了: %d ファイル\n', length(obj.tempDataFiles));
+                else
+                    fprintf('一時ファイルは保持されます: %d ファイル\n', length(obj.tempDataFiles));
+                    % 一時ファイルのリストを表示
+                    for i = 1:length(obj.tempDataFiles)
+                        fprintf('  - %s\n', obj.tempDataFiles{i});
                     end
                 end
-
+        
             catch ME
-                error('Failed to save final results: %s', ME.message);
+                error('最終結果の保存に失敗: %s', ME.message);
             end
         end
         
@@ -855,90 +899,68 @@ classdef EEGAcquisitionManager < handle
         % オンライン処理用の学習済みモデルとパラメータを設定
         function initializeOnline(obj)
             try
-                % 学習済みモデルの読み込み
-                loadedData = DataLoader.loadDataBrowserWithPrompt('analysis');
-
+                fprintf('\n=== オンラインモード初期化 ===\n');
+                fprintf('学習済みモデルファイルを選択してください。\n');
+                
+                % DataLoaderを使用してデータを読み込み
+                [loadedData, fileInfo] = obj.dataLoader.loadDataBrowser();
+        
                 % データの検証と準備
                 if iscell(loadedData)
                     if isempty(loadedData)
-                        error('No valid data loaded');
+                        error('有効なデータが読み込まれませんでした');
                     end
-                    loadedData = loadedData{1};
+                    
+                    % 複数ファイルが選択された場合は最初のファイルのみ使用
+                    if length(loadedData) > 1
+                        error('オンラインモードでは複数読み込みに対応できません');
+                    end
+                    
+                    loadedData = loadedData{1}; % 最初のファイルを使用
                 end
-
+        
                 % デバイス設定の整合性チェック
-                DataLoader.validateDeviceConfig(loadedData, obj.params);
-
-                % 正規化パラメータの設定
-                if obj.params.signal.preprocessing.normalize.enable
-                    if isfield(loadedData, 'processingInfo') && ...
-                       isfield(loadedData.processingInfo, 'normalize')
-                        obj.normParams = loadedData.processingInfo.normalize;
-                        obj.validateNormalizationParams(obj.normParams);
-                        obj.displayNormalizationParams(obj.normParams);
-                    else
-                        error('Normalization parameters not found in loaded data');
+                obj.dataLoader.validateDeviceConfig(loadedData);
+        
+                % 分類器の設定と検証
+                if ~isfield(loadedData, 'classifier')
+                    error('読み込んだデータに分類器情報が見つかりません');
+                end
+                
+                % アクティブな分類器の確認
+                activeClassifier = obj.params.classifier.activeClassifier;
+                if ~isfield(loadedData.classifier, activeClassifier)
+                    error('選択された分類器 "%s" が読み込んだデータに存在しません', ...
+                        upper(activeClassifier));
+                end
+        
+                % 分類器モデルの検証
+                if ~isfield(loadedData.classifier.(activeClassifier), 'model')
+                    error('%s モデルが読み込んだデータに存在しません', ...
+                        upper(activeClassifier));
+                end
+                
+                % 分類器構造体を保存
+                obj.classifiers = loadedData.classifier;
+        
+                % 分類器構造体からCSPフィルタを取得
+                if isfield(loadedData.classifier.(activeClassifier), 'cspFilters')
+                    fprintf('CSPフィルタを読み込みました\n');
+                    obj.results.csp = struct('filters', loadedData.classifier.(activeClassifier).cspFilters);
+                    
+                    if isfield(loadedData.classifier.(activeClassifier), 'cspParameters')
+                        obj.results.csp.parameters = loadedData.classifier.(activeClassifier).cspParameters;
                     end
                 end
-
-                % 分類器の設定と検証
-                if ~isfield(loadedData.classifier, obj.params.classifier.activeClassifier)
-                    error('Selected classifier "%s" not found in loaded data', ...
-                        obj.params.classifier.activeClassifier);
-                end
-
-                % 分類器モデルの検証
-                if ~isfield(loadedData.classifier.(obj.params.classifier.activeClassifier), 'model')
-                    error('%s model not found in loaded data', ...
-                        upper(obj.params.classifier.activeClassifier));
-                end
-                obj.classifiers = loadedData.classifier;
-
-                % 分類器固有の設定
-                switch obj.params.classifier.activeClassifier
-                    case 'svm'
-                        % SVM特有の設定
-                        if obj.params.classifier.svm.probability
-                            if isfield(loadedData.classifier.svm, 'performance') && ...
-                               isfield(loadedData.classifier.svm.performance, 'optimalThreshold')
-                                obj.optimalThreshold = ...
-                                    loadedData.classifier.svm.performance.optimalThreshold;
-                            end
-                        end
-                        if isempty(obj.optimalThreshold)
-                            obj.optimalThreshold = obj.params.classifier.svm.threshold.rest;
-                        end
-
-                     case 'cnn'
-                        % LSTMパラメータの設定
-                        if isfield(loadedData.classifier.cnn, 'params')
-                            obj.params.classifier.cnn = loadedData.classifier.cnn.params;
-                        end
-                        
-                    case 'lstm'
-                        % LSTMパラメータの設定
-                        if isfield(loadedData.classifier.lstm, 'params')
-                            obj.params.classifier.lstm = loadedData.classifier.lstm.params;
-                        end
-
-                    case 'hybrid'
-                        % ハイブリッドモデルの設定
-                        if isfield(loadedData.classifier.hybrid, 'params')
-                            obj.params.classifier.hybrid = loadedData.classifier.hybrid.params;
-                        end
-                end
-
-                % CSPフィルタの設定
-                if ~isfield(loadedData, 'results') || ~isfield(loadedData.results, 'csp')
-                    error('CSP filters not found in loaded data');
-                end
-                obj.results.csp.filters = loadedData.results.csp.filters;
-
-                fprintf('Successfully initialized online processing with %s classifier\n', ...
-                    upper(obj.params.classifier.activeClassifier));
-
+        
+                fprintf('オンライン処理の初期化が完了しました: %s 分類器を使用\n', ...
+                    upper(activeClassifier));
+                    
+                % 読み込んだファイル情報を表示
+                fprintf('読み込んだモデルファイル: %s\n', fileInfo.filenames{1});
+        
             catch ME
-                obj.guiController.showError('Online processing initialization failed', ME.message);
+                obj.guiController.showError('オンライン処理の初期化に失敗しました', ME.message);
                 obj.stop();
                 rethrow(ME);
             end
@@ -959,85 +981,20 @@ classdef EEGAcquisitionManager < handle
             fprintf('\n');
         end
         
-        %% 正規化パラメータの検証メソッド
-        % 各正規化手法に必要なパラメータの存在と妥当性を確認
-        function validateNormalizationParams(obj, normParams)
-            switch obj.normParams.method
-                case 'zscore'
-                    % z-score正規化のパラメータ検証
-                    if ~isfield(normParams, 'mean') || ~isfield(normParams, 'std')
-                        error('z-score正規化に必要なパラメータ（mean, std）が不足しています．');
-                    end
-                    if any(normParams.std == 0)
-                        error('標準偏差が0のチャンネルが存在します．');
-                    end
-                    
-                case 'minmax'
-                    % min-max正規化のパラメータ検証
-                    if ~isfield(normParams, 'min') || ~isfield(normParams, 'max')
-                        error('min-max正規化に必要なパラメータ（min, max）が不足しています．');
-                    end
-                    if any(normParams.max == normParams.min)
-                        error('最大値と最小値が同じチャンネルが存在します．');
-                    end
-                    
-                case 'robust'
-                    % ロバスト正規化のパラメータ検証
-                    if ~isfield(normParams, 'median') || ~isfield(normParams, 'mad')
-                        error('ロバスト正規化に必要なパラメータ（median, mad）が不足しています．');
-                    end
-                    if any(normParams.mad == 0)
-                        error('MADが0のチャンネルが存在します．');
-                    end
-                    
-                otherwise
-                    error('未知の正規化方法です: %s', obj.params.signal.normalize.method);
-            end
-        end
-        
-        %% 正規化パラメータ情報表示メソッド
-        % 現在の正規化設定の詳細を表示
-        function displayNormalizationParams(obj, normParams)
-            fprintf('\n正規化パラメータの情報:\n');
-            fprintf('------------------------\n');
-            
-            switch obj.normParams.method
-                case 'zscore'
-                    fprintf('平均値の範囲: [%.4f, %.4f]\n', min(normParams.mean), max(normParams.mean));
-                    fprintf('標準偏差の範囲: [%.4f, %.4f]\n', min(normParams.std), max(normParams.std));
-                    
-                case 'minmax'
-                    fprintf('最小値の範囲: [%.4f, %.4f]\n', min(normParams.min), max(normParams.min));
-                    fprintf('最大値の範囲: [%.4f, %.4f]\n', min(normParams.max), max(normParams.max));
-                    
-                case 'robust'
-                    fprintf('中央値の範囲: [%.4f, %.4f]\n', min(normParams.median), max(normParams.median));
-                    fprintf('MADの範囲: [%.4f, %.4f]\n', min(normParams.mad), max(normParams.mad));
-            end
-            
-            fprintf('------------------------\n');
-        end
-        
         %% データバッファの初期化メソッド
         % 信号処理に使用する各種バッファを準備
         function initializeDataBuffers(obj)
             % 処理ウィンドウサイズの計算
-            obj.processingWindow = round(obj.params.signal.window.analysis * obj.params.device.sampleRate);
+            obj.processingWindow = round(obj.params.signal.window.epochDuration * obj.params.device.sampleRate);
             obj.slidingStep = round(obj.params.signal.window.updateBuffer * obj.params.device.sampleRate);
             obj.bufferSize = round(obj.params.signal.window.bufferSize * obj.params.device.sampleRate);
-
+        
             % メインEEGバッファの初期化
             obj.dataBuffer = zeros(obj.params.device.channelCount, 0);
-
+        
             % EMGバッファの初期化（EMG有効時のみ）
             if obj.params.acquisition.emg.enable
                 obj.emgBuffer = zeros(obj.params.acquisition.emg.channels.count, 0);
-            end
-
-            % EOGバッファの初期化（EOG有効時のみ）
-            if obj.params.acquisition.eog.enable
-                obj.eogBufferSize = round(obj.params.device.sampleRate * 1); % 1秒分
-                obj.eogBuffer = zeros(obj.params.device.eog.channelCount, obj.eogBufferSize);
             end
         end
         
@@ -1090,41 +1047,17 @@ classdef EEGAcquisitionManager < handle
                     return;
                 end
 
-                % EOGデータの処理（EOG有効時）
-                if obj.params.acquisition.eog.enable
-                    % EOGチャンネルデータの抽出
-                    eogChannels = obj.params.device.eog.pairs.primary.left:obj.params.device.eog.pairs.primary.right;
-                    obj.eogBuffer = obj.dataBuffer(eogChannels, end-obj.eogBufferSize+1:end);
-                    obj.processEOG(obj.eogBuffer);
-                end
-
                 % 解析ウィンドウの抽出
-                if size(preprocessedSegment, 2) > obj.processingWindow
-                    analysisSegment = preprocessedSegment(:, end-obj.processingWindow+1:end);
-                else
-                    analysisSegment = preprocessedSegment;
-                end
+                analysisSegment = preprocessedSegment(:, end-obj.processingWindow+1:end);
 
                 % 各種特徴量の抽出
                 obj.processPowerFeatures(analysisSegment);
                 obj.processFAAFeatures(analysisSegment);
                 obj.processABRatioFeatures(analysisSegment);
                 obj.processEmotionFeatures(analysisSegment);
-
-                % 分類器への入力データ
-                switch obj.params.classifier.activeClassifier
-                    case {'svm', 'ecoc'}
-                        % svm, ecocの場合はCSPFeatureを使用
-                        currentFeatures = obj.processCSPFeatures(analysisSegment);
-                    case {'cnn', 'lstm', 'hybrid'}
-                        % cnn, lstm, hybridの場合はanalysisSegmentをそのまま使用
-                        currentFeatures = analysisSegment;
-                    otherwise
-                        error('Unknown classifier type: %s', obj.params.classifier.activeClassifier);
-                end
                 
                 % 分類処理の実行
-                [label, score] = obj.processClassification(currentFeatures);
+                [label, score] = obj.processClassification(analysisSegment);
 
                 % 最新の解析結果を構造体として保存
                 obj.latestResults = struct(...
@@ -1136,8 +1069,7 @@ classdef EEGAcquisitionManager < handle
                         'faa', obj.getLatestFeature(obj.results.faa), ...
                         'abRatio', obj.getLatestFeature(obj.results.abRatio), ...
                         'emotion', obj.getLatestFeature(obj.results.emotion) ...
-                    ), ...
-                    'eog', obj.getLatestFeature(obj.results.eog) ...
+                    ) ...
                 );
 
                 % 結果のUDP送信
@@ -1184,14 +1116,6 @@ classdef EEGAcquisitionManager < handle
                     if obj.params.signal.preprocessing.baseline.enable
                         [data, ~] = obj.baselineCorrector.correctBaseline(...
                             data, obj.params.signal.preprocessing.baseline.method);
-                    end
-
-                    % 正規化処理
-                    if ~isempty(obj.normParams)
-                        data = obj.normalizer.normalizeOnline(data, obj.normParams);
-                    else
-                        warning('オンラインモードで正規化パラメータが見つかりません。正規化をスキップします。');
-                        fprintf('正規化パラメータを含む分析結果を読み込む必要があります。\n');
                     end
                     
                     preprocessedSegment = data;
@@ -1325,47 +1249,9 @@ classdef EEGAcquisitionManager < handle
             end
         end
         
-        %% CSP特徴量抽出メソッド
-        % 共通空間パターンによる特徴抽出
-        function currentFeatures = processCSPFeatures(obj, preprocessedSegment)
-            if ~obj.params.feature.csp.enable || isempty(preprocessedSegment)
-                currentFeatures = [];
-                return;
-            end
-
-            try
-                % データとフィルタのサイズを確認
-                [n_channels, n_samples] = size(preprocessedSegment);
-                [filter_rows, filter_cols] = size(obj.results.csp.filters);
-
-                % CSP特徴量の抽出
-                currentFeatures = obj.cspExtractor.extractFeatures(...
-                    preprocessedSegment, obj.results.csp.filters);
-                
-                % 結果の保存
-                currentTime = toc(obj.processingTimer)*1000;
-                if ~isempty(currentFeatures)
-                    newCSPResult = struct(...
-                        'features', currentFeatures, ...
-                        'time', currentTime, ...
-                        'sample', obj.currentTotalSamples);
-
-                    if isempty(obj.results.csp.features)
-                        obj.results.csp.features = newCSPResult;
-                    else
-                        obj.results.csp.features(end+1) = newCSPResult;
-                    end
-                end
-            catch ME
-                warning('CSPFeatures:Error', 'Error in processCSPFeatures: %s\nData size: %dx%d, Filter size: %dx%d', ...
-                    ME.message, n_channels, n_samples, filter_rows, filter_cols);
-                currentFeatures = [];
-            end
-        end
-        
         %% 分類処理実行メソッド
         % 特徴量から状態を分類
-        function [label, score] = processClassification(obj, currentFeatures)
+        function [label, score] = processClassification(obj, currentData)
             label = [];
             score = [];
         
@@ -1373,28 +1259,23 @@ classdef EEGAcquisitionManager < handle
                 switch obj.params.classifier.activeClassifier
                     case 'svm'
                         % SVM分類の実行
-                        [label, score] = obj.svmClassifier.predictOnline(...
-                            currentFeatures, obj.classifiers.svm.model, obj.optimalThreshold);
+                        [label, score] = obj.svmClassifier.predictOnline( currentData, obj.classifiers.svm);
         
                     case 'ecoc'
                         % ECOC分類の実行
-                        [label, score] = obj.ecocClassifier.predictOnline(...
-                            currentFeatures, obj.classifiers.ecoc.model);
+                        [label, score] = obj.ecocClassifier.predictOnline(currentData, obj.classifiers.ecoc);
         
                     case 'cnn'
                         % CNN分類の実行
-                        [label, score] = obj.cnnClassifier.predictOnline(...
-                            currentFeatures, obj.classifiers.cnn.model);
+                        [label, score] = obj.cnnClassifier.predictOnline(currentData, obj.classifiers.cnn);
         
                     case 'lstm'
                         % LSTM分類の実行
-                        [label, score] = obj.lstmClassifier.predictOnline(...
-                            currentFeatures, obj.classifiers.lstm.model);
+                        [label, score] = obj.lstmClassifier.predictOnline(currentData, obj.classifiers.lstm);
         
                     case 'hybrid'
                         % Hybrid分類の実行
-                        [label, score] = obj.hybridClassifier.predictOnline(...
-                            currentFeatures, obj.classifiers.hybrid.model);
+                        [label, score] = obj.hybridClassifier.predictOnline(currentData, obj.classifiers.hybrid);
                 end
         
                 % 予測結果の保存
@@ -1403,13 +1284,8 @@ classdef EEGAcquisitionManager < handle
                     newPredictResult = struct(...
                         'label', label, ...
                         'score', score, ...
-                        'time', currentTime, ...
-                        'classifier', obj.params.classifier.activeClassifier);
-        
-                    % SVM特有の閾値情報を追加
-                    if strcmp(obj.params.classifier.activeClassifier, 'svm') && obj.params.classifier.svm.probability
-                        newPredictResult.threshold = obj.optimalThreshold;
-                    end
+                        'time', currentTime ...
+                    );
         
                     % 結果の蓄積
                     if isempty(obj.results.predict)
@@ -1421,44 +1297,6 @@ classdef EEGAcquisitionManager < handle
             catch ME
                 fprintf('Error in processClassification: %s\n', ME.message);
                 warning(ME.identifier, '%s', ME.message);
-            end
-        end
-
-        %% EOG処理メソッド
-        % 眼球運動の検出と方向推定
-        function processEOG(obj, eogData)
-            try
-                if ~obj.params.acquisition.eog.enable || isempty(eogData)
-                    return;
-                end
-                
-                % 視線方向の検出
-                direction = obj.eogExtractor.detectGazeDirection(eogData);
-        
-                % 有効な検出結果の処理
-                if ~strcmp(direction, 'error')
-                    % 結果の保存
-                    currentTime = toc(obj.processingTimer)*1000;
-                    newEOGResult = struct(...
-                        'direction', direction, ...
-                        'time', currentTime, ...
-                        'sample', obj.currentTotalSamples);
-        
-                    % 結果の蓄積
-                    if isempty(obj.results.eog)
-                        obj.results.eog = newEOGResult;
-                    else
-                        obj.results.eog(end+1) = newEOGResult;
-                    end
-        
-                    % 最新結果の更新
-                    obj.latestResults.eog = newEOGResult;
-                end
-                
-            catch ME
-                warning('EOG:ProcessingError', 'Error in EOG processing: %s', ME.message);
-                fprintf('Error stack:\n');
-                disp(getReport(ME, 'extended'));
             end
         end
 
@@ -1602,7 +1440,7 @@ classdef EEGAcquisitionManager < handle
             try
                 switch lower(paramName)
                     case 'window size'
-                        obj.params.signal.window.analysis = value;
+                        obj.params.signal.window.epochDuration = value;
                         obj.initializeDataBuffers();
                     case 'filter range'
                         obj.params.signal.filter.fir.frequency = value;

@@ -19,9 +19,6 @@ classdef CNNClassifier < handle
     %   cnn = CNNClassifier(params);
     %   results = cnn.trainCNN(processedData, processedLabel);
     %   [label, score] = cnn.predictOnline(newData, results.model);
-    %
-    % 作成者: LLEOO
-    % バージョン: 2.0
     
     properties (Access = private)
         params              % システム設定パラメータ
@@ -258,7 +255,7 @@ classdef CNNClassifier < handle
         end
 
         %% オンライン予測メソッド - 新しいデータの分類を実行
-        function [label, score] = predictOnline(obj, data, cnnModel)
+        function [label, score] = predictOnline(obj, data, cnnl)
             % 学習済みモデルを使用して新しいEEGデータを分類
             %
             % 入力:
@@ -272,20 +269,36 @@ classdef CNNClassifier < handle
             if ~obj.isEnabled
                 error('CNN分類器は設定で無効化されています');
             end
-
+        
             try
-                % データの前処理と整形
-                prepData = obj.prepareDataForCNN(data);
+                % 正規化パラメータを取得して正規化を実行
+                if obj.params.classifier.cnn.normalize.enable
+                    if isfield(cnn, 'normParams') && ~isempty(cnn.normParams)
+                        data = obj.normalizer.normalizeOnline(data, cnnl.normParams);
+                    else
+                        warning('CNNClassifier:NoNormParams', ...
+                            '正規化パラメータが見つかりません。正規化をスキップします。');
+                    end
+                end
+
+                % データの形状変換（必要に応じて）
+                if ndims(data) ~= 4
+                    prepData = obj.prepareDataForCNN(data);
+                else
+                    prepData = data;
+                end
+                
+                % モデルの存在確認
+                if isempty(cnnModel)
+                    error('CNN model is not available');
+                end
                 
                 % 予測の実行
-                [label, scores] = classify(cnnModel, prepData);
-                
-                % クラス1（安静状態）の確率を取得
-                score = scores(:,1);
-
+                [label, score] = classify(cnn.model, prepData);
+        
             catch ME
-                fprintf('オンライン予測でエラーが発生: %s\n', ME.message);
-                fprintf('エラー詳細:\n');
+                fprintf('Error in CNN online prediction: %s\n', ME.message);
+                fprintf('Error details:\n');
                 disp(getReport(ME, 'extended'));
                 rethrow(ME);
             end
@@ -346,7 +359,7 @@ classdef CNNClassifier < handle
             normParams = [];
             
             % データ拡張処理
-            if obj.params.signal.preprocessing.augmentation.enable
+            if obj.params.classifier.augmentation.enable
                 fprintf('\nデータ拡張を実行...\n');
                 [procTrainData, procTrainLabels, ~] = obj.dataAugmenter.augmentData(trainData, trainLabels);
                 fprintf('  - 拡張前: %d サンプル\n', length(trainLabels));
@@ -355,7 +368,7 @@ classdef CNNClassifier < handle
             end
             
             % 正規化処理
-            if obj.params.signal.preprocessing.normalize.enable
+            if obj.params.classifier.normalize.enable
                 [procTrainData, normParams] = obj.normalizer.normalize(procTrainData);
                 
                 % 正規化パラメータの検証
