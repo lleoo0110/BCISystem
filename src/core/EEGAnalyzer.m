@@ -146,16 +146,6 @@ classdef EEGAnalyzer < handle
         
                 close all;
                 fprintf('\n=== 解析処理完了 ===\n');
-<<<<<<< HEAD
-
-                if obj.params.signal.createEEGLABset
-                    fprintf('\n=== EEGLAB起動 ===\n');
-                    create_eeglabset(obj.rawData,obj.labels,obj.params,saveDir);
-                end
-
-=======
-        
->>>>>>> 77be08a1646b3e6dca6b51b459a238fdd6ad0b8a
             catch ME
                 fprintf('\n=== エラー発生 ===\n');
                 fprintf('エラーメッセージ: %s\n', ME.message);
