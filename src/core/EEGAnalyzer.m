@@ -146,7 +146,6 @@ classdef EEGAnalyzer < handle
         
                 close all;
                 fprintf('\n=== 解析処理完了 ===\n');
-        
             catch ME
                 fprintf('\n=== エラー発生 ===\n');
                 fprintf('エラーメッセージ: %s\n', ME.message);

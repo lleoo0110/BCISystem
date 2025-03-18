@@ -1025,7 +1025,7 @@ classdef CNNClassifier < handle
                     valDiff = 0;
                 end
                 
-                % トレンド指標の計算（拡張）
+                % トレンド指標の計算
                 trainTrend = struct(...
                     'mean_change', mean(trainDiff), ...
                     'volatility', std(trainDiff), ...
@@ -1181,6 +1181,7 @@ classdef CNNClassifier < handle
                 fprintf('  - 潜在的節約: %dエポック\n', effect.potential_savings);
             end
         end
+        
         %% 検証-テスト精度ギャップ分析メソッド
         function [isOverfit, metrics] = validateTestValidationGap(~, valAccHistory, testAcc, dataSize)
             % 検証精度とテスト精度の差を統計的に評価

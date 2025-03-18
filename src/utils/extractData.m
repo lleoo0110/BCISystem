@@ -65,9 +65,6 @@ function [extractedData, extractedLabels] = extractData(varargin)
 %   - データファイルには最低限 'rawData'と'labels'フィールドが必要です
 %   - 'rawData'は [channels x timepoints] の形式であることを想定しています
 %   - 'labels'は少なくとも'value'と'sample'フィールドを持つ構造体の配列であることを想定しています
-%
-% Author: LLEOO
-% Version: 2.2
 
     % 入力パーサーの初期化
     p = inputParser;

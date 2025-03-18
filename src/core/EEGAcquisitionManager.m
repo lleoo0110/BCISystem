@@ -157,9 +157,6 @@ end
                     obj.lslManager = [];
                 end
 
-                % 一時ファイルのクリーンアップ
-                obj.cleanupTempFiles();
-
             catch ME
                 % エラー発生時のログ記録
                 warning(ME.identifier, '%s', ME.message);
@@ -680,13 +677,33 @@ end
         %% 一時ファイルのクリーンアップメソッド
         % 不要になった一時ファイルを削除
         function cleanupTempFiles(obj)
-            % 登録された全一時ファイルを削除
-            for i = 1:length(obj.tempDataFiles)
-                if exist(obj.tempDataFiles{i}, 'file')
-                    delete(obj.tempDataFiles{i});
+            shouldDeleteTempFiles = false;
+            
+            % パラメータ構造のチェック
+            if isfield(obj.params, 'acquisition') && ...
+               isfield(obj.params.acquisition, 'save') && ...
+               isfield(obj.params.acquisition.save, 'deleteTempFiles')
+                shouldDeleteTempFiles = obj.params.acquisition.save.deleteTempFiles;
+            end
+            
+            fprintf('一時ファイル削除設定: %s\n', mat2str(shouldDeleteTempFiles));
+            
+            if shouldDeleteTempFiles
+                fprintf('一時ファイルを削除します...\n');
+                for i = 1:length(obj.tempDataFiles)
+                    if exist(obj.tempDataFiles{i}, 'file')
+                        delete(obj.tempDataFiles{i});
+                        fprintf('  - 一時ファイルを削除しました: %s\n', obj.tempDataFiles{i});
+                    end
+                end
+                fprintf('一時ファイル削除完了: %d ファイル\n', length(obj.tempDataFiles));
+            else
+                fprintf('一時ファイルは保持されます: %d ファイル\n', length(obj.tempDataFiles));
+                % 一時ファイルのリストを表示
+                for i = 1:length(obj.tempDataFiles)
+                    fprintf('  - %s\n', obj.tempDataFiles{i});
                 end
             end
-            obj.tempDataFiles = {};
         end
         
         %% エラーログ記録メソッド
@@ -860,35 +877,7 @@ end
                     fprintf('データを保存しました: %s\n', saveFilePath);
                 end
         
-                % 一時ファイルの削除処理
-                % deleteTempFilesパラメータの明示的なチェック
-                shouldDeleteTempFiles = false;
-                
-                % パラメータ構造のチェック
-                if isfield(obj.params, 'acquisition') && ...
-                   isfield(obj.params.acquisition, 'save') && ...
-                   isfield(obj.params.acquisition.save, 'deleteTempFiles')
-                    shouldDeleteTempFiles = obj.params.acquisition.save.deleteTempFiles;
-                end
-                
-                fprintf('一時ファイル削除設定: %s\n', mat2str(shouldDeleteTempFiles));
-                
-                if shouldDeleteTempFiles
-                    fprintf('一時ファイルを削除します...\n');
-                    for i = 1:length(obj.tempDataFiles)
-                        if exist(obj.tempDataFiles{i}, 'file')
-                            delete(obj.tempDataFiles{i});
-                            fprintf('  - 一時ファイルを削除しました: %s\n', obj.tempDataFiles{i});
-                        end
-                    end
-                    fprintf('一時ファイル削除完了: %d ファイル\n', length(obj.tempDataFiles));
-                else
-                    fprintf('一時ファイルは保持されます: %d ファイル\n', length(obj.tempDataFiles));
-                    % 一時ファイルのリストを表示
-                    for i = 1:length(obj.tempDataFiles)
-                        fprintf('  - %s\n', obj.tempDataFiles{i});
-                    end
-                end
+                obj.cleanupTempFiles();
         
             catch ME
                 error('最終結果の保存に失敗: %s', ME.message);
