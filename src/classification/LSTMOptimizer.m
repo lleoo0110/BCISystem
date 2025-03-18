@@ -64,7 +64,7 @@ classdef LSTMOptimizer < handle
                         );
 
                         fprintf('組み合わせ %d/%d: 精度 = %.4f\n', i, size(paramSets, 1), ...
-                            trainResults.performance.overallAccuracy);
+                            trainResults.performance.accuracy);
 
                         if obj.useGPU
                             reset(gpuDevice);
@@ -223,7 +223,7 @@ classdef LSTMOptimizer < handle
                         severity = result.overfitting.severity;
                         isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
                         
-                        validScores(i) = result.performance.overallAccuracy;
+                        validScores(i) = result.performance.accuracy;
                         isOverfitFlags(i) = isOverfit;
                         
                         % サマリー情報の更新
@@ -241,14 +241,14 @@ classdef LSTMOptimizer < handle
                         % 結果の詳細表示
                         fprintf('\n--- パラメータセット %d/%d ---\n', i, numResults);
                         fprintf('性能指標:\n');
-                        fprintf('  精度: %.4f\n', result.performance.overallAccuracy);
+                        fprintf('  精度: %.4f\n', result.performance.accuracy);
                         fprintf('  過学習: %s\n', string(isOverfit));
                         fprintf('  重大度: %s\n', severity);
                         
-                        if isfield(result.performance, 'crossValidation')
+                        if isfield(result, 'crossValidation')
                             fprintf('  交差検証精度: %.4f (±%.4f)\n', ...
-                                result.performance.crossValidation.accuracy, ...
-                                result.performance.crossValidation.std);
+                                result.crossValidation.accuracy, ...
+                                result.crossValidation.std);
                         end
                         
                         fprintf('\nハイパーパラメータ設定:\n');
@@ -293,7 +293,7 @@ classdef LSTMOptimizer < handle
                 
                 bestResults = validResults{bestIdx};
                 obj.bestParams = bestResults.params;
-                obj.bestPerformance = bestResults.performance.overallAccuracy;
+                obj.bestPerformance = bestResults.performance.accuracy;
                 obj.optimizedModel = bestResults.model;
 
             catch ME
@@ -309,7 +309,7 @@ classdef LSTMOptimizer < handle
                     if ~isempty(result.model) && ~isempty(result.performance)
                         newEntry = struct(...
                             'params', result.params, ...
-                            'performance', result.performance.overallAccuracy, ...
+                            'performance', result.performance.accuracy, ...
                             'model', result.model);
                         if isempty(obj.optimizationHistory)
                             obj.optimizationHistory = newEntry;
