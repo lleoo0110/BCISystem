@@ -42,7 +42,7 @@ classdef CNNOptimizer < handle
             obj.bestPerformance = -inf;
             obj.optimizationHistory = struct('params', {}, 'performance', {}, 'model', {});
             obj.useGPU = params.classifier.cnn.gpu;
-            obj.maxTrials = 100;  % デフォルトの試行回数
+            obj.maxTrials = params.classifier.cnn.optimization.maxTrials;
             
             % 早期停止パラメータの初期化
             obj.earlyStopParams = struct(...

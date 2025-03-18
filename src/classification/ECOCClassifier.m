@@ -319,7 +319,7 @@ classdef ECOCClassifier < handle
                         'Coding', obj.params.classifier.ecoc.coding, ...
                         'FitPosterior', fitPosterior);
                     
-                    cv = crossval(mdl, 'KFold', obj.params.classifier.evaluation.kfold);
+                    cv = crossval(mdl, 'KFold', obj.params.classifier.ecoc.validation.kfold);
                     score = 1 - kfoldLoss(cv);
                     
                     fprintf('  - C=%.3f, KScale=%.3f: スコア=%.4f\n', c, k, score);
@@ -394,7 +394,7 @@ classdef ECOCClassifier < handle
                 return;
             end
             
-            kfolds = obj.params.classifier.evaluation.kfold;
+            kfolds = obj.params.classifier.ecoc.validation.kfold;
             fprintf('\n交差検証の実行（K=%d）...\n', kfolds);
             
             % 交差検証
