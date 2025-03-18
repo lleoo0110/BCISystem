@@ -303,7 +303,7 @@ classdef LSTMClassifier < handle
             
             try
                 % 分割数の取得
-                k = obj.params.classifier.evaluation.kfold;
+                k = obj.params.classifier.lstm.training.validation.kfold;
                 
                 % データサイズの取得
                 [~, ~, numEpochs] = size(data);

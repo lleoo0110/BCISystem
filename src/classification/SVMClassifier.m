@@ -317,7 +317,7 @@ classdef SVMClassifier < handle
                         'BoxConstraint', c, ...
                         'KernelScale', k);
                     
-                    cv = crossval(mdl, 'KFold', obj.params.classifier.evaluation.kfold);
+                    cv = crossval(mdl, 'KFold', obj.params.classifier.svm.validation.kfold);
                     score = 1 - kfoldLoss(cv);
                     
                     fprintf('  - C=%.3f, KScale=%.3f: スコア=%.4f\n', c, k, score);
@@ -360,7 +360,7 @@ classdef SVMClassifier < handle
                 return;
             end
             
-            kfold = obj.params.classifier.evaluation.kfold;
+            kfold = obj.params.classifier.svm.validation.kfold;
             fprintf('\n交差検証の実行（K=%d）...\n', kfold);
             obj.crossValModel = crossval(obj.svmModel, 'KFold', kfold);
             
