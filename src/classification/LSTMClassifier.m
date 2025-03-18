@@ -23,7 +23,6 @@ classdef LSTMClassifier < handle
     properties (Access = private)
         params              % システム設定パラメータ
         net                 % 学習済みLSTMネットワーク
-        isEnabled           % LSTM有効/無効フラグ
         isInitialized       % 初期化完了フラグ
         useGPU              % GPU使用フラグ
         
@@ -59,7 +58,6 @@ classdef LSTMClassifier < handle
             
             % 基本パラメータの設定
             obj.params = params;
-            obj.isEnabled = params.classifier.lstm.enable;
             obj.isInitialized = false;
             obj.useGPU = params.classifier.lstm.gpu;
             
@@ -93,12 +91,6 @@ classdef LSTMClassifier < handle
             %
             % 出力:
             %   results - 学習結果を含む構造体（モデル、性能評価、正規化パラメータなど）
-            
-            % LSTM有効性のチェック
-            if ~obj.isEnabled
-                error('LSTM分類器は設定で無効化されています');
-            end
-
             try                
                 fprintf('\n=== LSTM学習処理を開始 ===\n');
                 
@@ -169,7 +161,7 @@ classdef LSTMClassifier < handle
         end
 
         %% オンライン予測メソッド - 新しいデータの分類を実行
-        function [label, score] = predictOnline(obj, data, lstmModel)
+        function [label, score] = predictOnline(obj, data, lstm)
             % 学習済みモデルを使用して新しいEEGデータを分類
             %
             % 入力:
@@ -178,12 +170,7 @@ classdef LSTMClassifier < handle
             %
             % 出力:
             %   label - 予測クラスラベル
-            %   score - 予測確率スコア
-            
-            if ~obj.isEnabled
-                error('LSTM分類器は設定で無効化されています');
-            end
-        
+            %   score - 予測確率スコア        
             try
                 % 入力データの検証
                 if isempty(data)
@@ -191,21 +178,21 @@ classdef LSTMClassifier < handle
                 end
         
                 % モデルの存在確認
-                if isempty(lstmModel) || ~isfield(lstmModel, 'model') || isempty(lstmModel.model)
+                if isempty(lstm) || ~isfield(lstm, 'model') || isempty(lstm.model)
                     error('LSTMモデルが利用できません');
                 end
 
                 % 正規化パラメータを取得して正規化を実行
                 normalizedData = data;
-                if obj.params.classifier.normalize.enable && isfield(lstmModel, 'normParams')
-                    normalizedData = obj.normalizer.normalizeOnline(data, lstmModel.normParams);
+                if isfield(lstm, 'normParams')
+                    normalizedData = obj.normalizer.normalizeOnline(data, lstm.normParams);
                 end
 
                 % データの形状変換（必要に応じて）
                 prepData = obj.prepareDataForLSTM(normalizedData);
                 
                 % 予測の実行
-                [label, score] = classify(lstmModel.model, prepData);
+                [label, score] = classify(lstm.model, prepData);
         
             catch ME
                 fprintf('LSTM予測中にエラーが発生: %s\n', ME.message);
@@ -639,21 +626,22 @@ classdef LSTMClassifier < handle
             %   metrics - 詳細な評価メトリクス
             
             fprintf('\n=== モデル評価を実行 ===\n');
-            
             metrics = struct(...
                 'accuracy', [], ...
+                'score', [], ...
                 'confusionMat', [], ...
                 'classwise', [], ...
                 'roc', [], ...
                 'auc', [] ...
             );
-    
+            
            % テストラベルをカテゴリカル型に変換
            uniqueLabels = unique(testLabels);
            testLabels = categorical(testLabels, uniqueLabels);
 
            % モデルの評価
-           [pred, scores] = classify(model, testData);
+           [pred, score] = classify(model, testData);
+           metrics.score = score;
 
            % 基本的な指標の計算
            metrics.accuracy = mean(pred == testLabels);
@@ -708,7 +696,7 @@ classdef LSTMClassifier < handle
 
            % ROC曲線とAUC（2クラス分類の場合）
            if length(classes) == 2
-               [X, Y, T, AUC] = perfcurve(testLabels, scores(:,2), classes(2));
+               [X, Y, T, AUC] = perfcurve(testLabels, score(:,2), classes(2));
                metrics.roc = struct('X', X, 'Y', Y, 'T', T);
                metrics.auc = AUC;
                fprintf('\nAUC: %.3f\n', AUC);
@@ -1404,41 +1392,18 @@ classdef LSTMClassifier < handle
         end
 
         %% 結果構造体構築メソッド
-        function results = buildResultsStruct(obj, lstmModel, testMetrics, trainInfo, ...
-            crossValidationResults, normParams)
+        function results = buildResultsStruct(obj, lstmModel, metrics, trainInfo, ...
+            crossValidation, normParams)
             % 結果構造体の構築
             
             results = struct(...
                 'model', lstmModel, ...
-                'performance', struct(...
-                    'overallAccuracy', testMetrics.accuracy, ...
-                    'crossValidation', struct(...
-                        'accuracy', crossValidationResults.meanAccuracy, ...
-                        'std', crossValidationResults.stdAccuracy ...
-                    ), ...
-                    'precision', [], ...
-                    'recall', [], ...
-                    'f1score', [], ...
-                    'auc', [], ...
-                    'confusionMatrix', testMetrics.confusionMat ...
-                ), ...
+                'performance', metrics, ...
+                'crossValidation', crossValidation, ...
                 'trainInfo', trainInfo, ...
                 'overfitting', obj.overfitMetrics, ...
                 'normParams', normParams ...
             );
-            
-            % クラスごとの性能メトリクスの追加（存在する場合）
-            if isfield(testMetrics, 'classwise') && ~isempty(testMetrics.classwise)
-                % 1クラス目の値をデフォルト値として使用
-                results.performance.precision = testMetrics.classwise(1).precision;
-                results.performance.recall = testMetrics.classwise(1).recall;
-                results.performance.f1score = testMetrics.classwise(1).f1score;
-            end
-            
-            % AUCの追加（存在する場合）
-            if isfield(testMetrics, 'auc')
-                results.performance.auc = testMetrics.auc;
-            end
         end
         
         %% 結果表示メソッド

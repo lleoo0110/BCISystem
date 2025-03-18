@@ -61,7 +61,6 @@ classdef ECOCClassifier < handle
                 % モデルの学習（学習データのみを使用）
                 fprintf('\nECOCモデルの学習を開始...\n');
                 obj.trainModel(trainFeatures, trainLabels);
-                fprintf('ECOCモデルの学習完了\n');
 
                 % 交差検証の実行（学習データのみを使用）
                 if obj.params.classifier.evaluation.enable
@@ -69,24 +68,20 @@ classdef ECOCClassifier < handle
                 end
 
                 % テストデータでの評価
-                testPerformance = obj.evaluateOnTestData(testFeatures, testLabels);
+                testMetrics = obj.evaluateModel(testFeatures, testLabels);
                 
                 % 過学習の検出
-                [isOverfit, overfitMetrics] = obj.validateOverfitting(testPerformance.accuracy);
+                [isOverfit, overfitMetrics] = obj.validateOverfitting(testMetrics.accuracy);
                 
                 % 結果の構築
                 results = struct(...
                     'model', obj.ecocModel, ...
-                    'performance', struct(...
-                        'testAccuracy', testPerformance.accuracy, ...
-                        'testConfusionMat', testPerformance.confMat, ...
-                        'testScore', testPerformance.score, ...
-                        'classLabels', testPerformance.classLabels, ...
-                        'isOverfit', isOverfit, ...
-                        'overfitMetrics', overfitMetrics), ...
+                    'performance', testMetrics, ...
+                    'overfitMetrics', overfitMetrics, ...
                     'cspFilters', filters, ...
                     'cspParameters', cspParameters, ...
-                    'normParams', normParams);
+                    'normParams', normParams ...
+                );
                 
                 % パフォーマンス情報を保存
                 obj.performance = results.performance;
@@ -435,7 +430,7 @@ classdef ECOCClassifier < handle
                 obj.performance.cvMeanAccuracy, obj.performance.cvStdAccuracy);
         end
 
-        function testPerformance = evaluateOnTestData(obj, testFeatures, testLabels)
+        function metrics = evaluateModel(obj, testFeatures, testLabels)
             % テストデータでモデルの性能を評価する
             %
             % 入力:
@@ -443,44 +438,44 @@ classdef ECOCClassifier < handle
             %   testLabels - 検証用ラベル
             %
             % 出力:
-            %   testPerformance - テストデータでの性能評価結果
+            %   metrics - テストデータでの性能評価結果
             
             fprintf('\n検証データでモデルを評価中...\n');
+            metrics = struct(...
+                'accuracy', [], ...
+                'score', [], ...
+                'confusionMat', [], ....
+                'roc', [], ...
+                'auc', [], ...
+                'classwise', [] ...
+            );
+
             [pred, score] = predict(obj.ecocModel, testFeatures);
             
             % スコアを確率に変換
             score = obj.convertToProb(score);
+            metrics.score = score;
             
             % 検証データでの精度と混同行列
-            testAccuracy = mean(pred == testLabels);
-            testConfMat = confusionmat(testLabels, pred);
+            metrics.accuracy = mean(pred == testLabels);
+            metrics.confusionMat = confusionmat(testLabels, pred);
             
             % クラスラベル
             classLabels = unique(testLabels);
-            
-            % 結果を構造体に格納
-            testPerformance = struct(...
-                'accuracy', testAccuracy, ...
-                'confMat', testConfMat, ...
-                'classLabels', classLabels, ...
-                'prediction', pred, ...
-                'score', score);
-            
+
             % ROC曲線とAUCの計算（2クラス分類の場合のみ）
             if length(classLabels) == 2
                 [X, Y, T, AUC] = perfcurve(testLabels, score(:,2), classLabels(2));
-                testPerformance.roc = struct('X', X, 'Y', Y, 'T', T);
-                testPerformance.auc = AUC;
-                obj.performance.testRoc = testPerformance.roc;
+                metrics.roc = struct('X', X, 'Y', Y, 'T', T);
+                metrics.auc = AUC;
+                obj.performance.testRoc = metrics.roc;
                 obj.performance.testAuc = AUC;
                 fprintf('AUC: %.4f\n', AUC);
             end
             
             % クラスごとの性能評価
-            testPerformance.classwise = obj.calculateClassMetrics(testLabels, pred, classLabels);
-            obj.performance.testClasswise = testPerformance.classwise;
-            
-            fprintf('検証データでの精度: %.4f\n', testAccuracy);
+            metrics.classwise = obj.calculateClassMetrics(testLabels, pred, classLabels);
+            obj.performance.testClasswise = metrics.classwise;
         end
 
         function metrics = calculateClassMetrics(~, trueLabels, predLabels, classLabels)

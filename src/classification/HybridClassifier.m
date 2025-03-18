@@ -55,7 +55,6 @@ classdef HybridClassifier < handle
             %   params - 設定パラメータ（getConfig関数から取得）
             
             obj.params = params;
-            obj.isEnabled = params.classifier.hybrid.enable;
             obj.isInitialized = false;
             obj.useGPU = params.classifier.hybrid.gpu;
             
@@ -89,11 +88,6 @@ classdef HybridClassifier < handle
             %
             % 出力:
             %   results - 学習結果を含む構造体（モデル、性能評価、正規化パラメータなど）
-            
-            if ~obj.isEnabled
-                error('ハイブリッド分類器は設定で無効化されています');
-            end
-
             try                
                 fprintf('\n=== ハイブリッドモデル学習処理を開始 ===\n');
                 
@@ -140,11 +134,11 @@ classdef HybridClassifier < handle
                 obj.updatePerformanceMetrics(testMetrics);
                 
                 % 交差検証の実行
-                crossValidationResults = obj.performCrossValidationIfEnabled(processedData, processedLabel);
+                crossValidation = obj.performCrossValidationIfEnabled(processedData, processedLabel);
                 
                 % 結果構造体の構築
                 results = obj.buildResultsStruct(hybridModel, testMetrics, trainInfo, ...
-                    crossValidationResults, normParams);
+                    crossValidation, normParams);
 
                 % 結果のサマリー表示
                 obj.displayResults();
@@ -170,7 +164,7 @@ classdef HybridClassifier < handle
         end
 
         %% オンライン予測メソッド
-        function [label, score] = predictOnline(obj, data, hybridModel)
+        function [label, score] = predictOnline(obj, data, hybrid)
             % 学習済みモデルを使用して新しいEEGデータを分類
             %
             % 入力:
@@ -180,15 +174,10 @@ classdef HybridClassifier < handle
             % 出力:
             %   label - 予測クラスラベル
             %   score - 予測確率スコア
-            
-            if ~obj.isEnabled
-                error('ハイブリッド分類器は設定で無効化されています');
-            end
-        
             try
                 % 正規化パラメータを使用してデータを正規化
-                if isfield(hybridModel, 'normParams') && ~isempty(hybridModel.normParams)
-                    data = obj.normalizer.normalizeOnline(data, hybridModel.normParams);
+                if isfield(hybrid, 'normParams') && ~isempty(hybrid.normParams)
+                    data = obj.normalizer.normalizeOnline(data, hybrid.normParams);
                 else
                     warning('正規化パラメータが見つかりません。正規化をスキップします。');
                 end
@@ -198,13 +187,13 @@ classdef HybridClassifier < handle
                 lstmData = obj.prepareDataForLSTM(data);
                 
                 % 各モデルから特徴抽出
-                cnnFeatures = activations(hybridModel.netCNN, cnnData, 'fc_cnn', 'OutputAs', 'rows');
+                cnnFeatures = activations(hybrid.netCNN, cnnData, 'fc_cnn', 'OutputAs', 'rows');
                 
                 % LSTMからの特徴抽出
                 if iscell(lstmData)
                     lstmFeatures = [];
                     for i = 1:length(lstmData)
-                        lstmOut = predict(hybridModel.netLSTM, lstmData{i}, 'MiniBatchSize', 1);
+                        lstmOut = predict(hybrid.netLSTM, lstmData{i}, 'MiniBatchSize', 1);
                         
                         % 最初のサンプルで配列を初期化
                         if i == 1
@@ -214,7 +203,7 @@ classdef HybridClassifier < handle
                         lstmFeatures(i,:) = lstmOut;
                     end
                 else
-                    lstmOut = predict(hybridModel.netLSTM, lstmData, 'MiniBatchSize', 1);
+                    lstmOut = predict(hybrid.netLSTM, lstmData, 'MiniBatchSize', 1);
                     lstmFeatures = lstmOut;
                 end
                 
@@ -672,7 +661,7 @@ classdef HybridClassifier < handle
                 hybridValMetrics = struct(...
                     'accuracy', hybridValAccuracy / 100, ...  % 比率に戻す
                     'prediction', valPred, ...
-                    'scores', valScores, ...
+                    'score', valScores, ...
                     'classwise', classwise_val);
                 
                 % ハイブリッドモデル情報を構築
@@ -916,7 +905,7 @@ classdef HybridClassifier < handle
         end
 
         %% モデル評価メソッド
-        function metrics = evaluateModel(obj, model, cnnTestData, lstmTestData, testLabels)
+        function metrics = evaluateModel(~, model, cnnTestData, lstmTestData, testLabels)
             % 学習済みハイブリッドモデルの性能を評価
             %
             % 入力:
@@ -929,20 +918,16 @@ classdef HybridClassifier < handle
             %   metrics - 詳細な評価メトリクス
             
             fprintf('\n=== モデル評価を実行 ===\n');
-            
             metrics = struct(...
                 'accuracy', [], ...
+                'score', [], ...
                 'confusionMat', [], ...
                 'classwise', [], ...
                 'roc', [], ...
                 'auc', [] ...
             );
         
-            try
-                % テストラベルをカテゴリカル型に変換
-                uniqueLabels = unique(testLabels);
-                testLabels_cat = categorical(testLabels, uniqueLabels);
-                
+            try                
                 % CNNからの特徴抽出
                 cnnFeatures = activations(model.netCNN, cnnTestData, 'fc_cnn', 'OutputAs', 'rows');
                 
@@ -963,7 +948,8 @@ classdef HybridClassifier < handle
                 combinedFeatures = [cnnFeatures, lstmFeatures];
                 
                 % AdaBoostによる予測
-                [pred, scores] = predict(model.adaModel, combinedFeatures);
+                [pred, score] = predict(model.adaModel, combinedFeatures);
+                metrics.score =score;
                 
                 % 基本的な指標の計算
                 metrics.accuracy = mean(pred == testLabels);
@@ -1018,7 +1004,7 @@ classdef HybridClassifier < handle
                 
                 % 2クラス分類の場合のROC曲線とAUC
                 if length(classes) == 2
-                    [X, Y, T, AUC] = perfcurve(testLabels, scores(:,2), classes(2));
+                    [X, Y, T, AUC] = perfcurve(testLabels, score(:,2), classes(2));
                     metrics.roc = struct('X', X, 'Y', Y, 'T', T);
                     metrics.auc = AUC;
                     fprintf('\nAUC: %.3f\n', AUC);
@@ -1503,43 +1489,17 @@ classdef HybridClassifier < handle
         end
 
         %% 結果構造体構築メソッド
-        function results = buildResultsStruct(obj, hybridModel, testMetrics, trainInfo, ...
-            crossValidationResults, normParams)
+        function results = buildResultsStruct(obj, hybridModel, metrics, trainInfo, ...
+            crossValidation, normParams)
             % 結果構造体の構築
-            
             results = struct(...
                 'model', hybridModel, ...
-                'performance', struct(...
-                    'overallAccuracy', testMetrics.accuracy, ...
-                    'crossValidation', struct(...
-                        'accuracy', crossValidationResults.meanAccuracy, ...
-                        'std', crossValidationResults.stdAccuracy ...
-                    ), ...
-                    'precision', [], ...
-                    'recall', [], ...
-                    'f1score', [], ...
-                    'auc', [], ...
-                    'confusionMatrix', testMetrics.confusionMat ...
-                ), ...
+                'performance', metrics, ...
+                'crossValidation', crossValidation, ...
                 'trainInfo', trainInfo, ...
                 'overfitting', obj.overfitMetrics, ...
                 'normParams', normParams ...
             );
-            
-            % クラスごとの性能メトリクスの追加（存在する場合）
-            if isfield(testMetrics, 'classwise') && ~isempty(testMetrics.classwise)
-                % 1クラス目の値をデフォルト値として使用
-                results.performance.precision = testMetrics.classwise(1).precision;
-                results.performance.recall = testMetrics.classwise(1).recall;
-                results.performance.f1score = testMetrics.classwise(1).f1score;
-            end
-            
-            % AUCの追加（存在する場合）
-            if isfield(testMetrics, 'auc')
-                results.performance.auc = testMetrics.auc;
-            else
-                results.performance.auc = [];
-            end
         end
     end
 end

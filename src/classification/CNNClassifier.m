@@ -23,7 +23,6 @@ classdef CNNClassifier < handle
     properties (Access = private)
         params              % システム設定パラメータ
         net                 % 学習済みCNNネットワーク
-        isEnabled           % CNN有効/無効フラグ
         isInitialized       % 初期化完了フラグ
         useGPU              % GPU使用フラグ
         
@@ -59,7 +58,6 @@ classdef CNNClassifier < handle
             
             % 基本パラメータの設定
             obj.params = params;
-            obj.isEnabled = params.classifier.cnn.enable;
             obj.isInitialized = false;
             obj.useGPU = params.classifier.cnn.gpu;
             
@@ -93,12 +91,6 @@ classdef CNNClassifier < handle
             %
             % 出力:
             %   results - 学習結果を含む構造体（モデル、性能評価、正規化パラメータなど）
-            
-            % CNN有効性のチェック
-            if ~obj.isEnabled
-                error('CNN分類器は設定で無効化されています');
-            end
-
             try                
                 fprintf('\n=== CNN学習処理を開始 ===\n');
                 
@@ -139,11 +131,11 @@ classdef CNNClassifier < handle
                 obj.updatePerformanceMetrics(testMetrics);
                 
                 % 交差検証の実行
-                crossValidationResults = obj.performCrossValidationIfEnabled(processedData, processedLabel);
+                crossValidation = obj.performCrossValidationIfEnabled(processedData, processedLabel);
                 
                 % 結果構造体の構築
                 results = obj.buildResultsStruct(cnnModel, testMetrics, trainInfo, ...
-                    crossValidationResults, normParams);
+                    crossValidation, normParams);
 
                 % 結果のサマリー表示
                 obj.displayResults();
@@ -237,7 +229,8 @@ classdef CNNClassifier < handle
                     'severity', severity, ...
                     'optimalEpoch', optimalEpoch, ...
                     'totalEpochs', totalEpochs, ...
-                    'earlyStoppingEffect', earlyStoppingEffect);
+                    'earlyStoppingEffect', earlyStoppingEffect ...
+                );
                 
                 % 過学習判定
                 isOverfit = gapOverfit || isCompletelyBiased || (~isLearningProgressing && severity ~= 'none');
@@ -255,7 +248,7 @@ classdef CNNClassifier < handle
         end
 
         %% オンライン予測メソッド - 新しいデータの分類を実行
-        function [label, score] = predictOnline(obj, data, cnnl)
+        function [label, score] = predictOnline(obj, data, cnn)
             % 学習済みモデルを使用して新しいEEGデータを分類
             %
             % 入力:
@@ -265,20 +258,13 @@ classdef CNNClassifier < handle
             % 出力:
             %   label - 予測クラスラベル
             %   score - 予測確率スコア
-            
-            if ~obj.isEnabled
-                error('CNN分類器は設定で無効化されています');
-            end
-        
             try
                 % 正規化パラメータを取得して正規化を実行
-                if obj.params.classifier.cnn.normalize.enable
-                    if isfield(cnn, 'normParams') && ~isempty(cnn.normParams)
-                        data = obj.normalizer.normalizeOnline(data, cnnl.normParams);
-                    else
-                        warning('CNNClassifier:NoNormParams', ...
-                            '正規化パラメータが見つかりません。正規化をスキップします。');
-                    end
+                if isfield(cnn, 'normParams') && ~isempty(cnn.normParams)
+                    data = obj.normalizer.normalizeOnline(data, cnn.normParams);
+                else
+                    warning('CNNClassifier:NoNormParams', ...
+                        '正規化パラメータが見つかりません。正規化をスキップします。');
                 end
 
                 % データの形状変換（必要に応じて）
@@ -289,7 +275,7 @@ classdef CNNClassifier < handle
                 end
                 
                 % モデルの存在確認
-                if isempty(cnnModel)
+                if isempty(cnn.model)
                     error('CNN model is not available');
                 end
                 
@@ -898,9 +884,9 @@ classdef CNNClassifier < handle
             %   metrics - 詳細な評価メトリクス
             
             fprintf('\n=== モデル評価を実行 ===\n');
-            
             metrics = struct(...
                 'accuracy', [], ...
+                'score', [], ...
                 'confusionMat', [], ...
                 'classwise', [], ...
                 'roc', [], ...
@@ -912,7 +898,8 @@ classdef CNNClassifier < handle
            testLabels = categorical(testLabels, uniqueLabels);
 
            % モデルの評価
-           [pred, scores] = classify(model, testData);
+           [pred, score] = classify(model, testData);
+           metrics.score = score;
 
            % 基本的な指標の計算
            metrics.accuracy = mean(pred == testLabels);
@@ -967,7 +954,7 @@ classdef CNNClassifier < handle
 
            % ROC曲線とAUC（2クラス分類の場合）
            if length(classes) == 2
-               [X, Y, T, AUC] = perfcurve(testLabels, scores(:,2), classes(2));
+               [X, Y, T, AUC] = perfcurve(testLabels, score(:,2), classes(2));
                metrics.roc = struct('X', X, 'Y', Y, 'T', T);
                metrics.auc = AUC;
                fprintf('\nAUC: %.3f\n', AUC);
@@ -1767,43 +1754,17 @@ classdef CNNClassifier < handle
         end
         
         %% 結果構造体構築メソッド
-        function results = buildResultsStruct(obj, cnnModel, testMetrics, trainInfo, ...
-            crossValidationResults, normParams)
+        function results = buildResultsStruct(obj, cnnModel, metrics, trainInfo, ...
+            crossValidation, normParams)
             % 結果構造体の構築
-            
             results = struct(...
                 'model', cnnModel, ...
-                'performance', struct(...
-                    'overallAccuracy', testMetrics.accuracy, ...
-                    'crossValidation', struct(...
-                        'accuracy', crossValidationResults.meanAccuracy, ...
-                        'std', crossValidationResults.stdAccuracy ...
-                    ), ...
-                    'precision', [], ...
-                    'recall', [], ...
-                    'f1score', [], ...
-                    'auc', [], ...
-                    'confusionMatrix', testMetrics.confusionMat ...
-                ), ...
+                'performance', metrics, ...
+                'crossValidation', crossValidation, ...
                 'trainInfo', trainInfo, ...
                 'overfitting', obj.overfitMetrics, ...
                 'normParams', normParams ...
             );
-            
-            % クラスごとの性能メトリクスの追加（存在する場合）
-            if isfield(testMetrics, 'classwise') && ~isempty(testMetrics.classwise)
-                % 1クラス目の値をデフォルト値として使用
-                results.performance.precision = testMetrics.classwise(1).precision;
-                results.performance.recall = testMetrics.classwise(1).recall;
-                results.performance.f1score = testMetrics.classwise(1).f1score;
-            end
-            
-            % AUCの追加（存在する場合）
-            if isfield(testMetrics, 'auc')
-                results.performance.auc = testMetrics.auc;
-            else
-                results.performance.auc = [];
-            end
         end
     end
 end

@@ -670,12 +670,10 @@ classdef EEGAnalyzer < handle
                 if obj.params.classifier.cnn.enable && ~isempty(obj.cnn)
                     try
                         saveData.classifier.cnn = struct(...
-                            'model', obj.cnn.model);
+                            'model', obj.cnn.model, ...
+                            'performance', obj.cnn.performance);
                         
                         % フィールドの安全な追加
-                        if isfield(obj.cnn, 'performance')
-                            saveData.classifier.cnn.performance = obj.cnn.performance;
-                        end
                         if isfield(obj.cnn, 'trainInfo')
                             saveData.classifier.cnn.trainInfo = obj.cnn.trainInfo;
                         end
@@ -693,12 +691,11 @@ classdef EEGAnalyzer < handle
                 % LSTM結果
                 if obj.params.classifier.lstm.enable && ~isempty(obj.lstm)
                     try
-                        saveData.classifier.lstm = struct('model', obj.lstm.model);
+                        saveData.classifier.lstm = struct(...
+                            'model', obj.lstm.model, ...
+                            'performance', obj.lstm.performance);
                         
                         % フィールドの安全な追加
-                        if isfield(obj.lstm, 'performance')
-                            saveData.classifier.lstm.performance = obj.lstm.performance;
-                        end
                         if isfield(obj.lstm, 'trainInfo')
                             saveData.classifier.lstm.trainInfo = obj.lstm.trainInfo;
                         end
@@ -716,16 +713,11 @@ classdef EEGAnalyzer < handle
                 % Hybrid結果
                 if obj.params.classifier.hybrid.enable && ~isempty(obj.hybrid)
                     try
-                        % 基本構造を初期化
-                        saveData.classifier.hybrid = struct();
+                        saveData.classifier.hybrid = struct(...
+                            'model', obj.hybrid.model, ...
+                            'performance', obj.hybrid.performance);
                         
                         % フィールドの安全な追加
-                        if isfield(obj.hybrid, 'model')
-                            saveData.classifier.hybrid.model = obj.hybrid.model;
-                        end
-                        if isfield(obj.hybrid, 'performance')
-                            saveData.classifier.hybrid.performance = obj.hybrid.performance;
-                        end
                         if isfield(obj.hybrid, 'trainInfo')
                             saveData.classifier.hybrid.trainInfo = obj.hybrid.trainInfo;
                         end
@@ -734,10 +726,6 @@ classdef EEGAnalyzer < handle
                         end
                         if isfield(obj.hybrid, 'normParams')
                             saveData.classifier.hybrid.normParams = obj.hybrid.normParams;
-                        end
-                        % エラーがあれば保存
-                        if isfield(obj.hybrid, 'error')
-                            saveData.classifier.hybrid.error = obj.hybrid.error;
                         end
                     catch ME
                         error('Hybrid結果の保存中にエラーが発生: %s', ME.message);
