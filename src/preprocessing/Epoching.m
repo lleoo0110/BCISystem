@@ -150,71 +150,6 @@ classdef Epoching < handle
                 samplesPerEpoch = round(fs * epochDuration);
                 stepSize = round(epochDuration * (1 - overlapRatio) * fs);
 
-<<<<<<< HEAD
-                % 視覚タスクが有効かどうかをparamsから確認
-                if isfield(obj.params.signal.epoch, 'visual') && obj.params.signal.epoch.visual.enable
-                    % 【視覚タスクの場合】
-                    % 視覚タスク用パラメータの取得
-                    observationDuration = obj.params.signal.epoch.visual.observationDuration; % 観察期間 (秒)
-                    signalDuration = obj.params.signal.epoch.visual.signalDuration; % 合図期間 (秒)
-                    imageryDuration = obj.params.signal.epoch.visual.imageryDuration; % イメージ期間 (秒)
-
-                    % 各期間における分析窓のシフト（ステップ）サイズを計算
-                    stepSize = round(analysisWindow * (1 - overlapRatio) * fs);
-                    % 各期間で抽出可能なエポック数（オーバーラップを考慮）を計算
-                    nStepsObs = floor((observationDuration - analysisWindow) / (analysisWindow*(1-overlapRatio))) + 1; % 観察期間のステップ数
-                    nStepsImg = floor((imageryDuration - analysisWindow) / (analysisWindow*(1-overlapRatio))) + 1; % イメージ期間のステップ数
-
-                    % taskTypes により抽出対象を決定（例: {'observation','imagery'} or 片方のみ）
-                    selectedTaskTypes = obj.params.signal.epoch.visual.taskTypes;
-                    if ~any(strcmpi(selectedTaskTypes, 'observation'))
-                        nStepsObs = 0; % 観察期間を抽出しない場合はステップ数を0に
-                    end
-                    if ~any(strcmpi(selectedTaskTypes, 'imagery'))
-                        nStepsImg = 0; % イメージ期間を抽出しない場合はステップ数を0に
-                    end
-                    nTrials = length(labels); % トライアル数を取得
-
-                    % 保存形式 (cell or array) に応じてエポック抽出関数を呼び分け
-                    if strcmpi(obj.params.signal.epoch.storageType, 'cell')
-                        obj.epochingCellVisual(nTrials, fs, samplesPerEpoch, stepSize, nStepsObs, nStepsImg, labels, data); % Cell形式で視覚タスクのエポック抽出
-                    else
-                        obj.epochingArrayVisual(nTrials, fs, samplesPerEpoch, stepSize, nStepsObs, nStepsImg, size(data,1), labels, data); % Array形式で視覚タスクのエポック抽出
-                    end
-
-                    % 処理情報の更新（視覚タスク用）
-                    totalEpochs = nTrials * (nStepsObs + nStepsImg); % 総エポック数を計算
-                    obj.processingInfo.epoching.method = 'time-visual'; % エポック分割方法を 'time-visual' に設定
-                    obj.processingInfo.epoching.analysisWindow = analysisWindow; % 分析窓長を記録
-                    obj.processingInfo.epoching.observationDuration = observationDuration; % 観察期間を記録
-                    obj.processingInfo.epoching.signalDuration = signalDuration; % 合図期間を記録
-                    obj.processingInfo.epoching.imageryDuration = imageryDuration; % イメージ期間を記録
-                    obj.processingInfo.epoching.overlapRatio = overlapRatio; % オーバーラップ率を記録
-                    obj.processingInfo.epoching.samplesPerEpoch = samplesPerEpoch; % 1エポックあたりサンプル数を記録
-                    obj.processingInfo.epoching.stepSize = stepSize; % ステップサイズを記録
-                    obj.processingInfo.epoching.nSteps = [nStepsObs, nStepsImg]; % ステップ数 (観察期間, イメージ期間) を記録
-                    obj.processingInfo.epoching.totalEpochs = totalEpochs; % 総エポック数を記録
-
-                else
-                    % 【非視覚タスクの場合】（通常の時間窓エポック抽出）    
-                    startTime = obj.params.signal.window.stimulus(1);
-                    endTime = obj.params.signal.window.stimulus(2);
-                    stimulusWindow = endTime - startTime; % 刺激提示窓長 (秒) を取得
-                    % stimulusWindow = obj.params.signal.window.stimulus;
-                    nSteps = floor((stimulusWindow - analysisWindow) / (analysisWindow * (1 - overlapRatio))) + 1; % ステップ数を計算
-                    nTrials = length(labels); % トライアル数を取得
-                    stepSize = round(analysisWindow * (1 - overlapRatio) * fs); % ステップサイズを計算
-
-                    startOffset = round(startTime * fs);
-                    if strcmpi(obj.params.signal.epoch.storageType, 'cell')
-                        obj.epochingCell(nTrials, nSteps, fs, samplesPerEpoch, stepSize, labels, data,startOffset); % Cell形式でエポック抽出
-                    else
-                        obj.epochingArray(nTrials, nSteps, size(data,1), fs, samplesPerEpoch, stepSize, labels, data,startOffset); % Array形式でエポック抽出
-                    end
-
-                    obj.updateEpochingInfo(analysisWindow, stimulusWindow, overlapRatio, ...
-                        samplesPerEpoch, stepSize, nSteps); % 処理情報を更新 (非視覚タスク用)
-=======
                 % パラメータの検証
                 if ~isnumeric(epochDuration) || epochDuration <= 0
                     error('Invalid epoch duration: must be a positive number');
@@ -222,7 +157,6 @@ classdef Epoching < handle
                 
                 if ~isnumeric(overlapRatio) || overlapRatio < 0 || overlapRatio >= 1
                     error('Invalid overlap ratio: must be between 0 and 1');
->>>>>>> 77be08a1646b3e6dca6b51b459a238fdd6ad0b8a
                 end
 
                 % 時間範囲を取得し、標準形式に変換
@@ -271,9 +205,6 @@ classdef Epoching < handle
             
             % トライアル数
             nTrials = length(labels);
-            
-            % 最大エポック数を計算
-            maxEpochs = nTrials * sum(nSteps);
             
             % storageTypeに応じてエポック抽出方法を選択
             if strcmpi(obj.params.signal.epoch.storageType, 'cell')
@@ -603,14 +534,10 @@ classdef Epoching < handle
                 % 長さの違いを処理（切り詰めまたはゼロパディング）
                 if currentLength > samplesPerEpoch
                     obj.epochs(:, :, i) = data(:, startSample:startSample+samplesPerEpoch-1);
-                    warningMessage = sprintf('Pair %d: Epoch truncated from %d to %d samples.', pair, currentLength, samplesPerEpoch);
-                    warning(warningMessage);
                 else
                     obj.epochs(:, 1:currentLength, i) = data(:, startSample:endSample);
                     if currentLength < samplesPerEpoch
                         obj.epochs(:, currentLength+1:end, i) = 0;
-                        warningMessage = sprintf('Pair %d: Epoch padded from %d to %d samples.', pair, currentLength, samplesPerEpoch);
-                        warning(warningMessage);
                     end
                 end
                 
