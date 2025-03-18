@@ -3,7 +3,7 @@
 % params = getConfig('epocx', 'preset', 'character');
 % params = getConfig('epocx', 'preset', 'magic');
 
-% 全初期化：clc; clear all; close all; instrreset;
+% 全初期化：clc; clear all; close all;
 % コマンドクリア：clc
 % ワークスペースクリア：clear all
 % ウィンドウ初期化：close all;
@@ -16,7 +16,7 @@ setupPaths(currentDir);
 
 
 %%  指定のパラメータで実行
-params = getConfig('epocx', 'preset', 'masa_template');
+params = getConfig('epocflex', 'preset', 'magic');
 analyzer = EEGAnalyzer(params);     % アナライザーの初期化
 analyzer.analyze();                            % 解析の実行
 
