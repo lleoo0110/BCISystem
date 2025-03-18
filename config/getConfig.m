@@ -248,16 +248,61 @@ function validateConfig(params, deviceType)
     end
 
     % プリセット固有の設定が存在する場合の追加チェック
-    if isfield(params, 'signal')
-        % サンプリングレートの整合性
-        if params.device.sampleRate ~= params.signal.window.analysis * ...
-                params.device.sampleRate / params.signal.window.analysis
-            warning('サンプリングレートと解析窓の設定に不整合があります');
+    if isfield(params, 'signal') && isfield(params.signal, 'window')
+        % サンプリングレートと時間窓の検証
+        if isfield(params.signal.window, 'epochDuration')
+            % epochDurationの有効性をチェック - 条件を分けて評価
+            if ~isnumeric(params.signal.window.epochDuration)
+                warning('epochDurationが数値ではありません');
+            elseif params.signal.window.epochDuration <= 0
+                warning('epochDurationが正しくありません: %f', params.signal.window.epochDuration);
+            end
+        elseif isfield(params.signal.window, 'analysis')
+            % 旧フィールド名の場合はanalysisをチェック - 条件を分けて評価
+            if ~isnumeric(params.signal.window.analysis)
+                warning('analysisが数値ではありません');
+            elseif params.signal.window.analysis <= 0
+                warning('analysisが正しくありません: %f', params.signal.window.analysis);
+            end
+        else
+            warning('epochDurationまたはanalysisが設定されていません');
+        end
+        
+        % timeRangeの検証
+        if isfield(params.signal.window, 'timeRange')
+            % timeRangeのフォーマットをチェック
+            if iscell(params.signal.window.timeRange)
+                % 複数時間範囲の場合
+                for i = 1:length(params.signal.window.timeRange)
+                    range = params.signal.window.timeRange{i};
+                    if ~isnumeric(range)
+                        warning('timeRange[%d]が数値ではありません', i);
+                    elseif length(range) ~= 2
+                        warning('timeRange[%d]のサイズが正しくありません', i);
+                    elseif range(1) >= range(2)
+                        warning('timeRange[%d]の値が正しくありません: [%s]', i, mat2str(range));
+                    end
+                end
+            elseif isnumeric(params.signal.window.timeRange)
+                % 単一時間範囲の場合
+                if size(params.signal.window.timeRange, 2) ~= 2
+                    warning('timeRangeの形式が正しくありません: %s', mat2str(params.signal.window.timeRange));
+                elseif any(params.signal.window.timeRange(:,1) >= params.signal.window.timeRange(:,2))
+                    warning('timeRangeの値が正しくありません: %s', mat2str(params.signal.window.timeRange));
+                end
+            else
+                warning('timeRangeの形式が正しくありません');
+            end
+        else
+            warning('timeRangeが設定されていません');
         end
 
         % チャンネル数の整合性
-        if length(params.device.channels) ~= params.device.channelCount
-            warning('チャンネル数の設定に不整合があります');
+        if isfield(params.device, 'channels') && isfield(params.device, 'channelCount')
+            if length(params.device.channels) ~= params.device.channelCount
+                warning('チャンネル数の設定に不整合があります: 実際=%d, 設定=%d', ...
+                    length(params.device.channels), params.device.channelCount);
+            end
         end
     end
 end

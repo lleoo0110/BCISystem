@@ -44,7 +44,6 @@ classdef GUIControllerManager < handle
         isPaused = false
         startTime
         updateTimer
-        lastUpdateTime
     end
     
     methods (Access = public)
@@ -656,7 +655,6 @@ classdef GUIControllerManager < handle
                 'Period', obj.params.gui.display.visualization.refreshRate, ...
                 'TimerFcn', @(~,~) obj.updateDisplay());
             start(obj.updateTimer);
-            obj.lastUpdateTime = 0;
         end
         
         function updateDisplay(obj)

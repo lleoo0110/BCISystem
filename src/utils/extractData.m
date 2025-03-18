@@ -1,48 +1,90 @@
 function [extractedData, extractedLabels] = extractData(varargin)
-    %% extractData の使用例
-    % パスの設定に注意→パスを通していないと使用できない
-    %
-    % よく使う設定例:
-    % [data, labels] = extractData('Classes', [1 2 4], 'ClassMap', [4, 3], 'SaveExtracted', true);
-    %
-    % 1. 基本的な使用法（UIでファイル選択）
-    % [data, labels] = extractData();
-    %
-    % 2. 特定のクラスのみ抽出
-    % [data, labels] = extractData('Classes', [1 2], 'SaveExtracted', true);
-    %
-    % 3. 特定のサンプル範囲を抽出
-    % [data, labels] = extractData('Samples', 1:100, 'SaveExtracted', true);
-    %
-    % 4. クラス番号の変更（クラス4をクラス3に変更）
-    % [data, labels] = extractData('ClassMap', [4, 3]);
-    %
-    % 5. 複数クラスの同時変更（クラス4→3、クラス2→1）
-    % [data, labels] = extractData('ClassMap', [4, 3; 2, 1], 'SaveExtracted', true);
-    %
-    % 6. クラス抽出と番号変更の組み合わせ
-    % [data, labels] = extractData('Classes', [1 2 4], 'ClassMap', [4, 3], 'SaveExtracted', true);
-    %
-    % 7. クラス数を均衡にして抽出
-    % [data, labels] = extractData('SaveExtracted', true, 'BalanceClasses', true);
-    %
-    % 8. 特定のチャンネルのみ抽出
-    % [data, labels] = extractData('Channels', [1, 2, 6, 8, 27, 29], 'SaveExtracted', true);
-    
+%% extractData - EEGデータファイルからの情報抽出と処理ツール
+%
+% このツールはMAT形式のEEGデータファイルからデータを抽出・加工し、特定の条件に基づいた
+% データセットを作成します。複数のデータ操作機能を提供し、解析前のデータ準備を効率化します。
+%
+% 主な機能:
+%   - 特定クラスのみの抽出
+%   - 特定サンプル範囲の抽出
+%   - クラス番号の変更（リマッピング）
+%   - 特定チャンネルのみの抽出
+%   - クラス分布のバランス化
+%   - 複数ファイルの統合
+%   - 処理結果の保存
+%
+% 使用例:
+%   1. 基本的な使用法（UIでファイル選択）
+%      [data, labels] = extractData();
+%
+%   2. 特定のクラスのみ抽出
+%      [data, labels] = extractData('Classes', [1 2], 'SaveExtracted', true);
+%
+%   3. 特定のサンプル範囲を抽出
+%      [data, labels] = extractData('Samples', 1:100, 'SaveExtracted', true);
+%
+%   4. クラス番号の変更（クラス4をクラス3に変更）
+%      [data, labels] = extractData('ClassMap', [4, 3]);
+%
+%   5. 複数クラス番号の同時変更（クラス4→3、クラス2→1）
+%      [data, labels] = extractData('ClassMap', [4, 3; 2, 1], 'SaveExtracted', true);
+%
+%   6. クラス抽出と番号変更の組み合わせ
+%      [data, labels] = extractData('Classes', [1 2 4], 'ClassMap', [4, 3], 'SaveExtracted', true);
+%
+%   7. クラス数を均衡にして抽出
+%      [data, labels] = extractData('SaveExtracted', true, 'BalanceClasses', true);
+%
+%   8. 特定のチャンネルのみ抽出
+%      [data, labels] = extractData('Channels', [1, 2, 6, 8, 27, 29], 'SaveExtracted', true);
+%
+%   9. 複数ファイルを統合して処理
+%      [data, labels] = extractData('MergeFiles', true, 'SaveExtracted', true);
+%
+%   10. 複数ファイルを一括保存で処理
+%      [data, labels] = extractData('SaveExtracted', true, 'BatchSave', true);
+%
+% 入力パラメータ:
+%   'Filename'         - ファイル名指定（省略時はUI選択）
+%   'Classes'          - 抽出するクラスの配列 [1 2 3]
+%   'Samples'          - 抽出するサンプルインデックスの配列 [1:100]
+%   'Channels'         - 抽出するチャンネルインデックスの配列 [1 4 6]
+%   'ClassMap'         - クラス番号変換マップ [元の値, 新しい値] のN×2行列
+%   'BalanceClasses'   - クラス分布均衡化フラグ (true/false)
+%   'MergeFiles'       - 複数ファイル統合フラグ (true/false)
+%   'ValidateOnly'     - ファイル検証のみ実行 (true/false)
+%   'SaveExtracted'    - 抽出結果保存フラグ (true/false)
+%   'BatchSave'        - 一括保存フラグ (true/false)、複数ファイル選択時に有効
+%   'OutputPath'       - 出力先パス (指定時はダイアログ表示なし)
+%
+% 出力:
+%   extractedData      - 抽出されたデータ
+%   extractedLabels    - 抽出されたラベル
+%
+% 注意事項:
+%   - データファイルには最低限 'rawData'と'labels'フィールドが必要です
+%   - 'rawData'は [channels x timepoints] の形式であることを想定しています
+%   - 'labels'は少なくとも'value'と'sample'フィールドを持つ構造体の配列であることを想定しています
+%
+% Author: LLEOO
+% Version: 2.2
+
     % 入力パーサーの初期化
     p = inputParser;
     addParameter(p, 'Filename', '', @ischar);
     addParameter(p, 'Classes', [], @isnumeric);
     addParameter(p, 'Samples', [], @isnumeric);
-    addParameter(p, 'Channels', [], @isnumeric);  % <-- 追加：抽出するチャンネルのインデックス
+    addParameter(p, 'Channels', [], @isnumeric);
     addParameter(p, 'ValidateOnly', false, @islogical);
     addParameter(p, 'SaveExtracted', false, @islogical);
-    addParameter(p, 'SaveMode', '', @(x) isempty(x) || ismember(x, {'individual', 'batch'}));
+    addParameter(p, 'BatchSave', false, @islogical); % 新機能: 一括保存
     addParameter(p, 'OutputPath', '', @ischar);
     addParameter(p, 'ClassMap', [], @(x) isempty(x) || (isnumeric(x) && size(x,2)==2));
-    % BalanceClasses オプションを追加
     addParameter(p, 'BalanceClasses', false, @islogical);
+    addParameter(p, 'MergeFiles', false, @islogical); % 新機能: ファイル統合
     parse(p, varargin{:});
+    
+    options = p.Results;
 
     try
         % ファイル選択
@@ -58,85 +100,113 @@ function [extractedData, extractedLabels] = extractData(varargin)
             filenames = {filenames};
         end
 
-        fprintf('\n=== データ抽出開始 ===\n');
+        fprintf('\n=== データ処理開始 ===\n');
         fprintf('選択されたファイル数: %d\n\n', length(filenames));
-
-        % 保存モードの確認（SaveExtracted が true の場合）
-        saveMode = p.Results.SaveMode;
-        if isempty(saveMode) && p.Results.SaveExtracted
-            if length(filenames) == 1
-                % ファイルが1つの場合は、直接「保存先フォルダ選択」ウィンドウを表示
-                saveMode = 'batch';  % 一括保存モードとして扱い、保存先を指定させる
-                outputPath = uigetdir(filepath, '保存先フォルダを選択してください');
-                if isequal(outputPath, 0)
-                    error('保存先フォルダが選択されませんでした。');
-                end
-            else
-                % 複数ファイルの場合は通常の questdlg を使用
-                saveMode = questdlg('保存モードを選択してください:', ...
-                    '保存モードの選択', '一括保存', '個別保存', 'キャンセル', '個別保存');
-                if strcmp(saveMode, 'キャンセル')
-                    fprintf('処理がキャンセルされました。\n');
-                    return;
-                elseif strcmp(saveMode, '個別保存')
-                    saveMode = 'individual';
+        
+        % ファイル統合処理 (MergeFilesパラメータが設定されている場合のみ)
+        if options.MergeFiles && length(filenames) > 1
+            fprintf('ファイル統合モードが有効です。選択された%d個のファイルを統合します。\n', length(filenames));
+            [mergedData, mergedLabels] = mergeFiles(filepath, filenames);
+            
+            % 統合データの処理
+            [processedData, processedLabels] = processData(mergedData, mergedLabels, options);
+            
+            % 結果の保存
+            if options.SaveExtracted
+                % デフォルトのファイル名を生成
+                defaultFileName = generateDefaultFileName('merged_data', options);
+                
+                % 保存先を指定するダイアログを表示
+                [saveFileName, savePath] = uiputfile('*.mat', '統合データの保存先を選択', defaultFileName);
+                
+                if saveFileName ~= 0
+                    saveFilePath = fullfile(savePath, saveFileName);
+                    saveProcessedData(processedData, processedLabels, saveFilePath, options, 'MergedFiles', {filenames});
+                    fprintf('\n統合データを保存しました: %s\n', saveFilePath);
                 else
-                    saveMode = 'batch';
+                    fprintf('\n保存がキャンセルされました。\n');
                 end
             end
-        end
-
-        % 複数ファイルの場合でバッチ保存なら保存先を選択
-        outputPath = '';
-        if strcmp(saveMode, 'batch') && p.Results.SaveExtracted && length(filenames) > 1
-            outputPath = uigetdir(filepath, '保存先フォルダを選択してください');
-            if isequal(outputPath, 0)
-                error('保存先フォルダが選択されませんでした。');
-            end
-        end
-
-        % 結果格納用の配列
-        extractedData = cell(1, length(filenames));
-        extractedLabels = cell(1, length(filenames));
-
-        % 各ファイルの処理
-        for i = 1:length(filenames)
-            try
-                fullpath = fullfile(filepath, filenames{i});
-                fprintf('処理中 (%d/%d): %s\n', i, length(filenames), filenames{i});
-
-                % データの処理と抽出
-                [currentData, currentLabels] = processFile(fullpath, p.Results);
-
-                % BalanceClasses が指定されている場合、ラベルのみを均衡化（rawData はそのままコピー）
-                if p.Results.BalanceClasses && ~isempty(currentLabels)
-                    [currentData, currentLabels] = balanceClasses(currentData, currentLabels);
-                    fprintf('\n各クラスのラベル数を均衡化しました。（rawData は変更せずコピー）\n');
-                    displayExtractionResults(currentData, currentLabels);
+            
+            extractedData = processedData;
+            extractedLabels = processedLabels;
+            
+        else
+            % 個別ファイル処理モード
+            % 結果格納用の配列
+            extractedData = cell(1, length(filenames));
+            extractedLabels = cell(1, length(filenames));
+            
+            % 一括保存モードの設定
+            batchSavePath = '';
+            if options.SaveExtracted && options.BatchSave && length(filenames) > 1
+                % 一括保存用の保存先フォルダを選択
+                batchSavePath = uigetdir(filepath, '一括保存のための保存先フォルダを選択してください');
+                if isequal(batchSavePath, 0)
+                    fprintf('一括保存がキャンセルされました。個別保存モードに切り替えます。\n');
+                    options.BatchSave = false;
+                else
+                    fprintf('一括保存モード: 処理結果を %s に保存します。\n', batchSavePath);
                 end
+            end
 
-                % 結果の保存
-                if ~isempty(currentData)
-                    extractedData{i} = currentData;
-                    extractedLabels{i} = currentLabels;
+            % 各ファイルの処理
+            for i = 1:length(filenames)
+                try
+                    fullpath = fullfile(filepath, filenames{i});
+                    fprintf('処理中 (%d/%d): %s\n', i, length(filenames), filenames{i});
 
-                    % 保存処理
-                    if p.Results.SaveExtracted
-                        if strcmp(saveMode, 'individual')
-                            saveExtractedFile(currentData, currentLabels, fullpath, p.Results);
-                        elseif strcmp(saveMode, 'batch')
-                            batchSaveFile(currentData, currentLabels, fullpath, outputPath, p.Results);
+                    % データの読み込み
+                    data = load(fullpath);
+                    validateFields(data);
+                    
+                    % データの処理
+                    [currentData, currentLabels] = processData(data.rawData, data.labels, options);
+
+                    % 結果の保存
+                    if ~isempty(currentData)
+                        extractedData{i} = currentData;
+                        extractedLabels{i} = currentLabels;
+
+                        % 保存処理
+                        if options.SaveExtracted
+                            % ファイル名のベース部分を取得
+                            [~, baseName, ~] = fileparts(filenames{i});
+                            
+                            % 処理内容を反映したデフォルトファイル名を生成
+                            defaultFileName = generateDefaultFileName(baseName, options);
+                            
+                            if options.BatchSave && ~isempty(batchSavePath)
+                                % 一括保存モード: フォルダは選択済み、ファイル名は自動生成
+                                saveFilePath = fullfile(batchSavePath, defaultFileName);
+                                saveProcessedData(currentData, currentLabels, saveFilePath, options, 'SourceFile', fullpath);
+                                fprintf('\n処理済みデータを一括保存しました: %s\n', saveFilePath);
+                            else
+                                % 個別保存モード: 毎回ダイアログ表示
+                                [saveFileName, savePath] = uiputfile('*.mat', ...
+                                    sprintf('処理済みデータの保存先を選択 (%d/%d)', i, length(filenames)), ...
+                                    defaultFileName);
+                                
+                                if saveFileName ~= 0
+                                    saveFilePath = fullfile(savePath, saveFileName);
+                                    saveProcessedData(currentData, currentLabels, saveFilePath, options, 'SourceFile', fullpath);
+                                    fprintf('\n処理済みデータを保存しました: %s\n', saveFilePath);
+                                else
+                                    fprintf('\n保存がキャンセルされました。\n');
+                                end
+                            end
                         end
                     end
-                end
 
-            catch ME
-                fprintf('ファイル %s の処理中にエラー: %s\n', filenames{i}, ME.message);
-                continue;
+                catch ME
+                    fprintf('ファイル %s の処理中にエラー: %s\n', filenames{i}, ME.message);
+                    fprintf('スタックトレース:\n%s\n', getReport(ME, 'extended'));
+                    continue;
+                end
             end
         end
 
-        fprintf('\n=== データ抽出完了 ===\n');
+        fprintf('\n=== データ処理完了 ===\n');
 
     catch ME
         fprintf('エラーが発生しました: %s\n', ME.message);
@@ -146,88 +216,192 @@ function [extractedData, extractedLabels] = extractData(varargin)
     end
 end
 
-function saveExtractedFile(data, labels, sourcePath, params)
-    [folder, name, ~] = fileparts(sourcePath);
+%% ファイル統合関数
+function [mergedData, mergedLabels] = mergeFiles(filepath, filenames)
+    fprintf('\n=== ファイル統合処理開始 ===\n');
     
-    % サフィックスの生成
+    % 統合データの初期化
+    mergedData = [];
+    mergedLabels = struct('value', {}, 'time', {}, 'sample', {});
+    
+    % チャンネル数の一貫性チェック用
+    channelCount = [];
+    totalSamples = 0;
+    
+    % 各ファイルの読み込みと統合
+    for i = 1:length(filenames)
+        fprintf('ファイル %d/%d を統合中: %s\n', i, length(filenames), filenames{i});
+        
+        try
+            % 現在のファイルを読み込み
+            fullpath = fullfile(filepath, filenames{i});
+            currentData = load(fullpath);
+            validateFields(currentData);
+            
+            % チャンネル数の確認
+            if isempty(channelCount)
+                channelCount = size(currentData.rawData, 1);
+            elseif size(currentData.rawData, 1) ~= channelCount
+                error('チャンネル数が一致しません: ファイル %s は %d チャンネルですが、先行ファイルは %d チャンネルです', ...
+                    filenames{i}, size(currentData.rawData, 1), channelCount);
+            end
+            
+            % rawDataの統合
+            mergedData = [mergedData, currentData.rawData];
+            
+            % ラベルの統合
+            if ~isempty(currentData.labels)
+                for j = 1:length(currentData.labels)
+                    newLabel = currentData.labels(j);
+                    if isfield(newLabel, 'sample') && ~isempty(newLabel.sample)
+                        newLabel.sample = newLabel.sample + totalSamples;
+                    end
+                    mergedLabels(end+1) = newLabel;
+                end
+            end
+            
+            % 総サンプル数の更新
+            totalSamples = totalSamples + size(currentData.rawData, 2);
+            fprintf('  - ファイル統合済み: 累計サンプル数 %d\n', totalSamples);
+            
+        catch ME
+            fprintf('  - ファイル %s の統合中にエラー: %s\n', filenames{i}, ME.message);
+            fprintf('    スタックトレース:\n%s\n', getReport(ME, 'extended'));
+            continue;
+        end
+    end
+    
+    % 統合結果の表示
+    fprintf('\nファイル統合結果:\n');
+    fprintf('  - 総ファイル数: %d\n', length(filenames));
+    fprintf('  - チャンネル数: %d\n', channelCount);
+    fprintf('  - 総サンプル数: %d\n', size(mergedData, 2));
+    fprintf('  - 総ラベル数: %d\n', length(mergedLabels));
+    
+    fprintf('=== ファイル統合処理完了 ===\n\n');
+end
+
+%% データ前処理関数
+function [processedData, processedLabels] = processData(data, labels, options)
+    % データの基本情報を表示
+    displayFileInfo(data, labels);
+
+    % 検証モードの場合はここで終了
+    if options.ValidateOnly
+        processedData = [];
+        processedLabels = [];
+        return;
+    end
+    
+    % 処理初期値の設定
+    processedData = data;
+    processedLabels = labels;
+
+    % クラスによる抽出
+    if ~isempty(options.Classes)
+        [processedData, processedLabels] = extractByClass(processedData, processedLabels, options.Classes);
+    end
+
+    % サンプルによる抽出
+    if ~isempty(options.Samples) && ~isempty(processedData)
+        [processedData, processedLabels] = extractBySamples(processedData, processedLabels, options.Samples);
+    end
+
+    % クラス番号の変換
+    if ~isempty(options.ClassMap)
+        processedLabels = remapClasses(processedLabels, options.ClassMap);
+        fprintf('\nクラス番号の変換を実行しました\n');
+        displayClassMapping(options.ClassMap);
+    end
+    
+    % チャンネルの抽出
+    if ~isempty(options.Channels)
+        if max(options.Channels) > size(processedData, 1) || min(options.Channels) < 1
+            error('指定されたチャンネルインデックスがデータサイズを超えています。');
+        end
+        processedData = processedData(options.Channels, :);
+        fprintf('\nチャンネルの抽出を実行しました: チャンネル [%s]\n', num2str(options.Channels));
+    end
+
+    % クラス分布の均衡化
+    if options.BalanceClasses && ~isempty(processedLabels)
+        [processedData, processedLabels] = balanceClasses(processedData, processedLabels);
+        fprintf('\n各クラスのラベル数を均衡化しました。（rawData は変更せずコピー）\n');
+    end
+
+    % 抽出結果の表示
+    displayExtractionResults(processedData, processedLabels);
+end
+
+%% デフォルトファイル名生成関数
+function defaultFileName = generateDefaultFileName(baseName, options)
+    % 処理内容を反映したサフィックスを生成
     suffix = '';
-    if ~isempty(params.Classes)
-        suffix = [suffix sprintf('_classes%s', strjoin(string(params.Classes), '-'))];
+    
+    if ~isempty(options.Classes)
+        suffix = [suffix sprintf('_classes%s', strjoin(string(options.Classes), '-'))];
     end
-    if ~isempty(params.Samples)
-        suffix = [suffix sprintf('_samples%d-%d', min(params.Samples), max(params.Samples))];
+    
+    if ~isempty(options.Samples)
+        suffix = [suffix sprintf('_samples%d-%d', min(options.Samples), max(options.Samples))];
     end
-    if ~isempty(params.Channels)
-        suffix = [suffix sprintf('_channels%s', strjoin(string(params.Channels), '-'))];
+    
+    if ~isempty(options.Channels)
+        suffix = [suffix sprintf('_channels%s', strjoin(string(options.Channels), '-'))];
     end
-    if ~isempty(params.ClassMap)
+    
+    if ~isempty(options.ClassMap)
         suffix = [suffix '_remapped'];
     end
+    
+    if options.BalanceClasses
+        suffix = [suffix '_balanced'];
+    end
+    
+    if options.MergeFiles && strcmp(baseName, 'merged_data')
+        suffix = [suffix '_merged'];
+    end
+    
     if isempty(suffix)
         suffix = '_extracted';
     end
+    
+    % タイムスタンプを追加
+    timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+    
+    % 最終的なファイル名を構築
+    defaultFileName = sprintf('%s%s_%s.mat', baseName, suffix, timestamp);
+end
 
-    saveFilename = fullfile(folder, [name suffix '.mat']);
-
+%% 処理済みデータ保存関数
+function saveProcessedData(data, labels, saveFilePath, options, varargin)
+    % 追加情報の処理
+    extraInfo = struct();
+    for i = 1:2:length(varargin)
+        extraInfo.(varargin{i}) = varargin{i+1};
+    end
+    
     % 保存データの構築
     saveData = struct(...
         'rawData', data, ...
         'labels', labels, ...
         'extractionInfo', struct(...
-            'sourceFile', sourcePath, ...
-            'extractedClasses', params.Classes, ...
-            'extractedSamples', params.Samples, ...
-            'extractedChannels', params.Channels, ...
-            'classMap', params.ClassMap, ...
-            'timestamp', datetime('now') ...
+            'extractedClasses', options.Classes, ...
+            'extractedSamples', options.Samples, ...
+            'extractedChannels', options.Channels, ...
+            'classMap', options.ClassMap, ...
+            'balanceClasses', options.BalanceClasses, ...
+            'mergeFiles', options.MergeFiles, ...
+            'timestamp', datetime('now'), ...
+            'extraInfo', extraInfo ...
         ) ...
     );
 
-    save(saveFilename, '-struct', 'saveData');
-    fprintf('\n抽出データを個別保存しました: %s\n', saveFilename);
+    % ファイルに保存
+    save(saveFilePath, '-struct', 'saveData');
 end
 
-function batchSaveFile(data, labels, sourcePath, outputPath, params)
-    [~, name, ~] = fileparts(sourcePath);
-    
-    % サフィックスの生成
-    suffix = '';
-    if ~isempty(params.Classes)
-        suffix = [suffix sprintf('_classes%s', strjoin(string(params.Classes), '-'))];
-    end
-    if ~isempty(params.Samples)
-        suffix = [suffix sprintf('_samples%d-%d', min(params.Samples), max(params.Samples))];
-    end
-    if ~isempty(params.Channels)
-        suffix = [suffix sprintf('_channels%s', strjoin(string(params.Channels), '-'))];
-    end
-    if ~isempty(params.ClassMap)
-        suffix = [suffix '_remapped'];
-    end
-    if isempty(suffix)
-        suffix = '_extracted';
-    end
-
-    saveFilename = fullfile(outputPath, [name suffix '.mat']);
-
-    % 保存データの構築
-    saveData = struct(...
-        'rawData', data, ...
-        'labels', labels, ...
-        'extractionInfo', struct(...
-            'sourceFile', sourcePath, ...
-            'extractedClasses', params.Classes, ...
-            'extractedSamples', params.Samples, ...
-            'extractedChannels', params.Channels, ...
-            'classMap', params.ClassMap, ...
-            'timestamp', datetime('now') ...
-        ) ...
-    );
-
-    save(saveFilename, '-struct', 'saveData');
-    fprintf('\n抽出データを一括保存しました: %s\n', saveFilename);
-end
-
+%% フィールド検証関数
 function validateFields(data)
     required_fields = {'rawData', 'labels'};
     missing_fields = required_fields(~isfield(data, required_fields));
@@ -237,87 +411,7 @@ function validateFields(data)
     end
 end
 
-function [processedData, processedLabels] = processFile(fullpath, params)
-    % データの読み込み
-    data = load(fullpath);
-    validateFields(data);
-
-    % rawData はそのままコピー
-    processedData = data.rawData;
-    processedLabels = data.labels;
-
-    % データの基本情報を表示
-    displayFileInfo(fullpath, processedData, processedLabels);
-
-    % 検証モードの場合はここで終了
-    if params.ValidateOnly
-        processedData = [];
-        processedLabels = [];
-        return;
-    end
-
-    % クラスによる抽出が指定されている場合のみ実行
-    if ~isempty(params.Classes)
-        [processedData, processedLabels] = extractByClass(processedData, processedLabels, params.Classes);
-    end
-
-    % サンプルによる抽出が指定されている場合のみ実行
-    if ~isempty(params.Samples) && ~isempty(processedData)
-        [processedData, processedLabels] = extractBySamples(processedData, processedLabels, params.Samples);
-    end
-
-    % クラス番号の変換が指定されている場合のみ実行
-    if ~isempty(params.ClassMap)
-        processedLabels = remapClasses(processedLabels, params.ClassMap);
-        fprintf('\nクラス番号の変換を実行しました\n');
-        displayClassMapping(params.ClassMap);
-    end
-    
-    % 追加: 指定されたチャンネルのみ抽出（1試行のデータは Ch x timepoints）
-    if ~isempty(params.Channels)
-        if max(params.Channels) > size(processedData, 1) || min(params.Channels) < 1
-            error('指定されたチャンネルインデックスがデータサイズを超えています。');
-        end
-        processedData = processedData(params.Channels, :);
-        fprintf('\nチャンネルの抽出を実行しました: チャンネル [%s]\n', num2str(params.Channels));
-    end
-
-    % 抽出結果の表示
-    displayExtractionResults(processedData, processedLabels);
-end
-
-function [balancedData, balancedLabels] = balanceClasses(data, labels)
-    % balanceClasses: ラベルのみを各クラスの最小数に合わせてダウンサンプリングし、
-    % rawData はそのままコピーする
-    balancedData = data; % rawData は変更せずコピー
-    classValues = [labels.value];
-    uniqueClasses = unique(classValues);
-    % 各クラスのインデックスを取得
-    balancedLabels = struct([]); % 空の構造体として初期化
-    
-    for k = 1:length(uniqueClasses)
-        indices = find(classValues == uniqueClasses(k));
-        % 各クラス内のサンプル数
-        counts(k) = length(indices); %#ok<AGROW>
-    end
-    
-    minCount = min(counts);
-    allSelected = [];
-    
-    % 各クラスからランダムに minCount 個ずつ選択
-    for k = 1:length(uniqueClasses)
-        indices = find(classValues == uniqueClasses(k));
-        perm = randperm(length(indices));
-        selected = indices(perm(1:minCount));
-        allSelected = [allSelected; selected]; % インデックスを縦方向に保存
-    end
-    
-    % 選択されたインデックスを使用して縦方向に構造体を構築
-    balancedLabels = labels(allSelected);
-    % reshape を使用して確実に N*1 構造体にする
-    balancedLabels = reshape(balancedLabels, [], 1);
-end
-
+%% クラスによるデータ抽出関数
 function [extractedData, extractedLabels] = extractByClass(data, labels, targetClasses)
     if isempty(targetClasses)
         extractedData = data;
@@ -342,6 +436,7 @@ function [extractedData, extractedLabels] = extractByClass(data, labels, targetC
     end
 end
 
+%% サンプルによるデータ抽出関数
 function [extractedData, extractedLabels] = extractBySamples(data, labels, targetSamples)
     validSamples = targetSamples(targetSamples <= length(labels));
     
@@ -356,6 +451,7 @@ function [extractedData, extractedLabels] = extractBySamples(data, labels, targe
     end
 end
 
+%% クラスのリマッピング関数
 function labels = remapClasses(labels, classMap)
     numChanges = zeros(size(classMap, 1), 1);
     
@@ -376,6 +472,43 @@ function labels = remapClasses(labels, classMap)
     end
 end
 
+%% クラス分布均衡化関数
+function [balancedData, balancedLabels] = balanceClasses(data, labels)
+    % rawData はそのままコピー
+    balancedData = data;
+    classValues = [labels.value];
+    uniqueClasses = unique(classValues);
+    
+    % 各クラスのサンプル数を計算
+    counts = zeros(1, length(uniqueClasses));
+    for k = 1:length(uniqueClasses)
+        indices = find(classValues == uniqueClasses(k));
+        counts(k) = length(indices);
+    end
+    
+    % 最小クラスのサンプル数を取得
+    minCount = min(counts);
+    
+    % 各クラスからランダムに minCount 個サンプルを選択
+    allSelected = [];
+    for k = 1:length(uniqueClasses)
+        indices = find(classValues == uniqueClasses(k));
+        perm = randperm(length(indices));
+        selected = indices(perm(1:minCount));
+        allSelected = [allSelected; selected]; % インデックスを縦方向に保存
+    end
+    
+    % 選択されたインデックスを使用して縦方向に構造体を構築
+    balancedLabels = labels(allSelected);
+    % reshape を使用して確実に N*1 構造体にする
+    balancedLabels = reshape(balancedLabels, [], 1);
+    
+    fprintf('\nクラス均衡化結果:\n');
+    fprintf('  - 各クラスのサンプル数: %d\n', minCount);
+    fprintf('  - 均衡化後の総サンプル数: %d\n', length(balancedLabels));
+end
+
+%% クラスマッピング表示関数
 function displayClassMapping(classMap)
     fprintf('クラス番号の変換マップ:\n');
     for i = 1:size(classMap, 1)
@@ -383,8 +516,9 @@ function displayClassMapping(classMap)
     end
 end
 
-function displayFileInfo(fullpath, data, labels)
-    fprintf('\nデータファイル: %s\n', fullpath);
+%% ファイル情報表示関数
+function displayFileInfo(data, labels)
+    fprintf('\nデータ基本情報:\n');
     fprintf('データサイズ: [%d, %d]\n', size(data));
     fprintf('ラベル数: %d\n', length(labels));
     
@@ -392,21 +526,26 @@ function displayFileInfo(fullpath, data, labels)
     fprintf('\n元のクラス分布:\n');
     for i = 1:length(uniqueClasses)
         classCount = sum([labels.value] == uniqueClasses(i));
-        fprintf('クラス %d: %d サンプル\n', uniqueClasses(i), classCount);
+        fprintf('クラス %d: %d サンプル (%.1f%%)\n', uniqueClasses(i), classCount, ...
+            (classCount/length(labels))*100);
     end
 end
 
+%% 抽出結果表示関数
 function displayExtractionResults(data, labels)
     if ~isempty(data)
         fprintf('\n抽出結果:\n');
         fprintf('抽出されたデータサイズ: [%d, %d]\n', size(data));
         fprintf('抽出されたラベル数: %d\n', length(labels));
 
-        uniqueClasses = unique([labels.value]);
-        fprintf('\n抽出後のクラス分布:\n');
-        for i = 1:length(uniqueClasses)
-            classCount = sum([labels.value] == uniqueClasses(i));
-            fprintf('クラス %d: %d サンプル\n', uniqueClasses(i), classCount);
+        if ~isempty(labels)
+            uniqueClasses = unique([labels.value]);
+            fprintf('\n抽出後のクラス分布:\n');
+            for i = 1:length(uniqueClasses)
+                classCount = sum([labels.value] == uniqueClasses(i));
+                fprintf('クラス %d: %d サンプル (%.1f%%)\n', uniqueClasses(i), classCount, ...
+                    (classCount/length(labels))*100);
+            end
         end
     end
 end

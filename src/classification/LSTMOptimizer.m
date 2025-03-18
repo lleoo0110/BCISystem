@@ -17,7 +17,7 @@ classdef LSTMOptimizer < handle
             obj.bestPerformance = -inf;
             obj.optimizationHistory = struct('params', {}, 'performance', {}, 'model', {});
             obj.useGPU = params.classifier.lstm.gpu;
-            obj.maxTrials = 15;  % デフォルトの試行回数
+            obj.maxTrials = params.classifier.lstm.optimization.maxTrials;
         end
         
         function results = optimize(obj, data, labels)

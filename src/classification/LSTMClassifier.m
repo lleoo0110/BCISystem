@@ -1,277 +1,323 @@
 classdef LSTMClassifier < handle
+    %% LSTMClassifier - EEGデータ用長短期記憶(LSTM)ニューラルネットワーク分類器
+    %
+    % このクラスはEEGデータに対してLSTMニューラルネットワークベースの
+    % 分類を行います。脳波特有の時系列データ構造に適したアーキテクチャを使用し、
+    % データ前処理、モデル学習、評価、予測の機能を提供します。
+    %
+    % 主な機能:
+    %   - EEGデータの前処理と次元変換
+    %   - データ拡張と正規化
+    %   - EEG特化型LSTMアーキテクチャの構築
+    %   - モデルのトレーニングと評価
+    %   - 過学習の検出と詳細分析
+    %   - 交差検証
+    %   - オンライン予測
+    %
+    % 使用例:
+    %   params = getConfig('epocx');
+    %   lstm = LSTMClassifier(params);
+    %   results = lstm.trainLSTM(processedData, processedLabel);
+    %   [label, score] = lstm.predictOnline(newData, results.model);
+    
     properties (Access = private)
-        params              % パラメータ設定（構成情報）
-        net                 % LSTMネットワーク
-        isEnabled           % 有効/無効フラグ
-        isInitialized       % 初期化フラグ
-        useGPU              % GPU使用の有無
-
+        params              % システム設定パラメータ
+        net                 % 学習済みLSTMネットワーク
+        isEnabled           % LSTM有効/無効フラグ
+        isInitialized       % 初期化完了フラグ
+        useGPU              % GPU使用フラグ
+        
         % 学習進捗の追跡用
-        trainingHistory     % 学習履歴
-        validationHistory   % 検証履歴
+        trainingHistory     % 学習履歴データ
+        validationHistory   % 検証履歴データ
         bestValAccuracy     % 最良の検証精度
         patienceCounter     % Early Stopping用カウンター
         currentEpoch        % 現在のエポック
-
+        
         % 過学習監視用
         overfitMetrics      % 過学習メトリクス
-
-        % コンポーネント
-        dataAugmenter
-        normalizer
+        
+        % 前処理コンポーネント
+        dataAugmenter       % データ拡張コンポーネント
+        normalizer          % 正規化コンポーネント
+        
+        % パフォーマンス監視
+        gpuMemory           % GPU使用メモリ監視
     end
-
+    
     properties (Access = public)
-        performance         % 性能評価指標
+        performance         % 評価メトリクス (精度・確率など)
     end
-
+    
     methods (Access = public)
-        %% コンストラクタ
+        %% コンストラクタ - 初期化処理
         function obj = LSTMClassifier(params)
+            % LSTMClassifierのインスタンスを初期化
+            %
+            % 入力:
+            %   params - 設定パラメータ（getConfig関数から取得）
+            
+            % 基本パラメータの設定
             obj.params = params;
             obj.isEnabled = params.classifier.lstm.enable;
             obj.isInitialized = false;
-            obj.trainingHistory = struct('loss', [], 'accuracy', []);
-            obj.validationHistory = struct('loss', [], 'accuracy', []);
-            obj.overfitMetrics = struct();
             obj.useGPU = params.classifier.lstm.gpu;
+            
+            % プロパティの初期化
+            obj.initializeProperties();
+            
+            % コンポーネントの初期化
             obj.dataAugmenter = DataAugmenter(params);
             obj.normalizer = EEGNormalizer(params);
+            
+            % GPU利用可能性の確認
+            if obj.useGPU
+                try
+                    gpuInfo = gpuDevice();
+                    fprintf('GPUが検出されました: %s (メモリ: %.2f GB)\n', ...
+                        gpuInfo.Name, gpuInfo.TotalMemory/1e9);
+                catch
+                    warning('GPU使用が指定されていますが、GPUが利用できません。CPUで実行します。');
+                    obj.useGPU = false;
+                end
+            end
         end
-
-        %% LSTMの学習開始
+        
+        %% LSTM学習メソッド - モデルの学習と評価を実行
         function results = trainLSTM(obj, processedData, processedLabel)
+            % EEGデータを使用してLSTMモデルを学習
+            %
+            % 入力:
+            %   processedData - 前処理済みEEGデータ [チャンネル x サンプル x エポック]
+            %   processedLabel - クラスラベル [エポック x 1]
+            %
+            % 出力:
+            %   results - 学習結果を含む構造体（モデル、性能評価、正規化パラメータなど）
+            
+            % LSTM有効性のチェック
             if ~obj.isEnabled
-                error('LSTM is disabled in configuration');
+                error('LSTM分類器は設定で無効化されています');
             end
 
-            try
-                fprintf('\n=== Starting LSTM Training ===\n');
-
-                % データ分割
+            try                
+                fprintf('\n=== LSTM学習処理を開始 ===\n');
+                
+                % データの次元を確認し、必要に応じて調整
+                [processedData, processInfo] = obj.validateAndPrepareData(processedData);
+                fprintf('データ検証: %s\n', processInfo);
+                
+                % データを学習・検証・テストセットに分割
                 [trainData, trainLabels, valData, valLabels, testData, testLabels] = ...
                     obj.splitDataset(processedData, processedLabel);
 
-                % 学習データのみ拡張
-                if obj.params.signal.preprocessing.augmentation.enable
-                    [trainData, trainLabels, ~] = obj.dataAugmenter.augmentData(trainData, trainLabels);
-                    fprintf('訓練データを拡張しました:\n');
-                    fprintf('  訓練データ: %d サンプル\n', length(trainData));
-                end
-
-                % 正規化
-                if obj.params.signal.preprocessing.normalize.enable
-                    [trainData, normParams] = obj.normalizer.normalize(trainData);
-                end
-
-                % 検証データと評価データにも同じ正規化パラメータで正規化
+                % 学習データの拡張処理
+                [trainData, trainLabels, normParams] = obj.preprocessTrainingData(trainData, trainLabels);
+                
+                % 検証・テストデータも同じ正規化パラメータで処理
                 valData = obj.normalizer.normalizeOnline(valData, normParams);
                 testData = obj.normalizer.normalizeOnline(testData, normParams);
-
-                % データ前処理
+                
+                % LSTM用のデータ形式への変換
                 prepTrainData = obj.prepareDataForLSTM(trainData);
-                prepValData   = obj.prepareDataForLSTM(valData);
-                prepTestData  = obj.prepareDataForLSTM(testData);
-
+                prepValData = obj.prepareDataForLSTM(valData);
+                prepTestData = obj.prepareDataForLSTM(testData);
+                
                 % モデルの学習
                 [lstmModel, trainInfo] = obj.trainLSTMModel(prepTrainData, trainLabels, prepValData, valLabels);
-
-                % テストデータでの評価
+                
+                % テストデータでの最終評価
                 testMetrics = obj.evaluateModel(lstmModel, prepTestData, testLabels);
-
-                % 過学習の検証
+                
+                % 過学習の分析
                 [isOverfit, obj.overfitMetrics] = obj.validateOverfitting(trainInfo, testMetrics);
+                
                 if isOverfit
-                    warning('Overfitting detected: %s severity', obj.overfitMetrics.severity);
+                    fprintf('\n警告: モデルに過学習の兆候が検出されました (%s)\n', obj.overfitMetrics.severity);
                 end
 
                 % 性能指標の更新
                 obj.updatePerformanceMetrics(testMetrics);
-
-                % 交差検証の実施
-                crossValidationResults = struct('meanAccuracy', [], 'stdAccuracy', []);
-                if obj.params.classifier.lstm.training.validation.enable
-                    crossValidationResults = obj.performCrossValidation(processedData, processedLabel);
-                end
-
-                % aucフィールドが存在しなければ空配列を設定
-                aucValue = [];
-                if isfield(testMetrics, 'auc')
-                    aucValue = testMetrics.auc;
-                end
-
+                
+                % 交差検証の実行
+                crossValidationResults = obj.performCrossValidationIfEnabled(processedData, processedLabel);
+                
                 % 結果構造体の構築
-                results = struct(...
-                    'model', lstmModel, ...
-                    'performance', struct(...
-                        'overallAccuracy', testMetrics.accuracy, ...
-                        'crossValidation', struct(...
-                            'accuracy', crossValidationResults.meanAccuracy, ...
-                            'std', crossValidationResults.stdAccuracy), ...
-                        'precision', testMetrics.classwise(1).precision, ...
-                        'recall', testMetrics.classwise(1).recall, ...
-                        'f1score', testMetrics.classwise(1).f1score, ...
-                        'auc', aucValue, ...
-                        'confusionMatrix', testMetrics.confusionMat), ...
-                    'trainInfo', trainInfo, ...
-                    'overfitting', obj.overfitMetrics, ...
-                    'normParams', normParams ...
-                );
+                results = obj.buildResultsStruct(lstmModel, testMetrics, trainInfo, ...
+                    crossValidationResults, normParams);
 
+                % 結果のサマリー表示
                 obj.displayResults();
-
-                % GPU使用時はGPUメモリをリセット
-                if obj.useGPU
-                    reset(gpuDevice);
-                end
+                
+                % 使用リソースのクリーンアップ
+                obj.resetGPUMemory();
+                fprintf('\n=== LSTM学習処理が完了しました ===\n');
 
             catch ME
-                fprintf('\n=== Error in LSTM Training ===\n');
-                fprintf('Error message: %s\n', ME.message);
-                disp(getReport(ME, 'extended'));
-
-                if obj.useGPU
-                    reset(gpuDevice);
+                % エラー発生時の詳細情報出力
+                fprintf('\n=== LSTM学習中にエラーが発生しました ===\n');
+                fprintf('エラーメッセージ: %s\n', ME.message);
+                fprintf('エラー発生場所:\n');
+                for i = 1:length(ME.stack)
+                    fprintf('  ファイル: %s\n  行: %d\n  関数: %s\n\n', ...
+                        ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
                 end
 
+                % クリーンアップ処理
+                obj.resetGPUMemory();
                 rethrow(ME);
             end
         end
 
+        %% オンライン予測メソッド - 新しいデータの分類を実行
         function [label, score] = predictOnline(obj, data, lstmModel)
+            % 学習済みモデルを使用して新しいEEGデータを分類
+            %
+            % 入力:
+            %   data - 分類するEEGデータ [チャンネル x サンプル]
+            %   lstmModel - 学習済みLSTMモデル
+            %
+            % 出力:
+            %   label - 予測クラスラベル
+            %   score - 予測確率スコア
+            
             if ~obj.isEnabled
-                error('LSTM is disabled');
+                error('LSTM分類器は設定で無効化されています');
             end
-
+        
             try
-                % データの整形（時系列データ用）
-                prepData = obj.prepareDataForLSTM(data);
-                
-                % モデルの存在確認
-                if isempty(lstmModel)
-                    error('LSTM model is not available');
+                % 入力データの検証
+                if isempty(data)
+                    error('データが空です');
                 end
+        
+                % モデルの存在確認
+                if isempty(lstmModel) || ~isfield(lstmModel, 'model') || isempty(lstmModel.model)
+                    error('LSTMモデルが利用できません');
+                end
+
+                % 正規化パラメータを取得して正規化を実行
+                normalizedData = data;
+                if obj.params.classifier.normalize.enable && isfield(lstmModel, 'normParams')
+                    normalizedData = obj.normalizer.normalizeOnline(data, lstmModel.normParams);
+                end
+
+                % データの形状変換（必要に応じて）
+                prepData = obj.prepareDataForLSTM(normalizedData);
                 
                 % 予測の実行
-                [label, scores] = classify(lstmModel, prepData);
-                
-                % クラス1（安静状態）の確率を取得
-                score = scores(:,1);
+                [label, score] = classify(lstmModel.model, prepData);
+        
             catch ME
-                fprintf('Error in LSTM online prediction: %s\n', ME.message);
-                fprintf('Error details:\n');
+                fprintf('LSTM予測中にエラーが発生: %s\n', ME.message);
+                fprintf('エラー詳細:\n');
                 disp(getReport(ME, 'extended'));
+                label = [];
+                score = [];
                 rethrow(ME);
             end
         end
-
-        %% LSTM層の構築
-        function layers = buildLSTMLayers(obj, inputSize)
-            % アーキテクチャパラメータの取得
-            arch = obj.params.classifier.lstm.architecture;
-            fprintf('Building LSTM layers with input size: %d\n', inputSize);
-
-            % レイヤー数の計算（大まかな目安）
-            numLSTMLayers = length(fieldnames(arch.lstmLayers));
-            numFCLayers = length(arch.fullyConnected);
-            totalLayers = numLSTMLayers * 3 + numFCLayers * 2 + 4;
-
-            % セル配列でレイヤーを構築
-            layers = cell(totalLayers, 1);
-            layerIdx = 1;
-
-            % 入力層
-            layers{layerIdx} = sequenceInputLayer(inputSize, ...
-                'Normalization', arch.sequenceInputLayer.normalization, ...
-                'Name', 'input');
-            layerIdx = layerIdx + 1;
-
-            % LSTM層、バッチ正規化、ドロップアウト層の追加
-            lstmLayerNames = fieldnames(arch.lstmLayers);
-            for i = 1:length(lstmLayerNames)
-                lstmParams = arch.lstmLayers.(lstmLayerNames{i});
-                dropoutRate = arch.dropoutLayers.(['dropout' num2str(i)]);
-
-                layers{layerIdx} = lstmLayer(lstmParams.numHiddenUnits, ...
-                    'OutputMode', lstmParams.OutputMode, ...
-                    'Name', ['lstm' num2str(i)]);
-                layerIdx = layerIdx + 1;
-
-                if arch.batchNorm
-                    layers{layerIdx} = batchNormalizationLayer('Name', ['bn' num2str(i)]);
-                    layerIdx = layerIdx + 1;
-                end
-
-                layers{layerIdx} = dropoutLayer(dropoutRate, 'Name', ['dropout' num2str(i)]);
-                layerIdx = layerIdx + 1;
-            end
-
-            % 全結合層とReLU層の追加
-            for i = 1:length(arch.fullyConnected)
-                layers{layerIdx} = fullyConnectedLayer(arch.fullyConnected(i), ...
-                    'Name', ['fc' num2str(i)]);
-                layerIdx = layerIdx + 1;
-                layers{layerIdx} = reluLayer('Name', ['relu_fc' num2str(i)]);
-                layerIdx = layerIdx + 1;
-            end
-
-            % 出力層（全結合層 → softmax → 分類層）
-            layers{layerIdx} = fullyConnectedLayer(arch.numClasses, 'Name', 'fc_output');
-            layerIdx = layerIdx + 1;
-            layers{layerIdx} = softmaxLayer('Name', 'softmax');
-            layerIdx = layerIdx + 1;
-            layers{layerIdx} = classificationLayer('Name', 'output');
-
-            % 空セルを除去し、レイヤー配列へ変換
-            layers = layers(~cellfun('isempty', layers));
-            layers = [layers{:}];
+    end
+    
+    methods (Access = private)
+        %% プロパティ初期化メソッド
+        function initializeProperties(obj)
+            % クラスプロパティの初期化
+            obj.trainingHistory = struct('loss', [], 'accuracy', []);
+            obj.validationHistory = struct('loss', [], 'accuracy', []);
+            obj.bestValAccuracy = 0;
+            obj.patienceCounter = 0;
+            obj.currentEpoch = 0;
+            obj.overfitMetrics = struct();
+            obj.gpuMemory = struct('total', 0, 'used', 0, 'peak', 0);
         end
-
-        %% トレーニングオプションの設定（検証データがある場合は自動設定）
-        function options = getTrainingOptions(obj, valData, valLabels)
-            if obj.useGPU
-                executionEnvironment = 'cpu';
-               if obj.useGPU
-                   executionEnvironment = 'gpu';
-               end
-            end
-
-            valDS = {valData, valLabels};
         
-            options = trainingOptions(obj.params.classifier.lstm.training.optimizer.type, ...
-                   'InitialLearnRate', obj.params.classifier.lstm.training.optimizer.learningRate, ...
-                   'MaxEpochs', obj.params.classifier.lstm.training.maxEpochs, ...
-                   'MiniBatchSize', obj.params.classifier.lstm.training.miniBatchSize, ...
-                   'Plots', 'none', ...
-                   'Shuffle', obj.params.classifier.lstm.training.shuffle, ...
-                   'ExecutionEnvironment', executionEnvironment, ...
-                   'OutputNetwork', 'best-validation', ...
-                   'Verbose', true, ...
-                   'ValidationData', valDS, ...
-                   'ValidationFrequency', obj.params.classifier.lstm.training.frequency, ...
-                   'ValidationPatience', obj.params.classifier.lstm.training.patience, ...
-                   'GradientThreshold', 1 ...
-               );
+        %% データ検証と準備
+        function [validatedData, infoMsg] = validateAndPrepareData(~, data)
+            % 入力データの検証と適切な形式への変換
+            
+            % データの次元と形状を確認
+            dataSize = size(data);
+            dimCount = ndims(data);
+            
+            if dimCount > 3
+                error('対応していないデータ次元数: %d (最大3次元まで対応)', dimCount);
+            end
+            
+            validatedData = data;
+            
+            % 必要に応じてデータ次元を調整
+            if dimCount == 2
+                [channels, samples] = size(data);
+                validatedData = reshape(data, [channels, samples, 1]);
+                infoMsg = sprintf('2次元データを3次元に変換 [%d×%d] → [%d×%d×1]', ...
+                    channels, samples, channels, samples);
+            else
+                [channels, samples, epochs] = size(data);
+                infoMsg = sprintf('3次元データを検証 [%d×%d×%d]', channels, samples, epochs);
+            end
+            
+            % データの妥当性検証
+            validateattributes(validatedData, {'numeric'}, {'finite', 'nonnan'}, ...
+                'validateAndPrepareData', 'data');
         end
-
-        %% データセットの分割（訓練/検証/テスト）
+        
+        %% 学習データの前処理
+        function [procTrainData, procTrainLabels, normParams] = preprocessTrainingData(obj, trainData, trainLabels)
+            % 学習データの拡張と正規化を実行
+            
+            procTrainData = trainData;
+            procTrainLabels = trainLabels;
+            normParams = [];
+            
+            % データ拡張処理
+            if obj.params.classifier.augmentation.enable
+                fprintf('\nデータ拡張を実行...\n');
+                [procTrainData, procTrainLabels, ~] = obj.dataAugmenter.augmentData(trainData, trainLabels);
+                fprintf('  - 拡張前: %d サンプル\n', length(trainLabels));
+                fprintf('  - 拡張後: %d サンプル (%.1f倍)\n', length(procTrainLabels), ... 
+                    length(procTrainLabels)/length(trainLabels));
+            end
+            
+            % 正規化処理
+            if obj.params.classifier.normalize.enable
+                [procTrainData, normParams] = obj.normalizer.normalize(procTrainData);
+                fprintf('データを正規化しました（%s法）\n', normParams.method);
+            end
+        end
+        
+        %% データセット分割メソッド
         function [trainData, trainLabels, valData, valLabels, testData, testLabels] = splitDataset(obj, data, labels)
+            % データを学習・検証・テストセットに分割
+            %
+            % 入力:
+            %   data - 前処理済みEEGデータ [チャンネル x サンプル x エポック]
+            %   labels - クラスラベル [エポック x 1]
+            %
+            % 出力:
+            %   trainData - 学習データ
+            %   trainLabels - 学習ラベル
+            %   valData - 検証データ
+            %   valLabels - 検証ラベル
+            %   testData - テストデータ
+            %   testLabels - テストラベル
+            
             try
                 % 分割数の取得
-                k = obj.params.classifier.evaluation.kfold;
+                k = obj.params.classifier.lstm.training.validation.kfold;
                 
                 % データサイズの取得
                 [~, ~, numEpochs] = size(data);
-                fprintf('Total epochs: %d\n', numEpochs);
+                fprintf('\nデータセット分割 (k=%d):\n', k);
+                fprintf('  - 総エポック数: %d\n', numEpochs);
         
                 % インデックスのシャッフル
                 rng('default'); % 再現性のため
                 shuffledIdx = randperm(numEpochs);
         
                 % 分割比率の計算
-                trainRatio = (k-1)/k;  % 1-k/k
-                valRatio = 1/(2*k);    % k/2k
-                % testRatio = 1/(2*k);   % k/2k
+                trainRatio = (k-1)/k;  % (k-1)/k
+                valRatio = 1/(2*k);    % 0.5/k
+                testRatio = 1/(2*k);   % 0.5/k
         
                 % データ数の計算
                 numTrain = floor(numEpochs * trainRatio);
@@ -292,42 +338,64 @@ classdef LSTMClassifier < handle
                 testData = data(:,:,testIdx);
                 testLabels = labels(testIdx);
 
-                fprintf('データ分割 (k=%d):\n', k);
-                fprintf('  訓練データ: %d サンプル (%.1f%%)\n', ...
+                % 分割結果のサマリー表示
+                fprintf('  - 学習データ: %d サンプル (%.1f%%)\n', ...
                     length(trainIdx), (length(trainIdx)/numEpochs)*100);
-                fprintf('  検証データ: %d サンプル (%.1f%%)\n', ...
+                fprintf('  - 検証データ: %d サンプル (%.1f%%)\n', ...
                     length(valIdx), (length(valIdx)/numEpochs)*100);
-                fprintf('  テストデータ: %d サンプル (%.1f%%)\n', ...
+                fprintf('  - テストデータ: %d サンプル (%.1f%%)\n', ...
                     length(testIdx), (length(testIdx)/numEpochs)*100);
         
                 % データの検証
                 if isempty(trainData) || isempty(valData) || isempty(testData)
-                    error('一つ以上のデータセットが空です');
+                    error('分割後に空のデータセットが存在します');
                 end
         
                 % クラスの分布を確認
-                obj.checkClassDistribution('訓練', trainLabels);
+                obj.checkClassDistribution('学習', trainLabels);
                 obj.checkClassDistribution('検証', valLabels);
                 obj.checkClassDistribution('テスト', testLabels);
         
             catch ME
-                error('データ分割に失敗: %s', ME.message);
+                error('データ分割でエラーが発生しました: %s', ME.message);
             end
         end
         
-        % クラスの分布を確認するヘルパーメソッド
+        %% クラス分布確認メソッド
         function checkClassDistribution(~, setName, labels)
+            % データセット内のクラス分布を解析して表示
+            
             uniqueLabels = unique(labels);
             fprintf('\n%sデータのクラス分布:\n', setName);
+            
             for i = 1:length(uniqueLabels)
                 count = sum(labels == uniqueLabels(i));
-                fprintf('  クラス %d: %d サンプル (%.1f%%)\n', ...
+                fprintf('  - クラス %d: %d サンプル (%.1f%%)\n', ...
                     uniqueLabels(i), count, (count/length(labels))*100);
+            end
+            
+            % クラス不均衡の評価
+            counts = histcounts(labels);
+            maxCount = max(counts);
+            minCount = min(counts);
+            imbalanceRatio = maxCount / max(minCount, 1);
+            
+            if imbalanceRatio > 3
+                warning('%sデータセットのクラス不均衡が大きいです (比率: %.1f:1)', ...
+                    setName, imbalanceRatio);
             end
         end
 
         %% LSTM用のデータ前処理（セル配列へ変換）
         function preparedData = prepareDataForLSTM(~, data)
+            % データをLSTMに適した形式に変換
+            %
+            % 入力:
+            %   data - 入力データ
+            %
+            % 出力:
+            %   preparedData - LSTM用に整形されたデータ
+            
             try
                 if iscell(data)
                     % 入力が既にセル配列の場合
@@ -338,15 +406,9 @@ classdef LSTMClassifier < handle
                         if ~isa(currentData, 'double')
                             currentData = double(currentData);
                         end
-                        % NaN, Inf のチェックと置換
-                        if any(isnan(currentData(:)))
-                            warning('Trial %d contains NaN values. Replacing with zeros.', i);
-                            currentData(isnan(currentData)) = 0;
-                        end
-                        if any(isinf(currentData(:)))
-                            warning('Trial %d contains Inf values. Replacing with zeros.', i);
-                            currentData(isinf(currentData)) = 0;
-                        end
+                        % NaN, Infのチェックと置換
+                        currentData(isnan(currentData)) = 0;
+                        currentData(isinf(currentData)) = 0;
                         preparedData{i} = currentData;
                     end
                 else
@@ -358,339 +420,544 @@ classdef LSTMClassifier < handle
                         if ~isa(currentData, 'double')
                             currentData = double(currentData);
                         end
-                        % NaN, Inf のチェックと置換
-                        if any(isnan(currentData(:)))
-                            warning('Trial %d contains NaN values. Replacing with zeros.', i);
-                            currentData(isnan(currentData)) = 0;
-                        end
-                        if any(isinf(currentData(:)))
-                            warning('Trial %d contains Inf values. Replacing with zeros.', i);
-                            currentData(isinf(currentData)) = 0;
-                        end
+                        % NaN, Infのチェックと置換
+                        currentData(isnan(currentData)) = 0;
+                        currentData(isinf(currentData)) = 0;
                         preparedData{i} = currentData;
                     end
                 end
-        
+                
             catch ME
-                errorInfo = struct(...
-                    'message', ME.message, ...
-                    'stack', ME.stack, ...
-                    'dataInfo', struct(...
-                        'inputSize', size(data), ...
-                        'dataType', class(data)));
-                if exist('preparedData', 'var') && ~isempty(preparedData)
-                    errorInfo.dataInfo.preparedDataSize = size(preparedData{1});
-                    errorInfo.dataInfo.lastProcessedTrial = length(preparedData);
-                end
-                error('LSTM用データ準備に失敗: %s\nエラー情報: %s', ME.message, jsonencode(errorInfo));
+                error('LSTM用データ準備に失敗: %s', ME.message);
             end
         end
 
-        %% LSTMモデルの学習
+        %% LSTMモデル学習メソッド
         function [lstmModel, trainInfo] = trainLSTMModel(obj, trainData, trainLabels, valData, valLabels)
-            try        
-                % データの形状変換
-                if ndims(trainData) ~= 4
-                    trainData = obj.prepareDataForLSTM(trainData);
-                end
+            % LSTMモデルの構築と学習を実行
+            %
+            % 入力:
+            %   trainData - 学習データ
+            %   trainLabels - 学習ラベル
+            %   valData - 検証データ
+            %   valLabels - 検証ラベル
+            %
+            % 出力:
+            %   lstmModel - 学習済みLSTMモデル
+            %   trainInfo - 学習に関する情報
+            
+           try        
+               fprintf('\n=== LSTMモデルの学習開始 ===\n');
+               
+               % GPUメモリの確認
+               obj.checkGPUMemory();
+               
+               % データの構造確認
+               sampleData = trainData{1};
+               inputSize = size(sampleData, 1);
+               sequenceLength = size(sampleData, 2);
+               fprintf('入力データ構造: [%d特徴量 x %d時点]\n', inputSize, sequenceLength);
         
-                % データサイズの表示
-                sampleSize = size(trainData{1});
-                numFeatures = sampleSize(1);
-                fprintf('\n=== LSTM モデル学習開始 ===\n');
-                fprintf('入力特徴量数: %d\n', numFeatures);
-                fprintf('時系列長: %d\n', sampleSize(2));
-                fprintf('バッチサイズ: %d\n', obj.params.classifier.lstm.training.miniBatchSize);
-        
-                % ラベルのカテゴリカル変換
-                uniqueLabels = unique(trainLabels);
-                trainLabels = categorical(trainLabels, uniqueLabels);
-        
-                % GPU転送
-                if obj.useGPU
-                    fprintf('GPUを使用して学習を実行します\n');
-                else
-                    fprintf('CPUを使用して学習を実行します\n');
-                end
-        
-                % 検証データの処理
-                if ~isempty(valData)
-                    if ndims(valData) ~= 4
-                        valData = obj.prepareDataForLSTM(valData);
-                    end
-                    valLabels = categorical(valLabels, uniqueLabels);
+               % ラベルのカテゴリカル変換
+               uniqueLabels = unique(trainLabels);
+               trainLabels = categorical(trainLabels, uniqueLabels);
 
-                    fprintf('検証データを使用して学習を実行します\n');
-                end
+               % 検証データの処理
+               valDS = {};
+               if ~isempty(valData)
+                   valLabels = categorical(valLabels, uniqueLabels);
+                   valDS = {valData, valLabels};
+               end
         
-                % アーキテクチャ情報の表示
+               % トレーニング情報の初期化
+               trainInfo = struct(...
+                   'History', struct(...
+                       'TrainingLoss', [], ...
+                       'ValidationLoss', [], ...
+                       'TrainingAccuracy', [], ...
+                       'ValidationAccuracy', [] ...
+                   ), ...
+                   'FinalEpoch', 0 ...
+               );
+        
+               % 実行環境の選択
+               executionEnvironment = 'cpu';
+               if obj.useGPU
+                   executionEnvironment = 'gpu';
+               end
+        
+               % レイヤーの構築
+               fprintf('LSTMアーキテクチャを構築中...\n');
+               layers = obj.buildLSTMLayers(inputSize);
+               
+               % トレーニングオプションの設定
+               options = trainingOptions(obj.params.classifier.lstm.training.optimizer.type, ...
+                   'InitialLearnRate', obj.params.classifier.lstm.training.optimizer.learningRate, ...
+                   'MaxEpochs', obj.params.classifier.lstm.training.maxEpochs, ...
+                   'MiniBatchSize', obj.params.classifier.lstm.training.miniBatchSize, ...
+                   'Plots', 'none', ...
+                   'Shuffle', obj.params.classifier.lstm.training.shuffle, ...
+                   'ExecutionEnvironment', executionEnvironment, ...
+                   'OutputNetwork', 'best-validation', ...
+                   'Verbose', true, ...
+                   'ValidationData', valDS, ...
+                   'ValidationFrequency', obj.params.classifier.lstm.training.frequency, ...
+                   'ValidationPatience', obj.params.classifier.lstm.training.patience, ...
+                   'GradientThreshold', obj.params.classifier.lstm.training.optimizer.gradientThreshold);
+               
+               % モデルの学習
+               fprintf('LSTMモデルの学習を開始...\n');
+               [lstmModel, trainHistory] = trainNetwork(trainData, trainLabels, layers, options);
+        
+               % 学習履歴の保存
+               trainInfo.History = trainHistory;
+               trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
+        
+               fprintf('学習完了: %d エポック\n', trainInfo.FinalEpoch);
+               fprintf('  - 最終学習損失: %.4f\n', trainHistory.TrainingLoss(end));
+               fprintf('  - 最終検証損失: %.4f\n', trainHistory.ValidationLoss(end));
+               fprintf('  - 最終学習精度: %.2f%%\n', trainHistory.TrainingAccuracy(end));
+               fprintf('  - 最終検証精度: %.2f%%\n', trainHistory.ValidationAccuracy(end));
+               
+               % 最良の検証精度
+               [bestValAcc, bestEpoch] = max(trainHistory.ValidationAccuracy);
+               fprintf('  - 最良検証精度: %.2f%% (エポック %d)\n', bestValAcc, bestEpoch);
+
+               % GPUメモリ解放
+               obj.resetGPUMemory();
+        
+           catch ME
+               fprintf('LSTMモデル学習でエラーが発生: %s\n', ME.message);
+               obj.resetGPUMemory();
+               rethrow(ME);
+           end
+        end
+
+        %% LSTM層構築メソッド
+        function layers = buildLSTMLayers(obj, inputSize)
+            % 入力データに適したLSTMアーキテクチャを構築
+            %
+            % 入力:
+            %   inputSize - 入力特徴量次元
+            %
+            % 出力:
+            %   layers - LSTMレイヤー構造
+            
+            try
+                % アーキテクチャパラメータの取得
                 arch = obj.params.classifier.lstm.architecture;
-                fprintf('\nLSTMアーキテクチャ:\n');
-                fprintf('  レイヤー数: %d\n', length(fieldnames(arch.lstmLayers)));
-                fprintf('  隠れ層ユニット数: %d\n', arch.lstmLayers.lstm1.numHiddenUnits);
-                fprintf('  全結合層: [%s]\n', strjoin(string(arch.fullyConnected), ', '));
-                fprintf('  ドロップアウト率: %.2f\n', arch.dropoutLayers.dropout1);
-        
-                % トレーニング情報の初期化
-                trainInfo = struct(...
-                    'TrainingLoss', [], ...
-                    'ValidationLoss', [], ...
-                    'TrainingAccuracy', [], ...
-                    'ValidationAccuracy', [], ...
-                    'FinalEpoch', 0, ...
-                    'History', [] ...
-                );
-        
-                % 学習パラメータの表示
-                fprintf('\n学習パラメータ:\n');
-                fprintf('  最大エポック数: %d\n', obj.params.classifier.lstm.training.maxEpochs);
-                fprintf('  学習率: %.6f\n', obj.params.classifier.lstm.training.optimizer.learningRate);
+                numClasses = arch.numClasses;
                 
-                layers = obj.buildLSTMLayers(numFeatures);
-                options = obj.getTrainingOptions(valData, valLabels);
+                fprintf('LSTMレイヤー構築: 入力特徴量=%d, クラス数=%d\n', inputSize, numClasses);
                 
-                fprintf('\n=== 学習開始 ===\n');
-                [lstmModel, trainHistory] = trainNetwork(trainData, trainLabels, layers, options);
+                % レイヤー数の計算
+                numLSTMLayers = length(fieldnames(arch.lstmLayers));
+                numFCLayers = length(arch.fullyConnected);
                 
-                % 学習履歴の保存
-                if isfield(trainHistory, 'TrainingLoss')
-                    trainInfo.History.TrainingLoss = trainHistory.TrainingLoss;
-                    trainInfo.History.ValidationLoss = trainHistory.ValidationLoss;
-                    trainInfo.History.TrainingAccuracy = trainHistory.TrainingAccuracy;
-                    trainInfo.History.ValidationAccuracy = trainHistory.ValidationAccuracy;
-                    trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
+                % セル配列でレイヤーを構築
+                layers = cell(1, numLSTMLayers * 3 + numFCLayers * 2 + 3);
+                layerIdx = 1;
+                
+                % 入力層
+                layers{layerIdx} = sequenceInputLayer(inputSize, ...
+                    'Normalization', 'none', ...
+                    'Name', 'input');
+                layerIdx = layerIdx + 1;
+                
+                % LSTM層、バッチ正規化、ドロップアウト層の追加
+                lstmLayerNames = fieldnames(arch.lstmLayers);
+                for i = 1:length(lstmLayerNames)
+                    lstmParams = arch.lstmLayers.(lstmLayerNames{i});
+                    
+                    % ドロップアウト率の取得
+                    if isfield(arch.dropoutLayers, ['dropout' num2str(i)])
+                        dropoutRate = arch.dropoutLayers.(['dropout' num2str(i)]);
+                    else
+                        dropoutRate = 0.5;  % デフォルト値
+                    end
+                    
+                    % LSTM層の追加
+                    layers{layerIdx} = lstmLayer(lstmParams.numHiddenUnits, ...
+                        'OutputMode', lstmParams.OutputMode, ...
+                        'Name', ['lstm' num2str(i)]);
+                    layerIdx = layerIdx + 1;
+                    
+                    % バッチ正規化層（オプション）
+                    if arch.batchNorm
+                        layers{layerIdx} = batchNormalizationLayer('Name', ['bn' num2str(i)]);
+                        layerIdx = layerIdx + 1;
+                    end
+                    
+                    % ドロップアウト層
+                    layers{layerIdx} = dropoutLayer(dropoutRate, 'Name', ['dropout' num2str(i)]);
+                    layerIdx = layerIdx + 1;
                 end
                 
-                fprintf('\n学習完了: %d反復\n', trainInfo.FinalEpoch);
-                if isfield(trainHistory, 'TrainingAccuracy')
-                    fprintf('最終トレーニング精度: %.2f%%\n', trainHistory.TrainingAccuracy(end));
+                % 全結合層とReLU層の追加
+                for i = 1:length(arch.fullyConnected)
+                    layers{layerIdx} = fullyConnectedLayer(arch.fullyConnected(i), ...
+                        'Name', ['fc' num2str(i)]);
+                    layerIdx = layerIdx + 1;
+                    
+                    layers{layerIdx} = reluLayer('Name', ['relu_fc' num2str(i)]);
+                    layerIdx = layerIdx + 1;
                 end
-                if isfield(trainHistory, 'ValidationAccuracy')
-                    fprintf('最終検証精度: %.2f%%\n', trainHistory.ValidationAccuracy(end));
-                end
-        
+                
+                % 出力層
+                layers{layerIdx} = fullyConnectedLayer(numClasses, 'Name', 'fc_output');
+                layerIdx = layerIdx + 1;
+                
+                layers{layerIdx} = softmaxLayer('Name', 'softmax');
+                layerIdx = layerIdx + 1;
+                
+                layers{layerIdx} = classificationLayer('Name', 'output');
+                
+                % 不要な要素を削除
+                layers = layers(1:layerIdx);
+                
+                % レイヤー配列に変換（セル配列を結合して配列に変換）
+                layers = [layers{:}];
+                
+                fprintf('LSTMアーキテクチャ構築完了: %dレイヤー\n', layerIdx);
+                
             catch ME
-                fprintf('\n=== 学習中にエラーが発生 ===\n');
-                fprintf('エラーメッセージ: %s\n', ME.message);
-                fprintf('エラー位置:\n');
-                for i = 1:length(ME.stack)
-                    fprintf('  File: %s\n  Line: %d\n  Function: %s\n\n', ...
-                        ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
-                end
+                fprintf('LSTMレイヤー構築でエラーが発生: %s\n', ME.message);
                 rethrow(ME);
             end
         end
 
-        %% モデル評価（精度・混同行列・各クラスの指標等）
+        %% モデル評価メソッド
         function metrics = evaluateModel(~, model, testData, testLabels)
-            try
-                % 予測実施
-                [pred, scores] = classify(model, testData);
-                testLabels = categorical(testLabels);
+            % 学習済みモデルの性能を評価
+            %
+            % 入力:
+            %   model - 学習済みLSTMモデル
+            %   testData - テストデータ
+            %   testLabels - テストラベル
+            %
+            % 出力:
+            %   metrics - 詳細な評価メトリクス
+            
+            fprintf('\n=== モデル評価を実行 ===\n');
+            
+            metrics = struct(...
+                'accuracy', [], ...
+                'confusionMat', [], ...
+                'classwise', [], ...
+                'roc', [], ...
+                'auc', [] ...
+            );
+    
+           % テストラベルをカテゴリカル型に変換
+           uniqueLabels = unique(testLabels);
+           testLabels = categorical(testLabels, uniqueLabels);
 
-                metrics = struct();
-                metrics.accuracy = mean(pred == testLabels);
-                metrics.confusionMat = confusionmat(testLabels, pred);
+           % モデルの評価
+           [pred, scores] = classify(model, testData);
 
-                % 各クラスごとの性能評価
-                classes = unique(testLabels);
-                metrics.classwise = repmat(struct('precision', 0, 'recall', 0, 'f1score', 0), length(classes), 1);
+           % 基本的な指標の計算
+           metrics.accuracy = mean(pred == testLabels);
+           metrics.confusionMat = confusionmat(testLabels, pred);
+           
+           fprintf('テスト精度: %.2f%%\n', metrics.accuracy * 100);
 
-                for i = 1:length(classes)
-                    className = classes(i);
-                    classIdx = (testLabels == className);
+           % クラスごとの性能評価
+           classes = unique(testLabels);
+           metrics.classwise = struct('precision', zeros(1,length(classes)), ...
+                                    'recall', zeros(1,length(classes)), ...
+                                    'f1score', zeros(1,length(classes)));
 
-                    TP = sum(pred(classIdx) == className);
-                    FP = sum(pred == className) - TP;
-                    FN = sum(classIdx) - TP;
+           fprintf('\nクラスごとの評価:\n');
+           for i = 1:length(classes)
+               className = classes(i);
+               classIdx = (testLabels == className);
 
-                    if (TP + FP) == 0
-                        precision = 0;
-                    else
-                        precision = TP / (TP + FP);
-                    end
-                    if (TP + FN) == 0
-                        recall = 0;
-                    else
-                        recall = TP / (TP + FN);
-                    end
-                    if (precision + recall) == 0
-                        f1 = 0;
-                    else
-                        f1 = 2 * (precision * recall) / (precision + recall);
-                    end
+               % 各クラスの指標計算
+               TP = sum(pred(classIdx) == className);
+               FP = sum(pred == className) - TP;
+               FN = sum(classIdx) - TP;
 
-                    metrics.classwise(i).precision = precision;
-                    metrics.classwise(i).recall = recall;
-                    metrics.classwise(i).f1score = f1;
-                end
+               % 0による除算を回避
+               if (TP + FP) > 0
+                   precision = TP / (TP + FP);
+               else
+                   precision = 0;
+               end
+               
+               if (TP + FN) > 0
+                   recall = TP / (TP + FN);
+               else
+                   recall = 0;
+               end
+               
+               if (precision + recall) > 0
+                   f1 = 2 * (precision * recall) / (precision + recall);
+               else
+                   f1 = 0;
+               end
 
-                % 2クラス分類の場合のROCとAUC
-                if length(classes) == 2
-                    [X, Y, T, AUC] = perfcurve(testLabels, scores(:,2), classes(2));
-                    metrics.roc = struct('X', X, 'Y', Y, 'T', T);
-                    metrics.auc = AUC;
-                end
+               metrics.classwise(i).precision = precision;
+               metrics.classwise(i).recall = recall;
+               metrics.classwise(i).f1score = f1;
+               
+               fprintf('  - クラス %d:\n', i);
+               fprintf('    - 精度 (Precision): %.2f%%\n', precision * 100);
+               fprintf('    - 再現率 (Recall): %.2f%%\n', recall * 100);
+               fprintf('    - F1スコア: %.2f\n', f1);
+           end
 
-            catch ME
-                error('モデル評価に失敗: %s', ME.message);
-            end
+           % ROC曲線とAUC（2クラス分類の場合）
+           if length(classes) == 2
+               [X, Y, T, AUC] = perfcurve(testLabels, scores(:,2), classes(2));
+               metrics.roc = struct('X', X, 'Y', Y, 'T', T);
+               metrics.auc = AUC;
+               fprintf('\nAUC: %.3f\n', AUC);
+           end
+           
+           % 混同行列の表示
+           fprintf('\n混同行列:\n');
+           disp(metrics.confusionMat);
         end
 
-        %% k-fold 交差検証の実施
-        function results = performCrossValidation(obj, data, labels)
+        %% 交差検証実行メソッド
+        function results = performCrossValidationIfEnabled(obj, data, labels)
+            % 交差検証が有効な場合に実行
+            
+            results = struct('meanAccuracy', [], 'stdAccuracy', []);
+            
+            % 交差検証の実行     
+            if obj.params.classifier.lstm.training.validation.enable
+                results = obj.performCrossValidation(data, labels);
+                fprintf('交差検証平均精度: %.2f%% (±%.2f%%)\n', ...
+                    results.meanAccuracy * 100, ...
+                    results.stdAccuracy * 100);
+            else
+                fprintf('交差検証はスキップされました（設定で無効）\n');
+            end
+        end
+        
+        %% 交差検証メソッド
+        function cvResults = performCrossValidation(obj, data, labels)
+            % k分割交差検証の実行
+            
             try
                 % k-fold cross validationのパラメータ取得
                 k = obj.params.classifier.lstm.training.validation.kfold;
                 fprintf('\n=== %d分割交差検証開始 ===\n', k);
+                
+                % データとラベルの検証
+                validateattributes(data, {'numeric'}, {'finite', 'nonnan'}, ...
+                    'performCrossValidation', 'data');
+                
+                if length(labels) ~= size(data, 3)
+                    error('データとラベルのサンプル数が一致しません');
+                end
         
-                % 結果保存用構造体の初期化
-                results = struct();
-                results.folds = struct(...
+                % cvResultsの初期化
+                cvResults = struct();
+                cvResults.folds = struct(...
                     'accuracy', zeros(1, k), ...
                     'confusionMat', cell(1, k), ...
                     'classwise', cell(1, k), ...
                     'validation_curve', cell(1, k) ...
                 );
-        
-                % 各フォールドの処理
+                
+                % 分割設定
+                cvp = cvpartition(length(labels), 'KFold', k);
+                
+                % 各フォールドでの処理
                 for i = 1:k
-                    fprintf('\nフォールド %d/%d の処理開始\n', i, k);
+                    fprintf('\nフォールド %d/%d の処理を開始\n', i, k);
+                    
+                    % データの分割
+                    trainIdx = cvp.training(i);
+                    testIdx = cvp.test(i);
+                    
+                    % 学習・検証セットの作成
+                    trainData = data(:,:,trainIdx);
+                    trainLabels = labels(trainIdx);
+                    testData = data(:,:,testIdx);
+                    testLabels = labels(testIdx);
+                    
+                    % さらに学習セットを学習・検証に分割
+                    cvpInner = cvpartition(length(trainLabels), 'HoldOut', 0.2);
+                    valIdx = cvpInner.test;
+                    trainIdxInner = cvpInner.training;
+                    
+                    foldTrainData = trainData(:,:,trainIdxInner);
+                    foldTrainLabels = trainLabels(trainIdxInner);
+                    foldValData = trainData(:,:,valIdx);
+                    foldValLabels = trainLabels(valIdx);
                     
                     try
-                        % データの分割と前処理
-                        [trainData, trainLabels, valData, valLabels, ~, ~] = obj.splitDataset(data, labels);
-                        
-                        prepTrainData = obj.prepareDataForLSTM(trainData);
-                        prepValData = obj.prepareDataForLSTM(valData);
-                        
+                        % データの準備
+                        prepTrainData = obj.prepareDataForLSTM(foldTrainData);
+                        prepValData = obj.prepareDataForLSTM(foldValData);
+                        prepTestData = obj.prepareDataForLSTM(testData);
+        
                         % モデルの学習
-                        [model, trainInfo] = obj.trainLSTMModel(prepTrainData, trainLabels, prepValData, valLabels);
-                        
-                        % 性能評価
-                        metrics = obj.evaluateModel(model, prepValData, valLabels);
-                        
+                        [model, trainInfo] = obj.trainLSTMModel(...
+                            prepTrainData, foldTrainLabels, prepValData, foldValLabels);
+        
+                        % テストデータでの評価
+                        metrics = obj.evaluateModel(model, prepTestData, testLabels);
+        
                         % 結果の保存
-                        results.folds.accuracy(i) = metrics.accuracy;
-                        results.folds.confusionMat{i} = metrics.confusionMat;
-                        results.folds.classwise{i} = metrics.classwise;
+                        cvResults.folds.accuracy(i) = metrics.accuracy;
+                        cvResults.folds.confusionMat{i} = metrics.confusionMat;
+                        cvResults.folds.classwise{i} = metrics.classwise;
                         
-                        if ~isempty(trainInfo.History)
-                            results.folds.validation_curve{i} = struct(...
-                                'train_accuracy', trainInfo.History.TrainingAccuracy, ...
-                                'val_accuracy', trainInfo.History.ValidationAccuracy, ...
-                                'train_loss', trainInfo.History.TrainingLoss, ...
-                                'val_loss', trainInfo.History.ValidationLoss);
-                        end
-                        
-                        fprintf('フォールド %d の精度: %.2f%%\n', i, results.folds.accuracy(i) * 100);
-                        
+                        % 学習曲線の保存
+                        cvResults.folds.validation_curve{i} = struct(...
+                            'train_accuracy', trainInfo.History.TrainingAccuracy, ...
+                            'val_accuracy', trainInfo.History.ValidationAccuracy, ...
+                            'train_loss', trainInfo.History.TrainingLoss, ...
+                            'val_loss', trainInfo.History.ValidationLoss ...
+                        );
+        
+                        fprintf('フォールド %d の精度: %.2f%%\n', i, cvResults.folds.accuracy(i) * 100);
+        
                     catch ME
                         warning('フォールド %d でエラーが発生: %s', i, ME.message);
-                        results.folds.accuracy(i) = 0;
+                        % エラーが発生したフォールドは精度0として記録
+                        cvResults.folds.accuracy(i) = 0;
+                        cvResults.folds.confusionMat{i} = [];
+                        cvResults.folds.classwise{i} = [];
+                        cvResults.folds.validation_curve{i} = [];
+                    end
+                    
+                    % GPUメモリの解放
+                    obj.resetGPUMemory();
+                end
+        
+                % 統計量の計算
+                validFolds = cvResults.folds.accuracy > 0;
+                if any(validFolds)
+                    cvResults.meanAccuracy = mean(cvResults.folds.accuracy(validFolds));
+                    cvResults.stdAccuracy = std(cvResults.folds.accuracy(validFolds));
+                    cvResults.minAccuracy = min(cvResults.folds.accuracy(validFolds));
+                    cvResults.maxAccuracy = max(cvResults.folds.accuracy(validFolds));
+                else
+                    cvResults.meanAccuracy = 0;
+                    cvResults.stdAccuracy = 0;
+                    cvResults.minAccuracy = 0;
+                    cvResults.maxAccuracy = 0;
+                end
+        
+                % クラスごとの平均性能
+                if ~isempty(cvResults.folds.classwise{1})
+                    numClasses = length(cvResults.folds.classwise{1});
+                    cvResults.classwise_mean = struct(...
+                        'precision', zeros(1, numClasses), ...
+                        'recall', zeros(1, numClasses), ...
+                        'f1score', zeros(1, numClasses) ...
+                    );
+        
+                    for class = 1:numClasses
+                        validClassMetrics = cellfun(@(x) ~isempty(x), cvResults.folds.classwise);
+                        precision_values = cellfun(@(x) x(class).precision, ...
+                            cvResults.folds.classwise(validClassMetrics));
+                        recall_values = cellfun(@(x) x(class).recall, ...
+                            cvResults.folds.classwise(validClassMetrics));
+                        f1_values = cellfun(@(x) x(class).f1score, ...
+                            cvResults.folds.classwise(validClassMetrics));
+        
+                        cvResults.classwise_mean.precision(class) = mean(precision_values);
+                        cvResults.classwise_mean.recall(class) = mean(recall_values);
+                        cvResults.classwise_mean.f1score(class) = mean(f1_values);
                     end
                 end
         
-                % 統計量の計算と表示
-                validFolds = results.folds.accuracy > 0;
-                results.meanAccuracy = mean(results.folds.accuracy(validFolds));
-                results.stdAccuracy = std(results.folds.accuracy(validFolds));
-                
-                fprintf('\n=== 交差検証結果 ===\n');
-                fprintf('平均精度: %.2f%% (±%.2f%%)\n', ...
-                    results.meanAccuracy * 100, results.stdAccuracy * 100);
-                fprintf('有効フォールド数: %d/%d\n', sum(validFolds), k);
+                % 結果の表示
+                fprintf('\n交差検証結果:\n');
+                fprintf('  - 平均精度: %.2f%% (±%.2f%%)\n', ...
+                    cvResults.meanAccuracy * 100, cvResults.stdAccuracy * 100);
+                fprintf('  - 最小精度: %.2f%%\n', cvResults.minAccuracy * 100);
+                fprintf('  - 最大精度: %.2f%%\n', cvResults.maxAccuracy * 100);
+                fprintf('  - 成功フォールド: %d/%d\n', ...
+                    sum(validFolds), k);
+        
+                if isfield(cvResults, 'classwise_mean')
+                    fprintf('\nクラス別平均性能:\n');
+                    for class = 1:numClasses
+                        fprintf('  - クラス %d:\n', class);
+                        fprintf('    - 精度: %.2f%%\n', ...
+                            cvResults.classwise_mean.precision(class) * 100);
+                        fprintf('    - 再現率: %.2f%%\n', ...
+                            cvResults.classwise_mean.recall(class) * 100);
+                        fprintf('    - F1スコア: %.2f\n', ...
+                            cvResults.classwise_mean.f1score(class));
+                    end
+                end
         
             catch ME
-                fprintf('\n=== 交差検証中にエラーが発生 ===\n');
-                fprintf('エラーメッセージ: %s\n', ME.message);
-                fprintf('エラースタック:\n');
+                fprintf('交差検証でエラーが発生: %s\n', ME.message);
+                fprintf('エラー詳細:\n');
                 disp(getReport(ME, 'extended'));
-                rethrow(ME);
+                
+                cvResults = struct('meanAccuracy', 0, 'stdAccuracy', 0);
             end
         end
 
-        %% 過学習検証（学習曲線とテスト精度の比較）
+        %% 過学習検証メソッド
         function [isOverfit, metrics] = validateOverfitting(obj, trainInfo, testMetrics)
+            % トレーニング結果とテスト結果から過学習を分析
+            %
+            % 入力:
+            %   trainInfo - トレーニング情報（学習曲線を含む）
+            %   testMetrics - テストデータでの評価結果
+            %
+            % 出力:
+            %   isOverfit - 過学習の有無（論理値）
+            %   metrics - 詳細な過学習メトリクス
+            
+            fprintf('\n=== 過学習検証の実行 ===\n');
+            
+            % 初期化
+            isOverfit = false;
+            metrics = struct();
+            
             try
-                fprintf('\n=== 過学習の検証 ===\n');
+                % trainInfoの構造を検証
+                obj.validateTrainInfo(trainInfo);
                 
-                % trainInfoの検証
-                if ~isstruct(trainInfo) || ~isfield(trainInfo, 'History')
-                    error('学習履歴情報が不正です');
-                end
+                % 精度データの取得
+                trainAcc = trainInfo.History.TrainingAccuracy;
+                valAcc = trainInfo.History.ValidationAccuracy;
                 
-                history = trainInfo.History;
-                if ~isfield(history, 'TrainingAccuracy') || ~isfield(history, 'ValidationAccuracy')
-                    warning('学習履歴に精度情報が含まれていません。過学習検証をスキップします。');
-                    metrics = struct(...
-                        'generalizationGap', NaN, ...
-                        'performanceGap', NaN, ...
-                        'isCompletelyBiased', true, ...
-                        'isLearningProgressing', false, ...
-                        'severity', 'unknown', ...
-                        'optimalEpoch', 0, ...
-                        'totalEpochs', 0);
-                    isOverfit = false;
-                    return;
-                end
-        
-                % 精度データの取得と表示
-                trainAcc = history.TrainingAccuracy;
-                valAcc = history.ValidationAccuracy;
+                % テスト精度を取得
                 testAcc = testMetrics.accuracy * 100;
-
-                fprintf('Validation Accuracy: %.2f%%\n', max(valAcc));
-                fprintf('Test Accuracy: %.2f%%\n', testAcc);
-        
-                % Performance Gapの計算（検証結果とテスト結果の差）
-                perfGap = abs(max(valAcc) - testAcc);
-                fprintf('Performance Gap: %.2f%%\n', perfGap);
-        
-                % 完全な偏りの検出
-                if isfield(testMetrics, 'confusionMat')
-                    cm = testMetrics.confusionMat;
-                    % 各実際のクラス（行）のサンプル数を確認
-                    missingActual = any(sum(cm, 2) == 0);
-                    % 各予測クラス（列）の予測件数を確認
-                    missingPredicted = any(sum(cm, 1) == 0);
-                    % いずれかが true ならば、全く現れないクラスがあると判断
-                    isCompletelyBiased = missingActual || missingPredicted;
-                    
-                    if isCompletelyBiased
-                        fprintf('警告: 予測が特定のクラスに偏っています\n');
-                        if missingActual
-                            fprintf('  - 出現しない実際のクラスが存在\n');
-                        end
-                        if missingPredicted
-                            fprintf('  - 予測されないクラスが存在\n');
-                        end
-                    end
-                else
-                    isCompletelyBiased = false;
-                end
-        
-                % 学習進行の確認
-                trainDiff = diff(trainAcc);
-                isLearningProgressing = std(trainDiff) > 0.01;
-                if ~isLearningProgressing
-                    fprintf('警告: 学習が十分に進行していない可能性があります\n');
-                    fprintf('  - 訓練精度の変化の標準偏差: %.4f\n', std(trainDiff));
-                end
-        
-                % トレンド分析
+                
+                % 検証-テスト精度ギャップ分析を実行
+                [gapOverfit, gapMetrics] = obj.validateTestValidationGap(valAcc, testAcc, size(testMetrics.confusionMat, 1));
+                
+                % 学習曲線の詳細分析
                 [trainTrend, valTrend] = obj.analyzeLearningCurves(trainAcc, valAcc);
                 
-                % 最適エポックの検出
+                % バイアスの検出（特定クラスへの偏り）
+                isCompletelyBiased = obj.detectClassificationBias(testMetrics);
+                
+                % 学習進行の評価
+                isLearningProgressing = std(diff(trainAcc)) > 0.01;
+                
+                % 最適エポックの分析
                 [optimalEpoch, totalEpochs] = obj.findOptimalEpoch(valAcc);
-                fprintf('Optimal Epoch: %d/%d\n', optimalEpoch, totalEpochs);
-        
-                % 過学習の重大度判定
-                severity = obj.determineOverfittingSeverity(perfGap, isCompletelyBiased, isLearningProgressing);
-        
+                fprintf('最適エポック: %d/%d (%.1f%%)\n', optimalEpoch, totalEpochs, ... 
+                    (optimalEpoch/totalEpochs)*100);
+                
+                % 複合判定 - バイアス検出を優先
+                if isCompletelyBiased
+                    severity = 'critical';  % 完全な偏りがある場合は最重度の過学習と判定
+                    fprintf('完全な分類バイアスが検出されたため、過学習を「%s」と判定\n', severity);
+                else
+                    % 通常のギャップベース判定を使用
+                    severity = gapMetrics.severity;
+                end
+                
                 % メトリクスの構築
                 metrics = struct(...
-                    'performanceGap', perfGap, ...
+                    'gapMetrics', gapMetrics, ...
+                    'performanceGap', gapMetrics.rawGap, ...
                     'isCompletelyBiased', isCompletelyBiased, ...
                     'isLearningProgressing', isLearningProgressing, ...
                     'validationTrend', valTrend, ...
@@ -700,137 +967,545 @@ classdef LSTMClassifier < handle
                     'totalEpochs', totalEpochs);
                 
                 % 過学習判定
-                isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
+                isOverfit = gapOverfit || isCompletelyBiased || (~isLearningProgressing && severity ~= 'none');
                 fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
-        
-                % 詳細な分析結果の表示
-                if isOverfit
-                    fprintf('\n=== 詳細な過学習分析 ===\n');
-                    fprintf('1. 汎化性能:\n');
-                    fprintf('  - Performance Gap: %.2f%%\n', perfGap);
-                    
-                    fprintf('\n2. 学習の進行状況:\n');
-                    fprintf('  - 訓練傾向の平均変化: %.4f\n', trainTrend.mean_change);
-                    fprintf('  - 検証傾向の平均変化: %.4f\n', valTrend.mean_change);
-                    fprintf('  - 訓練のボラティリティ: %.4f\n', trainTrend.volatility);
-                    fprintf('  - 検証のボラティリティ: %.4f\n', valTrend.volatility);
-                    
-                    fprintf('\n3. モデルの偏り:\n');
-                    fprintf('  - 完全な偏りが存在: %s\n', mat2str(isCompletelyBiased));
-                    fprintf('  - 学習の進行: %s\n', mat2str(isLearningProgressing));
-                    
-                    fprintf('\n推奨される対策:\n');
-                    if ~isLearningProgressing
-                        fprintf('- 学習率の調整\n');
-                        fprintf('- モデル容量の見直し\n');
-                    end
-                    if isCompletelyBiased
-                        fprintf('- データバランスの改善\n');
-                        fprintf('- クラス重み付けの導入\n');
-                    end
-                end
-        
+                
             catch ME
-                fprintf('\n=== 過学習検証中にエラーが発生 ===\n');
-                fprintf('エラーメッセージ: %s\n', ME.message);
-                fprintf('エラースタック:\n');
+                fprintf('過学習検証でエラーが発生: %s\n', ME.message);
+                fprintf('エラー詳細:\n');
                 disp(getReport(ME, 'extended'));
                 
-                metrics = struct(...
-                    'generalizationGap', Inf, ...
-                    'performanceGap', Inf, ...
-                    'isCompletelyBiased', true, ...
-                    'isLearningProgressing', false, ...
-                    'severity', 'error', ...
-                    'optimalEpoch', 0, ...
-                    'totalEpochs', 0);
+                % エラー時のフォールバック値を設定
+                metrics = obj.createFallbackOverfitMetrics();
                 isOverfit = true;
             end
         end
 
-        function [trainTrend, valTrend] = analyzeLearningCurves(~, trainAcc, valAcc)
-            % 学習曲線の変化率（傾き）とボラティリティ（変動性）を計算する
-            if length(trainAcc) < 2 || length(valAcc) < 2
-                trainTrend = struct('mean_change', NaN, 'volatility', NaN);
-                valTrend = struct('mean_change', NaN, 'volatility', NaN);
+        %% トレーニング情報検証メソッド
+        function validateTrainInfo(~, trainInfo)
+            % トレーニング情報の構造を検証
+            
+            if ~isstruct(trainInfo) 
+                error('trainInfoが構造体ではありません');
+            end
+            
+            if ~isfield(trainInfo, 'History')
+                error('trainInfoにHistoryフィールドがありません');
+            end
+            
+            if ~isfield(trainInfo.History, 'TrainingAccuracy') || ...
+               ~isfield(trainInfo.History, 'ValidationAccuracy')
+                error('Historyに必要な精度フィールドがありません');
+            end
+        end
+
+        %% 学習曲線分析メソッド
+        function [trainTrend, valTrend] = analyzeLearningCurves(obj, trainAcc, valAcc)
+            % 学習曲線を分析し、傾向と特性を抽出
+            %
+            % 入力:
+            %   trainAcc - 学習精度履歴
+            %   valAcc - 検証精度履歴
+            %
+            % 出力:
+            %   trainTrend - 学習精度の傾向分析結果
+            %   valTrend - 検証精度の傾向分析結果
+            
+            fprintf('\n=== 学習曲線の分析 ===\n');
+            
+            try
+                % データの検証
+                if isempty(trainAcc) || isempty(valAcc)
+                    error('学習曲線データが空です');
+                end
+                
+                % NaNチェックと除去
+                trainAcc = trainAcc(~isnan(trainAcc));
+                valAcc = valAcc(~isnan(valAcc));
+                
+                if isempty(trainAcc) || isempty(valAcc)
+                    error('NaN除去後に有効なデータがありません');
+                end
+                
+                % エポック数の取得
+                numEpochs = length(trainAcc);
+                
+                % 移動平均の計算（適応的なウィンドウサイズ）
+                windowSize = min(5, floor(numEpochs/3));
+                windowSize = max(windowSize, 1);  % 最小値を保証
+                
+                trainSmooth = movmean(trainAcc, windowSize);
+                valSmooth = movmean(valAcc, windowSize);
+                
+                % 変化率の計算
+                if length(trainSmooth) > 1
+                    trainDiff = diff(trainSmooth);
+                    valDiff = diff(valSmooth);
+                else
+                    trainDiff = 0;
+                    valDiff = 0;
+                end
+                
+                % トレンド指標の計算
+                trainTrend = struct(...
+                    'mean_change', mean(trainDiff), ...
+                    'volatility', std(trainDiff), ...
+                    'increasing_ratio', sum(trainDiff > 0) / max(length(trainDiff), 1), ...
+                    'plateau_detected', detectPlateau(obj, trainSmooth), ...
+                    'convergence_epoch', estimateConvergenceEpoch(obj, trainSmooth) ...
+                );
+                
+                valTrend = struct(...
+                    'mean_change', mean(valDiff), ...
+                    'volatility', std(valDiff), ...
+                    'increasing_ratio', sum(valDiff > 0) / max(length(valDiff), 1), ...
+                    'plateau_detected', detectPlateau(obj, valSmooth), ...
+                    'convergence_epoch', estimateConvergenceEpoch(obj, valSmooth) ...
+                );
+                
+                % 詳細な分析結果の表示
+                fprintf('学習精度の傾向:\n');
+                fprintf('  - 平均変化率: %.4f/エポック\n', trainTrend.mean_change);
+                fprintf('  - 変動性: %.4f\n', trainTrend.volatility);
+                fprintf('  - 上昇率: %.1f%%\n', trainTrend.increasing_ratio*100);
+                fprintf('  - プラトー検出: %s\n', string(trainTrend.plateau_detected));
+                fprintf('  - 収束エポック: %d/%d\n', trainTrend.convergence_epoch, numEpochs);
+                
+                fprintf('検証精度の傾向:\n');
+                fprintf('  - 平均変化率: %.4f/エポック\n', valTrend.mean_change);
+                fprintf('  - 変動性: %.4f\n', valTrend.volatility);
+                fprintf('  - 上昇率: %.1f%%\n', valTrend.increasing_ratio*100);
+                fprintf('  - プラトー検出: %s\n', string(valTrend.plateau_detected));
+                fprintf('  - 収束エポック: %d/%d\n', valTrend.convergence_epoch, numEpochs);
+                
+            catch ME
+                fprintf('学習曲線分析でエラーが発生: %s\n', ME.message);
+                
+                % エラー時のフォールバック値を設定
+                trainTrend = struct('mean_change', 0, 'volatility', 0, 'increasing_ratio', 0, ...
+                    'plateau_detected', false, 'convergence_epoch', 0);
+                valTrend = struct('mean_change', 0, 'volatility', 0, 'increasing_ratio', 0, ...
+                    'plateau_detected', false, 'convergence_epoch', 0);
+            end
+        end
+        
+        %% プラトー検出メソッド
+        function isPlateau = detectPlateau(~, smoothedCurve)
+            % 学習曲線でのプラトー（停滞）状態を検出
+            %
+            % 入力:
+            %   smoothedCurve - 平滑化された学習曲線
+            %
+            % 出力:
+            %   isPlateau - プラトー検出フラグ
+            
+            % 最小必要長のチェック
+            if length(smoothedCurve) < 5
+                isPlateau = false;
                 return;
             end
             
-            % 各エポック間の変化量を計算
-            trainDiff = diff(trainAcc);
-            valDiff = diff(valAcc);
+            % 後半部分の変化率を分析
+            halfLength = max(3, floor(length(smoothedCurve)/2));
+            lastSegment = smoothedCurve(end-halfLength+1:end);
+            segmentDiff = diff(lastSegment);
             
-            % 平均変化量と標準偏差（ボラティリティ）を算出
-            trainTrend.mean_change = mean(trainDiff);
-            trainTrend.volatility = std(trainDiff);
-            
-            valTrend.mean_change = mean(valDiff);
-            valTrend.volatility = std(valDiff);
-        end
-    
-        function [optimalEpoch, totalEpochs] = findOptimalEpoch(~, valAcc)
-            % 検証精度が最大となるエポックを最適エポックとして返す
-            totalEpochs = length(valAcc);
-            [~, optimalEpoch] = max(valAcc);
+            % 変化が非常に小さい場合はプラトーと見なす
+            isPlateau = mean(abs(segmentDiff)) < 0.001;
         end
 
-        %% 過学習の重症度判定
-        function severity = determineOverfittingSeverity(~, perfGap, isCompletelyBiased, isLearningProgressing)
-            if isCompletelyBiased
-                severity = 'critical';
-            elseif ~isLearningProgressing
-                severity = 'failed';
-            elseif perfGap > 15
-                severity = 'severe';
-            elseif perfGap > 8
-                severity = 'moderate';
-            elseif perfGap > 5
-                severity = 'mild';
+        %% 収束エポック推定メソッド
+        function convergenceEpoch = estimateConvergenceEpoch(~, smoothedCurve)
+            % 学習が収束したエポックを推定
+            %
+            % 入力:
+            %   smoothedCurve - 平滑化された学習曲線
+            %
+            % 出力:
+            %   convergenceEpoch - 推定収束エポック
+            
+            % 最小必要長のチェック
+            if length(smoothedCurve) < 5
+                convergenceEpoch = length(smoothedCurve);
+                return;
+            end
+            
+            % 曲線の変化率を計算
+            diffValues = abs(diff(smoothedCurve));
+            threshold = 0.001;  % 収束判定の閾値
+            
+            % 連続する数ポイントで閾値以下を検出
+            convergedIdx = find(diffValues < threshold, 3, 'first');
+            
+            if length(convergedIdx) >= 3 && (convergedIdx(3) - convergedIdx(1)) == 2
+                % 3ポイント連続で変化が小さい場合
+                convergenceEpoch = convergedIdx(1) + 1;  % +1は差分からインデックスへの調整
+            else
+                % 収束点が見つからない場合は終点を返す
+                convergenceEpoch = length(smoothedCurve);
+            end
+        end
+
+        %% 最適エポック検出メソッド
+        function [optimalEpoch, totalEpochs] = findOptimalEpoch(~, valAcc)
+            % 検証精度に基づいて最適なエポックを特定
+            %
+            % 入力:
+            %   valAcc - 検証精度履歴
+            %
+            % 出力:
+            %   optimalEpoch - 最適エポック
+            %   totalEpochs - 総エポック数
+            
+            try
+                totalEpochs = length(valAcc);
+                [~, optimalEpoch] = max(valAcc);
+                
+                % 最適エポックが最後のエポックの場合、改善の余地がある可能性
+                if optimalEpoch == totalEpochs
+                    fprintf('警告: 最適エポックが最終エポックと一致。より長い学習が有益かもしれません。\n');
+                end
+        
+            catch ME
+                fprintf('最適エポック検出でエラーが発生: %s\n', ME.message);
+                optimalEpoch = 0;
+                totalEpochs = 0;
+            end
+        end
+
+        %% 検証-テスト精度ギャップ分析メソッド
+        function [isOverfit, metrics] = validateTestValidationGap(~, valAccHistory, testAcc, dataSize)
+            % 検証精度とテスト精度の差を統計的に評価
+            %
+            % 入力:
+            %   valAccHistory - 検証精度の履歴
+            %   testAcc - テスト精度
+            %   dataSize - データサイズ（サンプル数）
+            %
+            % 出力:
+            %   isOverfit - 過学習の有無（論理値）
+            %   metrics - 詳細な評価メトリクス
+
+            % NaNチェックを追加
+            if isempty(valAccHistory) || all(isnan(valAccHistory))
+                fprintf('警告: 有効な検証精度履歴がありません\n');
+                metrics = struct(...
+                    'rawGap', NaN, ...
+                    'normalizedGap', NaN, ...
+                    'adjustedGap', NaN, ...
+                    'meanValAcc', NaN, ...
+                    'stdValAcc', NaN, ...
+                    'testAcc', testAcc, ...
+                    'severity', 'unknown' ...
+                );
+                isOverfit = true;
+                return;
+            end
+            
+            % NaNを除去
+            valAccHistory = valAccHistory(~isnan(valAccHistory));
+            
+            if isempty(valAccHistory)
+                fprintf('警告: NaN除去後に有効なデータがありません\n');
+                metrics = struct(...
+                    'rawGap', NaN, ...
+                    'normalizedGap', NaN, ...
+                    'adjustedGap', NaN, ...
+                    'meanValAcc', NaN, ...
+                    'stdValAcc', NaN, ...
+                    'testAcc', testAcc, ...
+                    'severity', 'unknown' ...
+                );
+                isOverfit = true;
+                return;
+            end
+
+            % 安定区間の計算（最低5ポイント、または全データの30%のいずれか大きい方）
+            minStablePoints = min(5, length(valAccHistory));
+            stableIdx = max(1, length(valAccHistory) - minStablePoints + 1):length(valAccHistory);
+            stableValAcc = valAccHistory(stableIdx);
+            
+            % 統計量の計算
+            meanValAcc = mean(stableValAcc);
+            stdValAcc = std(stableValAcc);
+            
+            % ゼロ除算防止
+            if stdValAcc < 0.001
+                stdValAcc = 0.001; 
+            end
+            
+            % スケールされたギャップ計算（データサイズで調整）
+            % 小さいデータセットでは大きなギャップが生じやすい
+            scaleFactor = min(1, sqrt(dataSize / 1000));  % データサイズに基づく調整
+            
+            % 正規化された差（z-スコア的アプローチ）
+            normalizedGap = abs(meanValAcc - testAcc) / stdValAcc;
+            
+            % スケール調整されたギャップ
+            adjustedGap = normalizedGap * scaleFactor;
+            
+            % 過学習の判定（調整されたギャップに基づく）
+            if adjustedGap > 3
+                severity = 'critical';      % 3標準偏差以上
+            elseif adjustedGap > 2
+                severity = 'severe';        % 2標準偏差以上
+            elseif adjustedGap > 1.5
+                severity = 'moderate';      % 1.5標準偏差以上
+            elseif adjustedGap > 1
+                severity = 'mild';          % 1標準偏差以上
             else
                 severity = 'none';
             end
+            
+            % 結果の格納
+            metrics = struct(...
+                'rawGap', abs(meanValAcc - testAcc), ...
+                'normalizedGap', normalizedGap, ...
+                'adjustedGap', adjustedGap, ...
+                'meanValAcc', meanValAcc, ...
+                'stdValAcc', stdValAcc, ...
+                'testAcc', testAcc, ...
+                'severity', severity ...
+            );
+            
+            isOverfit = ~strcmp(severity, 'none');
+            
+            % 結果の表示
+            fprintf('\n=== 検証-テスト精度ギャップ分析 ===\n');
+            fprintf('  平均検証精度: %.2f%% (±%.2f%%)\n', meanValAcc, stdValAcc);
+            fprintf('  テスト精度: %.2f%%\n', testAcc);
+            fprintf('  基本ギャップ: %.2f%%\n', metrics.rawGap);
+            fprintf('  正規化ギャップ: %.2f (スケーリング後: %.2f)\n', normalizedGap, adjustedGap);
+            fprintf('  判定結果: %s\n', severity);
+        end
+
+        %% 分類バイアス検出メソッド
+        function isCompletelyBiased = detectClassificationBias(~, testMetrics)
+            % 混同行列から分類バイアスを検出
+            %
+            % 入力:
+            %   testMetrics - 評価メトリクス
+            %
+            % 出力:
+            %   isCompletelyBiased - 完全なバイアスの有無
+            
+            isCompletelyBiased = false;
+    
+            if isfield(testMetrics, 'confusionMat')
+                cm = testMetrics.confusionMat;
+                
+                % 各実際のクラス（行）のサンプル数を確認
+                rowSums = sum(cm, 2);
+                missingActual = any(rowSums == 0);
+                
+                % 各予測クラス（列）の予測件数を確認
+                colSums = sum(cm, 1);
+                missingPredicted = any(colSums == 0);
+                
+                % すべての予測が1クラスに集中しているかを検出
+                predictedClassCount = sum(colSums > 0);
+                
+                % いずれかが true ならば、全く現れないクラスがあると判断
+                isCompletelyBiased = missingActual || missingPredicted || predictedClassCount <= 1;
+                
+                if isCompletelyBiased
+                    fprintf('\n警告: 分類に完全な偏りが検出されました\n');
+                    fprintf('  - 分類された実際のクラス数: %d / %d\n', sum(rowSums > 0), size(cm, 1));
+                    fprintf('  - 予測されたクラス数: %d / %d\n', predictedClassCount, size(cm, 2));
+                    
+                    % 混同行列の出力
+                    fprintf('  混同行列:\n');
+                    disp(cm);
+                end
+            end
+        end
+        
+        %% フォールバック過学習メトリクス作成メソッド
+        function metrics = createFallbackOverfitMetrics(~)
+            % エラー発生時のフォールバックメトリクスを作成
+            
+            metrics = struct(...
+                'performanceGap', Inf, ...
+                'isCompletelyBiased', true, ...
+                'isLearningProgressing', false, ...
+                'validationTrend', struct('mean_change', 0, 'volatility', 0, 'increasing_ratio', 0), ...
+                'trainingTrend', struct('mean_change', 0, 'volatility', 0, 'increasing_ratio', 0), ...
+                'severity', 'error', ...
+                'optimalEpoch', 0, ...
+                'totalEpochs', 0);
         end
 
         %% 性能指標の更新
         function updatePerformanceMetrics(obj, testMetrics)
+            % 評価結果から性能メトリクスを更新
             obj.performance = testMetrics;
         end
+        
+        %% GPU使用状況確認メソッド
+        function checkGPUMemory(obj)
+            % GPU使用状況の確認とメモリ使用率の監視
+            
+            if obj.useGPU
+                try
+                    device = gpuDevice();
+                    totalMem = device.TotalMemory / 1e9;  % GB
+                    availMem = device.AvailableMemory / 1e9;  % GB
+                    usedMem = totalMem - availMem;
+                    
+                    % メモリ使用情報の更新
+                    obj.gpuMemory.total = totalMem;
+                    obj.gpuMemory.used = usedMem;
+                    obj.gpuMemory.peak = max(obj.gpuMemory.peak, usedMem);
+                    
+                    fprintf('GPU使用状況: %.2f/%.2f GB (%.1f%%)\n', ...
+                        usedMem, totalMem, (usedMem/totalMem)*100);
+                    
+                    % メモリ使用率が高い場合は警告と対応
+                    if usedMem/totalMem > 0.8
+                        warning('GPU使用率が80%%を超えています。パフォーマンスに影響する可能性があります。');
+                        
+                        % 適応的なバッチサイズ調整
+                        if obj.params.classifier.lstm.training.miniBatchSize > 32
+                            newBatchSize = max(16, floor(obj.params.classifier.lstm.training.miniBatchSize / 2));
+                            fprintf('高メモリ使用率のため、バッチサイズを%dから%dに削減します\n', ...
+                                obj.params.classifier.lstm.training.miniBatchSize, newBatchSize);
+                            obj.params.classifier.lstm.training.miniBatchSize = newBatchSize;
+                        end
+                    end
+                catch ME
+                    fprintf('GPUメモリチェックでエラー: %s', ME.message);
+                end
+            end
+        end
+        
+        %% GPUメモリ解放メソッド
+        function resetGPUMemory(obj)
+            % GPUメモリのリセットと解放
+            
+            if obj.useGPU
+                try
+                    % GPUデバイスのリセット
+                    currentDevice = gpuDevice();
+                    reset(currentDevice);
+                    
+                    % リセット後のメモリ状況
+                    availMem = currentDevice.AvailableMemory / 1e9;  % GB
+                    totalMem = currentDevice.TotalMemory / 1e9;  % GB
+                    fprintf('GPUメモリをリセットしました (利用可能: %.2f/%.2f GB)\n', ...
+                        availMem, totalMem);
+                        
+                    % 使用状況の更新
+                    obj.gpuMemory.used = totalMem - availMem;
+                    
+                catch ME
+                    fprintf('GPUメモリのリセットに失敗: %s', ME.message);
+                end
+            end
+        end
 
-        %% 結果の表示
+        %% 結果構造体構築メソッド
+        function results = buildResultsStruct(obj, lstmModel, testMetrics, trainInfo, ...
+            crossValidationResults, normParams)
+            % 結果構造体の構築
+            
+            results = struct(...
+                'model', lstmModel, ...
+                'performance', struct(...
+                    'overallAccuracy', testMetrics.accuracy, ...
+                    'crossValidation', struct(...
+                        'accuracy', crossValidationResults.meanAccuracy, ...
+                        'std', crossValidationResults.stdAccuracy ...
+                    ), ...
+                    'precision', [], ...
+                    'recall', [], ...
+                    'f1score', [], ...
+                    'auc', [], ...
+                    'confusionMatrix', testMetrics.confusionMat ...
+                ), ...
+                'trainInfo', trainInfo, ...
+                'overfitting', obj.overfitMetrics, ...
+                'normParams', normParams ...
+            );
+            
+            % クラスごとの性能メトリクスの追加（存在する場合）
+            if isfield(testMetrics, 'classwise') && ~isempty(testMetrics.classwise)
+                % 1クラス目の値をデフォルト値として使用
+                results.performance.precision = testMetrics.classwise(1).precision;
+                results.performance.recall = testMetrics.classwise(1).recall;
+                results.performance.f1score = testMetrics.classwise(1).f1score;
+            end
+            
+            % AUCの追加（存在する場合）
+            if isfield(testMetrics, 'auc')
+                results.performance.auc = testMetrics.auc;
+            end
+        end
+        
+        %% 結果表示メソッド
         function displayResults(obj)
+            % 総合的な結果サマリーの表示
+            
             try
-                fprintf('\n=== LSTM Classification Results ===\n');
+                fprintf('\n=== LSTM分類結果サマリー ===\n');
+                
                 if ~isempty(obj.performance)
-                    fprintf('Overall Accuracy: %.2f%%\n', obj.performance.accuracy * 100);
+                    % 精度情報
+                    fprintf('全体精度: %.2f%%\n', obj.performance.accuracy * 100);
+
                     if isfield(obj.performance, 'auc')
                         fprintf('AUC: %.3f\n', obj.performance.auc);
                     end
+
+                    % 混同行列
                     if ~isempty(obj.performance.confusionMat)
-                        fprintf('\nConfusion Matrix:\n');
+                        fprintf('\n混同行列:\n');
                         disp(obj.performance.confusionMat);
                     end
-                    fprintf('\nClass-wise Performance:\n');
-                    for i = 1:length(obj.performance.classwise)
-                        fprintf('Class %d:\n', i);
-                        fprintf('  Precision: %.2f%%\n', obj.performance.classwise(i).precision * 100);
-                        fprintf('  Recall: %.2f%%\n', obj.performance.classwise(i).recall * 100);
-                        fprintf('  F1-Score: %.2f%%\n', obj.performance.classwise(i).f1score * 100);
+
+                    % クラスごとの性能
+                    if isfield(obj.performance, 'classwise') && ~isempty(obj.performance.classwise)
+                        fprintf('\nクラスごとの性能:\n');
+                        for i = 1:length(obj.performance.classwise)
+                            fprintf('クラス %d:\n', i);
+                            fprintf('  - 精度: %.2f%%\n', ...
+                                obj.performance.classwise(i).precision * 100);
+                            fprintf('  - 再現率: %.2f%%\n', ...
+                                obj.performance.classwise(i).recall * 100);
+                            fprintf('  - F1スコア: %.2f\n', ...
+                                obj.performance.classwise(i).f1score);
+                        end
                     end
                 end
 
-                if ~isempty(obj.overfitMetrics)
-                    fprintf('\nOverfitting Analysis:\n');
-                    fprintf('Performance Gap: %.2f%%\n', obj.overfitMetrics.performanceGap * 100);
-                    fprintf('Severity: %s\n', obj.overfitMetrics.severity);
+                % 過学習分析結果の表示
+                if ~isempty(obj.overfitMetrics) && isstruct(obj.overfitMetrics)
+                    fprintf('\n過学習分析:\n');
+                    fprintf('  - 性能ギャップ: %.2f%%\n', obj.overfitMetrics.performanceGap);
+                    fprintf('  - 重大度: %s\n', obj.overfitMetrics.severity);
+                    
+                    fprintf('\n学習カーブ分析:\n');
+                    
+                    % 検証傾向
                     if isfield(obj.overfitMetrics, 'validationTrend')
-                        fprintf('\nValidation Trend:\n');
-                        fprintf('Mean Change: %.4f\n', obj.overfitMetrics.validationTrend.mean_change);
-                        fprintf('Volatility: %.4f\n', obj.overfitMetrics.validationTrend.volatility);
+                        trend = obj.overfitMetrics.validationTrend;
+                        fprintf('  - 検証平均変化率: %.4f\n', trend.mean_change);
+                        fprintf('  - 検証変動性: %.4f\n', trend.volatility);
+                        fprintf('  - 検証上昇率: %.2f%%\n', trend.increasing_ratio * 100);
+                    end
+                    
+                    % 最適エポック
+                    if isfield(obj.overfitMetrics, 'optimalEpoch') && ...
+                       isfield(obj.overfitMetrics, 'totalEpochs')
+                        fprintf('  - 最適エポック: %d/%d (%.2f%%)\n', ...
+                            obj.overfitMetrics.optimalEpoch, ...
+                            obj.overfitMetrics.totalEpochs, ...
+                            (obj.overfitMetrics.optimalEpoch / ...
+                             max(obj.overfitMetrics.totalEpochs, 1)) * 100);
                     end
                 end
 
             catch ME
-                warning(ME.identifier, '%s', ME.message);
+                fprintf('結果表示でエラーが発生: %s', ME.message);
             end
         end
     end

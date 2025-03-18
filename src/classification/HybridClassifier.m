@@ -1,26 +1,45 @@
 classdef HybridClassifier < handle
+    %% HybridClassifier - CNN+LSTM統合ハイブリッド分類器
+    %
+    % このクラスはEEGデータに対してCNNとLSTMを組み合わせた
+    % ハイブリッド深層学習モデルを実装します。時空間的特徴の両方を
+    % 効果的に捉え、高精度な分類を実現します。
+    %
+    % 主な機能:
+    %   - EEGデータの前処理と変換
+    %   - CNN・LSTMの並列学習とモデル統合
+    %   - 学習済みモデルによるオンライン予測
+    %   - 過学習検出と詳細な性能評価
+    %   - ハイパーパラメータの最適化サポート
+    %
+    % 使用例:
+    %   params = getConfig('epocx');
+    %   hybrid = HybridClassifier(params);
+    %   results = hybrid.trainHybrid(processedData, processedLabel);
+    %   [label, score] = hybrid.predictOnline(newData, results.model);
+    
     properties (Access = private)
-        params              % パラメータ設定
-        net                 % ハイブリッドネットワーク（特徴抽出器）
-        adaBoostModel       % AdaBoost分類器
-        isEnabled           % 有効/無効フラグ
-        isInitialized       % 初期化フラグ
-        useGPU              % GPU使用フラグ
-        
+        params              % システム設定パラメータ
+        netCNN             % 学習済みCNNネットワーク
+        netLSTM            % 学習済みLSTMネットワーク
+        adaModel           % 学習済みAdaBoost統合分類器
+        isEnabled          % 有効/無効フラグ
+        isInitialized      % 初期化フラグ
+        useGPU             % GPU使用の有無
+
         % 学習進捗の追跡用
         trainingHistory     % 学習履歴
         validationHistory   % 検証履歴
         bestValAccuracy     % 最良の検証精度
         patienceCounter     % Early Stopping用カウンター
         currentEpoch        % 現在のエポック
-        lastEpoch
-        
+
         % 過学習監視用
         overfitMetrics      % 過学習メトリクス
 
         % コンポーネント
-        dataAugmenter
-        normalizer
+        dataAugmenter       % データ拡張処理
+        normalizer          % 正規化処理
     end
     
     properties (Access = public)
@@ -28,585 +47,294 @@ classdef HybridClassifier < handle
     end
     
     methods (Access = public)
-        % コンストラクタ
+        %% コンストラクタ - 初期化処理
         function obj = HybridClassifier(params)
+            % HybridClassifierのインスタンスを初期化
+            %
+            % 入力:
+            %   params - 設定パラメータ（getConfig関数から取得）
+            
             obj.params = params;
             obj.isEnabled = params.classifier.hybrid.enable;
             obj.isInitialized = false;
-            obj.initializeProperties();
             obj.useGPU = params.classifier.hybrid.gpu;
+            
+            % プロパティの初期化
+            obj.initializeProperties();
+            
+            % コンポーネントの初期化
             obj.dataAugmenter = DataAugmenter(params);
             obj.normalizer = EEGNormalizer(params);
+            
+            % GPU利用可能性のチェック
+            if obj.useGPU
+                try
+                    gpuInfo = gpuDevice();
+                    fprintf('GPUが検出されました: %s (メモリ: %.2f GB)\n', ...
+                        gpuInfo.Name, gpuInfo.TotalMemory/1e9);
+                catch
+                    warning('GPU使用が指定されていますが、GPUが利用できません。CPUで実行します。');
+                    obj.useGPU = false;
+                end
+            end
         end
-        
-        % ハイブリッドモデル学習メソッド
-        function results = trainHybrid(obj, processedData, processedLabel)            
-            try
-                fprintf('\n=== Starting Hybrid Training with AdaBoost ===\n');
 
-                % データ分割
-                [trainData, trainLabels, valData, valLabels, testData, testLabels] = ...
-                    obj.splitDataset(processedData, processedLabel);
+        %% ハイブリッドモデル学習メソッド
+        function results = trainHybrid(obj, processedData, processedLabel)
+            % EEGデータを使用してハイブリッドモデルを学習
+            %
+            % 入力:
+            %   processedData - 前処理済みEEGデータ [チャンネル x サンプル x エポック]
+            %   processedLabel - クラスラベル [エポック x 1]
+            %
+            % 出力:
+            %   results - 学習結果を含む構造体（モデル、性能評価、正規化パラメータなど）
+            
+            if ~obj.isEnabled
+                error('ハイブリッド分類器は設定で無効化されています');
+            end
 
-                % 学習データのみ拡張
-                if obj.params.signal.preprocessing.augmentation.enable
-                    [trainData, trainLabels, augInfo] = obj.dataAugmenter.augmentData(trainData, trainLabels);
-                    fprintf('訓練データを拡張しました:\n');
-                    fprintf('  訓練データ: %d サンプル\n', length(trainData));
+            try                
+                fprintf('\n=== ハイブリッドモデル学習処理を開始 ===\n');
+                
+                % データの次元を確認し、必要に応じて調整
+                [processedData, processInfo] = obj.validateAndPrepareData(processedData);
+                fprintf('データ検証: %s\n', processInfo);
+                
+                % データを学習・検証・テストセットに分割
+                [trainData, trainLabels, valData, valLabels, testData, testLabels] = obj.splitDataset(processedData, processedLabel);
+
+                % 学習データの拡張と正規化処理
+                [trainData, trainLabels, normParams] = obj.preprocessTrainingData(trainData, trainLabels);
+                
+                % 検証・テストデータも同じ正規化パラメータで処理
+                valData = obj.normalizer.normalizeOnline(valData, normParams);
+                testData = obj.normalizer.normalizeOnline(testData, normParams);
+                
+                % CNN用にデータ形式を変換
+                prepCnnTrainData = obj.prepareDataForCNN(trainData);
+                prepCnnValData = obj.prepareDataForCNN(valData);
+                prepCnnTestData = obj.prepareDataForCNN(testData);
+                
+                % LSTM用にデータ形式を変換
+                prepLstmTrainData = obj.prepareDataForLSTM(trainData);
+                prepLstmValData = obj.prepareDataForLSTM(valData);
+                prepLstmTestData = obj.prepareDataForLSTM(testData);
+                
+                % モデルの学習
+                [hybridModel, trainInfo] = obj.trainHybridModel( ...
+                    prepCnnTrainData, prepLstmTrainData, trainLabels, ...
+                    prepCnnValData, prepLstmValData, valLabels);
+                
+                % テストデータでの最終評価
+                testMetrics = obj.evaluateModel(hybridModel, prepCnnTestData, prepLstmTestData, testLabels);
+                
+                % 過学習の分析
+                [isOverfit, obj.overfitMetrics] = obj.validateOverfitting(trainInfo, testMetrics);
+                
+                if isOverfit
+                    fprintf('\n警告: モデルに過学習の兆候が検出されました (%s)\n', obj.overfitMetrics.severity);
                 end
 
-                % 正規化
-                if obj.params.signal.preprocessing.normalize.enable
-                    [trainData, normParams] = obj.normalizer.normalize(trainData);
-
-                    % 検証データと評価データにも同じ正規化パラメータで正規化
-                    valData = obj.normalizer.normalizeOnline(valData, normParams);
-                    testData = obj.normalizer.normalizeOnline(testData, normParams);
-                end
-
-                % データ前処理
-                prepTrainCNN = obj.prepareDataForCNN(trainData);
-                prepTrainLSTM = obj.prepareDataForLSTM(trainData);
-                prepValCNN = obj.prepareDataForCNN(valData);
-                prepValLSTM = obj.prepareDataForLSTM(valData);
-                prepTestCNN = obj.prepareDataForCNN(testData);
-                prepTestLSTM = obj.prepareDataForLSTM(testData);
-                
-                % ラベルを列ベクトルに変換
-                trainLabels = trainLabels(:);
-                valLabels = valLabels(:);
-                testLabels = testLabels(:);
-                
-                % 入力サイズの決定
-                cnnInputSize = size(prepTrainCNN(:,:,:,1));
-                lstmInputSize = size(prepTrainLSTM{1},1);
-                
-                % ステップ1: 特徴抽出器としてのハイブリッドモデルの学習
-                fprintf('\n--- Step 1: Training Hybrid Feature Extractor ---\n');
-                [featureExtractor, trainInfo] = obj.trainFeatureExtractor(...
-                    prepTrainCNN, prepTrainLSTM, trainLabels, ...
-                    prepValCNN, prepValLSTM, valLabels, cnnInputSize, lstmInputSize);
-                
-                % 特徴抽出
-                fprintf('\n--- Extracting Features for AdaBoost ---\n');
-                trainFeatures = obj.extractFeatures(featureExtractor, prepTrainCNN, prepTrainLSTM);
-                valFeatures = obj.extractFeatures(featureExtractor, prepValCNN, prepValLSTM);
-                testFeatures = obj.extractFeatures(featureExtractor, prepTestCNN, prepTestLSTM);
-                
-                % ステップ2: AdaBoostモデルの学習
-                fprintf('\n--- Step 2: Training AdaBoost Classifier ---\n');
-                adaBoostModel = obj.trainAdaBoost(trainFeatures, trainLabels);
-                
-                % AdaBoostモデルの評価
-                testPredictions = predict(adaBoostModel, testFeatures);
-                testAccuracy = sum(testPredictions == testLabels) / length(testLabels);
-                fprintf('AdaBoost Test Accuracy: %.2f%%\n', testAccuracy * 100);
-                
-                % 混同行列の計算
-                confMat = confusionmat(testLabels, testPredictions);
-                
-                % クラスごとの性能評価
-                uniqueClasses = unique(testLabels);
-                classwiseMetrics = struct('precision', zeros(1, length(uniqueClasses)), ...
-                                        'recall', zeros(1, length(uniqueClasses)), ...
-                                        'f1score', zeros(1, length(uniqueClasses)));
-                                    
-                for i = 1:length(uniqueClasses)
-                    classIdx = (testLabels == uniqueClasses(i));
-                    TP = sum(testPredictions(classIdx) == uniqueClasses(i));
-                    FP = sum(testPredictions == uniqueClasses(i)) - TP;
-                    FN = sum(classIdx) - TP;
-                    
-                    precision = TP / (TP + FP);
-                    recall = TP / (TP + FN);
-                    f1score = 2 * (precision * recall) / (precision + recall);
-                    
-                    classwiseMetrics(i).precision = precision;
-                    classwiseMetrics(i).recall = recall;
-                    classwiseMetrics(i).f1score = f1score;
-                end
-                
-                % 過学習の検証
-                [isOverfit, obj.overfitMetrics] = obj.validateOverfitting(trainInfo, struct('accuracy', testAccuracy));
-                
-                % モデルの保存
-                obj.net = featureExtractor;
-                obj.adaBoostModel = adaBoostModel;
-                
-                % 結果の構築
-                results = struct(...
-                    'model', struct('featureExtractor', featureExtractor, 'adaBoostModel', adaBoostModel), ...
-                    'performance', struct(...
-                        'overallAccuracy', testAccuracy, ...
-                        'crossValidation', struct('accuracy', [], 'std', []), ...
-                        'precision', classwiseMetrics(1).precision, ...
-                        'recall', classwiseMetrics(1).recall, ...
-                        'f1score', classwiseMetrics(1).f1score, ...
-                        'confusionMatrix', confMat ...
-                    ), ...
-                    'trainInfo', trainInfo, ...
-                    'overfitting', obj.overfitMetrics, ...
-                    'normParams', normParams ...
-                );
-                
                 % 性能指標の更新
-                obj.performance = results.performance;
+                obj.updatePerformanceMetrics(testMetrics);
                 
-                % 結果の表示
+                % 交差検証の実行
+                crossValidationResults = obj.performCrossValidationIfEnabled(processedData, processedLabel);
+                
+                % 結果構造体の構築
+                results = obj.buildResultsStruct(hybridModel, testMetrics, trainInfo, ...
+                    crossValidationResults, normParams);
+
+                % 結果のサマリー表示
                 obj.displayResults();
                 
-                % GPUメモリの解放
-                if obj.useGPU
-                    reset(gpuDevice);
-                end
-                
+                % 使用リソースのクリーンアップ
+                obj.resetGPUMemory();
+                fprintf('\n=== ハイブリッドモデル学習処理が完了しました ===\n');
+
             catch ME
-                fprintf('\n=== Error in Hybrid Training ===\n');
-                fprintf('Error message: %s\n', ME.message);
-                fprintf('Error stack:\n');
-                disp(getReport(ME, 'extended'));
-                
-                if obj.useGPU
-                    reset(gpuDevice);
+                % エラー発生時の詳細情報出力
+                fprintf('\n=== ハイブリッドモデル学習中にエラーが発生しました ===\n');
+                fprintf('エラーメッセージ: %s\n', ME.message);
+                fprintf('エラー発生場所:\n');
+                for i = 1:length(ME.stack)
+                    fprintf('  ファイル: %s\n  行: %d\n  関数: %s\n\n', ...
+                        ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
                 end
-                
+
+                % クリーンアップ処理
+                obj.resetGPUMemory();
                 rethrow(ME);
             end
         end
-        
-        % オンライン予測メソッド
-        function [label, score] = predictOnline(obj, data, model)
+
+        %% オンライン予測メソッド
+        function [label, score] = predictOnline(obj, data, hybridModel)
+            % 学習済みモデルを使用して新しいEEGデータを分類
+            %
+            % 入力:
+            %   data - 分類するEEGデータ [チャンネル x サンプル]
+            %   hybridModel - 学習済みハイブリッドモデル
+            %
+            % 出力:
+            %   label - 予測クラスラベル
+            %   score - 予測確率スコア
+            
             if ~obj.isEnabled
-                error('Hybrid classifier is disabled');
+                error('ハイブリッド分類器は設定で無効化されています');
             end
-
+        
             try
-                % モデルを解凍（featureExtractorとadaBoostModelを取得）
-                if isstruct(model)
-                    featureExtractor = model.featureExtractor;
-                    adaBoostModel = model.adaBoostModel;
+                % 正規化パラメータを使用してデータを正規化
+                if isfield(hybridModel, 'normParams') && ~isempty(hybridModel.normParams)
+                    data = obj.normalizer.normalizeOnline(data, hybridModel.normParams);
                 else
-                    error('Invalid model structure. Expected struct with featureExtractor and adaBoostModel fields');
+                    warning('正規化パラメータが見つかりません。正規化をスキップします。');
+                end
+        
+                % CNN用とLSTM用にデータを変換
+                cnnData = obj.prepareDataForCNN(data);
+                lstmData = obj.prepareDataForLSTM(data);
+                
+                % 各モデルから特徴抽出
+                cnnFeatures = activations(hybridModel.netCNN, cnnData, 'fc_cnn', 'OutputAs', 'rows');
+                
+                % LSTMからの特徴抽出
+                if iscell(lstmData)
+                    lstmFeatures = [];
+                    for i = 1:length(lstmData)
+                        lstmOut = predict(hybridModel.netLSTM, lstmData{i}, 'MiniBatchSize', 1);
+                        
+                        % 最初のサンプルで配列を初期化
+                        if i == 1
+                            lstmFeatures = zeros(length(lstmData), size(lstmOut, 2));
+                        end
+                        
+                        lstmFeatures(i,:) = lstmOut;
+                    end
+                else
+                    lstmOut = predict(hybridModel.netLSTM, lstmData, 'MiniBatchSize', 1);
+                    lstmFeatures = lstmOut;
                 end
                 
-                % 入力が1つの場合は複製
-                if ~iscell(data)
-                    data = {data, data};
-                elseif isscalar(data)
-                    data = {data{1}, data{1}};
-                end
-
-                % もしdata{2}がcellであれば、数値配列を取り出す
-                if iscell(data{2}) && length(data{2}) == 1
-                    data{2} = data{2}{1};
-                end
-
-                % 入力が2次元の場合は、サンプル数1として3次元に変換
-                if ismatrix(data{1})
-                    data{1} = reshape(data{1}, size(data{1},1), size(data{1},2), 1);
-                end
-
-                if ismatrix(data{2})
-                    data{2} = reshape(data{2}, size(data{2},1), size(data{2},2), 1);
-                end
-
-                % データの前処理
-                prepCNN = obj.prepareDataForCNN(data{1});
-                prepLSTM = obj.prepareDataForLSTM(data{2});
-
-                % ステップ1: 特徴を抽出
-                features = obj.extractFeatures(featureExtractor, prepCNN, prepLSTM);
+                % 特徴を結合
+                combinedFeatures = [cnnFeatures, lstmFeatures];
                 
-                % ステップ2: AdaBoostで予測
-                [label, score] = predict(adaBoostModel, features);
-
+                % AdaBoostで最終予測
+                [label, score] = predict(hybridModel.adaModel, combinedFeatures);
+        
             catch ME
-                fprintf('Error in online prediction: %s\n', ME.message);
+                fprintf('Error in hybrid online prediction: %s\n', ME.message);
+                fprintf('Error details:\n');
+                disp(getReport(ME, 'extended'));
                 rethrow(ME);
             end
         end
     end
     
     methods (Access = private)
-        % プロパティの初期化
+        %% プロパティ初期化メソッド
         function initializeProperties(obj)
+            % クラスプロパティの初期化
             obj.trainingHistory = struct('loss', [], 'accuracy', []);
             obj.validationHistory = struct('loss', [], 'accuracy', []);
             obj.bestValAccuracy = 0;
             obj.patienceCounter = 0;
+            obj.currentEpoch = 0;
             obj.overfitMetrics = struct();
         end
         
-        % ハイブリッドレイヤーの構築
-        function lgraph = buildHybridLayers(obj, cnnInputSize, lstmInputSize)
-            try
-                arch = obj.params.classifier.hybrid.architecture;
-                numClasses = arch.numClasses;
-                
-                %% === CNNブランチの構築 ===
-                cnnLayers = [];
-                
-                % 入力層
-                cnnInput = imageInputLayer([cnnInputSize(1) cnnInputSize(2) 1], ...
-                    'Name', 'input_cnn', ...
-                    'Normalization', 'none');
-                cnnLayers = [cnnLayers; cnnInput];
-                
-                % 畳み込み層群
-                convFields = fieldnames(arch.cnn.convLayers);
-                for i = 1:numel(convFields)
-                    convParam = arch.cnn.convLayers.(convFields{i});
-                    convName = sprintf('conv_%d', i);
-                    convLayerObj = convolution2dLayer(convParam.size, convParam.filters, ...
-                        'Stride', convParam.stride, ...
-                        'Padding', convParam.padding, ...
-                        'Name', convName);
-                    cnnLayers = [cnnLayers; convLayerObj];
-                    
-                    % バッチ正規化（オプション）
-                    if arch.batchNorm
-                        bnName = sprintf('bn_%s', convName);
-                        bnLayerObj = batchNormalizationLayer('Name', bnName);
-                        cnnLayers = [cnnLayers; bnLayerObj];
-                    end
-                    
-                    % ReLU層
-                    reluName = sprintf('relu_%d', i);
-                    cnnLayers = [cnnLayers; reluLayer('Name', reluName)];
-                    
-                    % プーリング層
-                    poolField = sprintf('pool%d', i);
-                    if isfield(arch.cnn.poolLayers, poolField)
-                        poolParam = arch.cnn.poolLayers.(poolField);
-                        poolName = sprintf('pool_%d', i);
-                        poolLayerObj = maxPooling2dLayer(poolParam.size, ...
-                            'Stride', poolParam.stride, ...
-                            'Name', poolName);
-                        cnnLayers = [cnnLayers; poolLayerObj];
-                    end
-                    
-                    % ドロップアウト層
-                    dropoutField = sprintf('dropout%d', i);
-                    if isfield(arch.cnn.dropoutLayers, dropoutField)
-                        dropoutRate = arch.cnn.dropoutLayers.(dropoutField);
-                        dropoutName = sprintf('dropout_%d', i);
-                        dropoutLayerObj = dropoutLayer(dropoutRate, 'Name', dropoutName);
-                        cnnLayers = [cnnLayers; dropoutLayerObj];
-                    end
-                end
-                
-                % 全結合層
-                if isfield(arch.cnn, 'fullyConnected')
-                    fcSizes = arch.cnn.fullyConnected;
-                else
-                    fcSizes = 128;
-                end
-                
-                if ~isempty(fcSizes)
-                    for j = 1:length(fcSizes)
-                        fcName = sprintf('fc_cnn_%d', j);
-                        fcLayerObj = fullyConnectedLayer(fcSizes(j), 'Name', fcName);
-                        cnnLayers = [cnnLayers; fcLayerObj];
-                        reluName = sprintf('relu_fc_cnn_%d', j);
-                        cnnLayers = [cnnLayers; reluLayer('Name', reluName)];
-                    end
-                    cnnFeatureSize = fcSizes(end);
-                else
-                    error('CNN fully connected layers not defined.');
-                end
-
-                % リシェイプ層
-                reshapeCNN = ReshapeCNNLayer('reshape_cnn', cnnFeatureSize);
-                reshapeCNN = reshapeCNN.setOutputFormat('SSCB');
-                cnnLayers = [cnnLayers; reshapeCNN];
-                
-                %% === LSTMブランチの構築 ===
-                lstmLayers = [];
-                
-                % シーケンス入力層
-                lstmInputLayerObj = sequenceInputLayer(lstmInputSize, ...
-                    'Name', 'input_lstm', ...
-                    'Normalization', arch.lstm.sequenceInputLayer.normalization);
-                lstmLayers = [lstmLayers; lstmInputLayerObj];
-                
-                % 複数のLSTM層の追加
-                lstmFields = fieldnames(arch.lstm.lstmLayers);
-                for i = 1:numel(lstmFields)
-                    lstmParam = arch.lstm.lstmLayers.(lstmFields{i});
-                    lstmName = sprintf('lstm_%d', i);
-                    lstmLayerObj = lstmLayer(lstmParam.numHiddenUnits, ...
-                        'OutputMode', lstmParam.OutputMode, ...
-                        'Name', lstmName);
-                    lstmLayers = [lstmLayers; lstmLayerObj];
-                    
-                    % バッチ正規化
-                    if arch.batchNorm
-                        bnName = sprintf('bn_%s', lstmName);
-                        bnLayerObj = batchNormalizationLayer('Name', bnName);
-                        lstmLayers = [lstmLayers; bnLayerObj];
-                    end
-                    
-                    % ドロップアウト層
-                    dropoutField = sprintf('dropout%d', i);
-                    if isfield(arch.lstm.dropoutLayers, dropoutField)
-                        dropoutRate = arch.lstm.dropoutLayers.(dropoutField);
-                        dropoutName = sprintf('dropout_%s', lstmName);
-                        dropoutLayerObj = dropoutLayer(dropoutRate, 'Name', dropoutName);
-                        lstmLayers = [lstmLayers; dropoutLayerObj];
-                    end
-                end
-                
-                % LSTM全結合層
-                if isfield(arch.lstm, 'fullyConnected')
-                    lstmFCSize = arch.lstm.fullyConnected;
-                else
-                    lstmFCSize = 128;
-                end
-
-                fcLSTM = fullyConnectedLayer(lstmFCSize, 'Name', 'fc_lstm');
-                reluFCL = reluLayer('Name', 'relu_fc_lstm');
-                lstmLayers = [lstmLayers; fcLSTM; reluFCL];
-                
-                % リシェイプ層
-                reshapeLSTM = ReshapeLSTMLayer('reshape_lstm', lstmFCSize);
-                reshapeLSTM = reshapeLSTM.setOutputFormat('SSCB');
-                lstmLayers = [lstmLayers; reshapeLSTM];
-                
-                %% === マージ層 ===
-                mergeLayers = [];
-                
-                % 特徴量の結合層
-                mergeParams = arch.merge;
-                concatLayer = concatenationLayer(...
-                    mergeParams.concat.dimension, ...
-                    mergeParams.concat.numInputs, ...
-                    'Name', mergeParams.concat.name);
-                mergeLayers = [mergeLayers; concatLayer];
-                
-                % Global Average Pooling
-                if mergeParams.globalPooling.enable
-                    gavgLayer = globalAveragePooling2dLayer('Name', mergeParams.globalPooling.name);
-                    mergeLayers = [mergeLayers; gavgLayer];
-                end
-                
-                % 結合後の全結合層
-                if isfield(mergeParams.fullyConnected, 'layers')
-                    for i = 1:length(mergeParams.fullyConnected.layers)
-                        fcSize = mergeParams.fullyConnected.layers(i).units;
-                        fcName = mergeParams.fullyConnected.layers(i).name;
-                        fcLayer = fullyConnectedLayer(fcSize, 'Name', fcName);
-                        mergeLayers = [mergeLayers; fcLayer];
-                        
-                        if strcmpi(mergeParams.fullyConnected.activation, 'relu')
-                            reluName = sprintf('relu_%s', fcName);
-                            mergeLayers = [mergeLayers; reluLayer('Name', reluName)];
-                        end
-                    end
-                end
-                
-                % ドロップアウト層
-                if mergeParams.dropout.rate > 0
-                    dropoutLayerObj = dropoutLayer(mergeParams.dropout.rate, ...
-                        'Name', mergeParams.dropout.name);
-                    mergeLayers = [mergeLayers; dropoutLayerObj];
-                end
-                
-                % 特徴抽出のための全結合層を最後に追加
-                fcFinal = fullyConnectedLayer(64, 'Name', 'feature_output');
-                mergeLayers = [mergeLayers; fcFinal];
-                    
-                %% === レイヤーグラフの構築と接続 ===
-                lgraph = layerGraph();
-        
-                % 各ブランチのレイヤーを追加
-                lgraph = addLayers(lgraph, cnnLayers);
-                lgraph = addLayers(lgraph, lstmLayers);
-                lgraph = addLayers(lgraph, mergeLayers);
-                
-                % ブランチの接続
-                lgraph = connectLayers(lgraph, 'reshape_cnn', 'concat/in1');
-                lgraph = connectLayers(lgraph, 'reshape_lstm', 'concat/in2');
-                
-                % レイヤーグラフの作成に関するデバッグ情報
-                fprintf('Created layerGraph with %d layers\n', numel(lgraph.Layers));
-                
-                % デバッグ情報の出力
-                fprintf('\nNetwork architecture summary (Feature Extractor):\n');
-                fprintf('CNN branch: %d convolutional layers, final features: %d\n', ...
-                    numel(convFields), cnnFeatureSize);
-                fprintf('LSTM branch: %d LSTM layers, final features: %d\n', ...
-                    numel(lstmFields), lstmFCSize);
-                
-            catch ME
-                fprintf('\nError in buildHybridLayers:\n');
-                fprintf('Error message: %s\n', ME.message);
-                if ~isempty(ME.stack)
-                    fprintf('Error in: %s, Line: %d\n', ME.stack(1).name, ME.stack(1).line);
-                end
-                rethrow(ME);
+        %% データ検証と準備メソッド
+        function [validatedData, infoMsg] = validateAndPrepareData(~, data)
+            % 入力データの検証と適切な形式への変換
+            
+            % データの次元と形状を確認
+            dataSize = size(data);
+            dimCount = ndims(data);
+            
+            if dimCount > 3
+                error('対応していないデータ次元数: %d (最大3次元まで対応)', dimCount);
             end
+            
+            validatedData = data;
+            
+            % 必要に応じてデータ次元を調整
+            if dimCount == 2
+                [channels, samples] = size(data);
+                validatedData = reshape(data, [channels, samples, 1]);
+                infoMsg = sprintf('2次元データを3次元に変換 [%d×%d] → [%d×%d×1]', ...
+                    channels, samples, channels, samples);
+            else
+                [channels, samples, epochs] = size(data);
+                infoMsg = sprintf('3次元データを検証 [%d×%d×%d]', channels, samples, epochs);
+            end
+            
+            % データの妥当性検証
+            validateattributes(validatedData, {'numeric'}, {'finite', 'nonnan'}, ...
+                'validateAndPrepareData', 'data');
+            
+            return;
         end
         
-        % 特徴抽出器学習メソッド
-        function [featureExtractor, trainInfo] = trainFeatureExtractor(obj, trainCNN, trainLSTM, trainLabels, valCNN, valLSTM, valLabels, cnnInputSize, lstmInputSize)
-            try
-                % レイヤーの構築
-                layers = obj.buildHybridLayers(cnnInputSize, lstmInputSize);
-                
-                % データストアの作成
-                trainDS = obj.createHybridDatastore(trainCNN, trainLSTM, categorical(trainLabels));
-                valDS = obj.createHybridDatastore(valCNN, valLSTM, categorical(valLabels));
-                
-                % 学習環境設定
-                executionEnvironment = 'cpu';
-                if obj.useGPU
-                    executionEnvironment = 'gpu';
-                end
-                
-                % トレーニングオプションの設定
-                options = trainingOptions(obj.params.classifier.hybrid.training.optimizer.type, ...
-                    'InitialLearnRate', obj.params.classifier.hybrid.training.optimizer.learningRate, ...
-                    'MaxEpochs', obj.params.classifier.hybrid.training.maxEpochs, ...
-                    'MiniBatchSize', obj.params.classifier.hybrid.training.miniBatchSize, ...
-                    'Shuffle', obj.params.classifier.hybrid.training.shuffle, ...
-                    'Plots', 'none', ...
-                    'Verbose', true, ...
-                    'ExecutionEnvironment', executionEnvironment, ...
-                    'ValidationData', valDS, ...
-                    'ValidationFrequency', obj.params.classifier.hybrid.training.frequency, ...
-                    'ValidationPatience', obj.params.classifier.hybrid.training.patience, ...
-                    'GradientThreshold', 1);
-                
-                % レイヤーグラフにトレーニング用の分類層を追加
-                tempLayers = layers;
-                
-                % 一時的に分類用の層を追加
-                fcFinalClass = fullyConnectedLayer(length(unique(trainLabels)), 'Name', 'fc_final_class');
-                softmaxLayer = softmaxLayer('Name', 'softmax_temp');
-                classLayer = classificationLayer('Name', 'output_temp');
-                
-                tempLayers = addLayers(tempLayers, [fcFinalClass; softmaxLayer; classLayer]);
-                tempLayers = connectLayers(tempLayers, 'feature_output', 'fc_final_class');
-                
-                % モデルの学習
-                fprintf('\nTraining feature extractor network...\n');
-                [tempModel, trainHistory] = trainNetwork(trainDS, tempLayers, options);
-                
-                % 特徴抽出器の取得（最後の分類層を除去）
-                lgraph = layerGraph(tempModel.Layers);
-                
-                % 分類層を削除
-                layersToRemove = {'fc_final_class', 'softmax_temp', 'output_temp'};
-                for i = 1:length(layersToRemove)
-                    if any(strcmp({lgraph.Layers.Name}, layersToRemove{i}))
-                        lgraph = removeLayers(lgraph, layersToRemove{i});
-                    end
-                end
-                
-                % 特徴抽出器モデルを構築
-                featureExtractor = assembleNetwork(lgraph);
-                
-                % トレーニング情報を保存
-                trainInfo = struct('History', trainHistory);
-                
-            catch ME
-                fprintf('\nError in trainFeatureExtractor: %s\n', ME.message);
-                rethrow(ME);
+        %% 学習データの前処理
+        function [procTrainData, procTrainLabels, normParams] = preprocessTrainingData(obj, trainData, trainLabels)
+            % 学習データの拡張と正規化を実行
+            
+            procTrainData = trainData;
+            procTrainLabels = trainLabels;
+            normParams = [];
+            
+            % データ拡張処理
+            if obj.params.classifier.augmentation.enable
+                fprintf('\nデータ拡張を実行...\n');
+                [procTrainData, procTrainLabels, ~] = obj.dataAugmenter.augmentData(trainData, trainLabels);
+                fprintf('  - 拡張前: %d サンプル\n', length(trainLabels));
+                fprintf('  - 拡張後: %d サンプル (%.1f倍)\n', length(procTrainLabels), ... 
+                    length(procTrainLabels)/length(trainLabels));
             end
+            
+            % 正規化処理
+            if obj.params.classifier.normalize.enable
+                [procTrainData, normParams] = obj.normalizer.normalize(procTrainData);
+            end
+            
+            return;
         end
         
-        % 特徴抽出メソッド
-        function features = extractFeatures(obj, featureExtractor, cnnData, lstmData)
-            try
-                % 入力データのバッチサイズを取得
-                if isnumeric(cnnData)
-                    batchSize = size(cnnData, 4);
-                else
-                    batchSize = numel(lstmData);
-                end
-                
-                % 特徴を抽出
-                features = zeros(batchSize, 64);  % feature_output層の出力サイズに合わせる
-                
-                % バッチ処理（メモリ使用量削減のため）
-                batchSize = min(32, batchSize);  % バッチサイズを制限
-                numBatches = ceil(size(features, 1) / batchSize);
-                
-                for i = 1:numBatches
-                    startIdx = (i-1) * batchSize + 1;
-                    endIdx = min(i * batchSize, size(features, 1));
-                    
-                    % バッチデータの準備
-                    if isnumeric(cnnData)
-                        batchCNN = cnnData(:,:,:,startIdx:endIdx);
-                    else
-                        batchCNN = cnnData(startIdx:endIdx);
-                    end
-                    
-                    if iscell(lstmData)
-                        batchLSTM = lstmData(startIdx:endIdx);
-                    else
-                        batchLSTM = lstmData(:,:,startIdx:endIdx);
-                    end
-                    
-                    % 活性化を抽出
-                    batchFeatures = activations(featureExtractor, {batchCNN, batchLSTM}, 'feature_output');
-                    features(startIdx:endIdx, :) = batchFeatures;
-                end
-                
-            catch ME
-                fprintf('Error in extractFeatures: %s\n', ME.message);
-                rethrow(ME);
-            end
-        end
-        
-        % AdaBoost分類器学習メソッド
-        function adaBoostModel = trainAdaBoost(obj, features, labels)
-            try
-                % AdaBoostのパラメータを取得
-                adaParams = obj.params.classifier.hybrid.adaBoost;
-                numLearners = adaParams.numLearners;
-                maxSplits = adaParams.maxSplits;
-                learnRate = adaParams.learnRate;
-                
-                % AdaBoostモデルを構築
-                fprintf('Training AdaBoost classifier with %d learners...\n', numLearners);
-                adaBoostModel = fitcensemble(features, labels, ...
-                    'Method', 'AdaBoostM1', ...  % AdaBoostアルゴリズム
-                    'Learners', templateTree('MaxNumSplits', maxSplits), ...  % 弱い決定木
-                    'NumLearningCycles', numLearners, ...  % 弱分類器の数
-                    'LearnRate', learnRate);  % 学習率
-                
-                % クロスバリデーションでモデルの評価
-                cvModel = crossval(adaBoostModel);
-                cvError = kfoldLoss(cvModel);
-                fprintf('Cross-validation error: %.4f\n', cvError);
-                fprintf('Cross-validation accuracy: %.2f%%\n', (1 - cvError) * 100);
-                
-            catch ME
-                fprintf('Error in trainAdaBoost: %s\n', ME.message);
-                rethrow(ME);
-            end
-        end
-        
-        % データセット分割メソッド
+        %% データセット分割メソッド
         function [trainData, trainLabels, valData, valLabels, testData, testLabels] = splitDataset(obj, data, labels)
+            % データを学習・検証・テストセットに分割
+            %
+            % 入力:
+            %   data - 前処理済みEEGデータ [チャンネル x サンプル x エポック]
+            %   labels - クラスラベル [エポック x 1]
+            %
+            % 出力:
+            %   trainData - 学習データ
+            %   trainLabels - 学習ラベル
+            %   valData - 検証データ
+            %   valLabels - 検証ラベル
+            %   testData - テストデータ
+            %   testLabels - テストラベル
+            
             try
                 % 分割数の取得
-                k = obj.params.classifier.evaluation.kfold;
+                k = obj.params.classifier.hybrid.training.validation.kfold;
                 
                 % データサイズの取得
                 [~, ~, numEpochs] = size(data);
-                fprintf('Total epochs: %d\n', numEpochs);
+                fprintf('\nデータセット分割 (k=%d):\n', k);
+                fprintf('  - 総エポック数: %d\n', numEpochs);
         
                 % インデックスのシャッフル
                 rng('default'); % 再現性のため
                 shuffledIdx = randperm(numEpochs);
         
                 % 分割比率の計算
-                trainRatio = (k-1)/k;  % 1-k/k
-                valRatio = 1/(2*k);    % k/2k
-                testRatio = 1/(2*k);   % k/2k
+                trainRatio = (k-1)/k;  % (k-1)/k
+                valRatio = 1/(2*k);    % 0.5/k
+                testRatio = 1/(2*k);   % 0.5/k
         
                 % データ数の計算
                 numTrain = floor(numEpochs * trainRatio);
@@ -627,47 +355,73 @@ classdef HybridClassifier < handle
                 testData = data(:,:,testIdx);
                 testLabels = labels(testIdx);
 
-                fprintf('データ分割 (k=%d):\n', k);
-                fprintf('  訓練データ: %d サンプル (%.1f%%)\n', ...
+                % 分割結果のサマリー表示
+                fprintf('  - 学習データ: %d サンプル (%.1f%%)\n', ...
                     length(trainIdx), (length(trainIdx)/numEpochs)*100);
-                fprintf('  検証データ: %d サンプル (%.1f%%)\n', ...
+                fprintf('  - 検証データ: %d サンプル (%.1f%%)\n', ...
                     length(valIdx), (length(valIdx)/numEpochs)*100);
-                fprintf('  テストデータ: %d サンプル (%.1f%%)\n', ...
+                fprintf('  - テストデータ: %d サンプル (%.1f%%)\n', ...
                     length(testIdx), (length(testIdx)/numEpochs)*100);
         
                 % データの検証
                 if isempty(trainData) || isempty(valData) || isempty(testData)
-                    error('一つ以上のデータセットが空です');
+                    error('分割後に空のデータセットが存在します');
                 end
         
                 % クラスの分布を確認
-                obj.checkClassDistribution('訓練', trainLabels);
+                obj.checkClassDistribution('学習', trainLabels);
                 obj.checkClassDistribution('検証', valLabels);
                 obj.checkClassDistribution('テスト', testLabels);
         
             catch ME
-                error('データ分割に失敗: %s', ME.message);
+                error('データ分割でエラーが発生しました: %s', ME.message);
             end
         end
         
-        % クラス分布確認メソッド
+        %% クラス分布確認メソッド
         function checkClassDistribution(~, setName, labels)
+            % データセット内のクラス分布を解析して表示
+            
             uniqueLabels = unique(labels);
             fprintf('\n%sデータのクラス分布:\n', setName);
+            
             for i = 1:length(uniqueLabels)
                 count = sum(labels == uniqueLabels(i));
-                fprintf('  クラス %d: %d サンプル (%.1f%%)\n', ...
+                fprintf('  - クラス %d: %d サンプル (%.1f%%)\n', ...
                     uniqueLabels(i), count, (count/length(labels))*100);
             end
+            
+            % クラス不均衡の評価
+            maxCount = max(histcounts(labels));
+            minCount = min(histcounts(labels));
+            imbalanceRatio = maxCount / max(minCount, 1);
+            
+            if imbalanceRatio > 3
+                warning('%sデータセットのクラス不均衡が大きいです (比率: %.1f:1)', ...
+                    setName, imbalanceRatio);
+            end
         end
-        
-        % CNN用データ前処理メソッド
+
+        %% データのCNN形式への変換
         function preparedData = prepareDataForCNN(~, data)
-            try                
-                % データの次元数に基づいて処理を分岐
+            % データをCNNに適した形式に変換
+            %
+            % 入力:
+            %   data - 入力データ
+            %
+            % 出力:
+            %   preparedData - CNN用に整形されたデータ
+            
+            try
+                % データ次元数の確認
                 if ndims(data) == 3
                     % 3次元データ（チャンネル x サンプル x エポック）の場合
-                    preparedData = permute(data, [2, 1, 4, 3]);
+                    [channels, samples, epochs] = size(data);
+                    preparedData = zeros(samples, channels, 1, epochs);
+                    
+                    for i = 1:epochs
+                        preparedData(:,:,1,i) = data(:,:,i)';
+                    end
                         
                 elseif ismatrix(data)
                     % 2次元データ（チャンネル x サンプル）の場合
@@ -680,22 +434,34 @@ classdef HybridClassifier < handle
                     error('対応していないデータ次元数: %d', ndims(data));
                 end
                 
-                % Nan/Infチェック
-                if any(isnan(preparedData(:))) || any(isinf(preparedData(:)))
-                    warning('prepareDataForCNN: 処理後のデータにNaNまたはInfが含まれています');
+                % NaN/Infチェック
+                if any(isnan(preparedData(:)))
+                    error('変換後のデータにNaN値が含まれています');
+                end
+                
+                if any(isinf(preparedData(:)))
+                    error('変換後のデータにInf値が含まれています');
                 end
                 
             catch ME
-                fprintf('\nprepareDataForCNNでエラー発生: %s\n', ME.message);
-                fprintf('データサイズ: [%s]\n', num2str(size(data)));
-                fprintf('エラースタック:\n');
+                fprintf('データ形式変換でエラーが発生: %s\n', ME.message);
+                fprintf('入力データサイズ: [%s]\n', num2str(size(data)));
+                fprintf('エラー詳細:\n');
                 disp(getReport(ME, 'extended'));
                 rethrow(ME);
             end
         end
-        
-        % LSTM用データ前処理メソッド
-        function preparedData = prepareDataForLSTM(obj, data)
+
+        %% データのLSTM形式への変換
+        function preparedData = prepareDataForLSTM(~, data)
+            % データをLSTMに適した形式に変換
+            %
+            % 入力:
+            %   data - 入力データ
+            %
+            % 出力:
+            %   preparedData - LSTM用に整形されたデータ (セル配列)
+            
             try
                 if iscell(data)
                     % 入力が既にセル配列の場合
@@ -719,276 +485,1060 @@ classdef HybridClassifier < handle
                     end
                 else
                     % 入力が数値配列の場合（3次元: channels x timepoints x trials）
-                    [channels, timepoints, trials] = size(data);
-                    preparedData = cell(trials, 1);
-                    for i = 1:trials
-                        currentData = data(:, :, i);
-                        if ~isa(currentData, 'double')
-                            currentData = double(currentData);
+                    if ndims(data) == 3
+                        [~, ~, trials] = size(data);
+                        preparedData = cell(trials, 1);
+                        for i = 1:trials
+                            currentData = data(:, :, i);
+                            if ~isa(currentData, 'double')
+                                currentData = double(currentData);
+                            end
+                            % NaN, Inf のチェックと置換
+                            if any(isnan(currentData(:)))
+                                warning('Trial %d contains NaN values. Replacing with zeros.', i);
+                                currentData(isnan(currentData)) = 0;
+                            end
+                            if any(isinf(currentData(:)))
+                                warning('Trial %d contains Inf values. Replacing with zeros.', i);
+                                currentData(isinf(currentData)) = 0;
+                            end
+                            preparedData{i} = currentData;
                         end
-                        % NaN, Inf のチェックと置換
-                        if any(isnan(currentData(:)))
-                            warning('Trial %d contains NaN values. Replacing with zeros.', i);
-                            currentData(isnan(currentData)) = 0;
-                        end
-                        if any(isinf(currentData(:)))
-                            warning('Trial %d contains Inf values. Replacing with zeros.', i);
-                            currentData(isinf(currentData)) = 0;
-                        end
-                        preparedData{i} = currentData;
-                    end
-                end
-        
-            catch ME
-                errorInfo = struct(...
-                    'message', ME.message, ...
-                    'stack', ME.stack, ...
-                    'dataInfo', struct(...
-                        'inputSize', size(data), ...
-                        'dataType', class(data)));
-                if exist('preparedData', 'var') && ~isempty(preparedData)
-                    errorInfo.dataInfo.preparedDataSize = size(preparedData{1});
-                    errorInfo.dataInfo.lastProcessedTrial = length(preparedData);
-                end
-                error('LSTM用データ準備に失敗: %s\nエラー情報: %s', ME.message, jsonencode(errorInfo));
-            end
-        end
-        
-        % ハイブリッドデータストアの作成
-        function ds = createHybridDatastore(~, cnnData, lstmData, labels)
-            try
-                numSamples = size(cnnData, 4);
-
-                % CNNデータの準備
-                cnnInputs = cell(numSamples, 1);
-                for i = 1:numSamples
-                    cnnInputs{i} = double(cnnData(:,:,:,i));
-                end
-
-                % LSTMデータの準備
-                if iscell(lstmData)
-                    if iscell(lstmData{1})
-                        fprintf('lstmData{1} is a cell. Unwrapping one level.\n');
-                        lstmInputs = cellfun(@(x) x{1}, lstmData, 'UniformOutput', false);
                     else
-                        lstmInputs = lstmData;
-                    end
-                else
-                    lstmInputs = cell(numSamples, 1);
-                    for i = 1:numSamples
-                        lstmInputs{i} = double(squeeze(lstmData(:,:,i)));
+                        % 2次元データ（単一試行）の場合
+                        preparedData = {double(data)};
+                        % NaN, Inf のチェック
+                        if any(isnan(data(:)))
+                            warning('Data contains NaN values. Replacing with zeros.');
+                            preparedData{1}(isnan(preparedData{1})) = 0;
+                        end
+                        if any(isinf(data(:)))
+                            warning('Data contains Inf values. Replacing with zeros.');
+                            preparedData{1}(isinf(preparedData{1})) = 0;
+                        end
                     end
                 end
-
-                % CNN+LSTMデータセット作成
-                combinedData = [cnnInputs, lstmInputs];
-
-                % ラベルの準備
-                if ~iscategorical(labels)
-                    labelOutputs = categorical(labels);
-                else
-                    labelOutputs = labels;
-                end
-
-                % データストアを作成
-                combineDS = arrayDatastore(combinedData, 'OutputType', 'same');
-                labelDS = arrayDatastore(labelOutputs);
-
-                % データストアを結合
-                ds = combine(combineDS, labelDS);
-
+        
             catch ME
-                error('Error creating hybrid datastore: %s', ME.message);
+                fprintf('LSTM用データ準備でエラーが発生: %s\n', ME.message);
+                fprintf('エラー詳細:\n');
+                disp(getReport(ME, 'extended'));
+                rethrow(ME);
             end
         end
-        
-        % 過学習検証メソッド
-        function [isOverfit, metrics] = validateOverfitting(obj, trainInfo, testMetrics)
-            try
-                fprintf('\n=== 過学習の検証 ===\n');
-                
-                % trainInfoの検証
-                if ~isstruct(trainInfo) || ~isfield(trainInfo, 'History')
-                    error('学習履歴情報が不正です');
-                end
-                
-                history = trainInfo.History;
-                if ~isfield(history, 'TrainingAccuracy') || ~isfield(history, 'ValidationAccuracy')
-                    warning('学習履歴に精度情報が含まれていません。過学習検証をスキップします。');
-                    metrics = struct(...
-                        'generalizationGap', NaN, ...
-                        'performanceGap', NaN, ...
-                        'isCompletelyBiased', true, ...
-                        'isLearningProgressing', false, ...
-                        'severity', 'unknown', ...
-                        'optimalEpoch', 0, ...
-                        'totalEpochs', 0);
-                    isOverfit = false;
-                    return;
-                end
-        
-                % 精度データの取得と表示
-                trainAcc = history.TrainingAccuracy;
-                valAcc = history.ValidationAccuracy;
-                testAcc = testMetrics.accuracy * 100;
 
-                fprintf('Validation Accuracy: %.2f%%\n', max(valAcc));
-                fprintf('Test Accuracy: %.2f%%\n', testAcc);
-        
-                % Performance Gapの計算（検証結果とテスト結果の差）
-                perfGap = abs(max(valAcc) - testAcc);
-                fprintf('Performance Gap: %.2f%%\n', perfGap);
-        
-                % トレンド分析
-                [trainTrend, valTrend] = obj.analyzeLearningCurves(trainAcc, valAcc);
-
-                % 完全な偏りの検出
-                isCompletelyBiased = false;
-                if isfield(testMetrics, 'confusionMat')
-                    cm = testMetrics.confusionMat;
-                    % 各実際のクラス（行）のサンプル数を確認
-                    missingActual = any(sum(cm, 2) == 0);
-                    % 各予測クラス（列）の予測件数を確認
-                    missingPredicted = any(sum(cm, 1) == 0);
-                    % いずれかが true ならば、全く現れないクラスがあると判断
-                    isCompletelyBiased = missingActual || missingPredicted;
+        %% ハイブリッドモデル学習メソッド
+        function [hybridModel, trainInfo] = trainHybridModel(obj, cnnTrainData, lstmTrainData, trainLabels, cnnValData, lstmValData, valLabels)
+            try        
+                fprintf('\n=== ハイブリッドモデル学習開始 ===\n');
+                
+                % --- CNNモデルの学習 ---
+                fprintf('\n--- CNNモデル学習開始 ---\n');
+                
+                % CNNアーキテクチャの構築
+                cnnArchitecture = obj.params.classifier.hybrid.architecture.cnn;
+                cnnLayers = obj.buildCNNLayers(cnnTrainData, cnnArchitecture);
+                
+                % CNN学習オプションの設定
+                cnnTrainOptions = obj.getCNNTrainingOptions(cnnValData, valLabels);
+                
+                % ラベルのカテゴリカル変換
+                uniqueLabels = unique(trainLabels);
+                trainLabels_cat = categorical(trainLabels, uniqueLabels);
+                valLabels_cat = categorical(valLabels, uniqueLabels);
+                
+                % CNNモデルの学習
+                [cnnModel, cnnTrainInfo] = trainNetwork(cnnTrainData, trainLabels_cat, cnnLayers, cnnTrainOptions);
+                fprintf('CNNモデル学習完了\n');
+                
+                % --- LSTMモデルの学習 ---
+                fprintf('\n--- LSTMモデル学習開始 ---\n');
+                
+                % LSTMアーキテクチャの構築
+                lstmArchitecture = obj.params.classifier.hybrid.architecture.lstm;
+                lstmLayers = obj.buildLSTMLayers(lstmTrainData, lstmArchitecture);
+                
+                % LSTM学習オプションの設定
+                lstmTrainOptions = obj.getLSTMTrainingOptions(lstmValData, valLabels);
+                
+                % LSTMモデルの学習
+                [lstmModel, lstmTrainInfo] = trainNetwork(lstmTrainData, trainLabels_cat, lstmLayers, lstmTrainOptions);
+                fprintf('LSTMモデル学習完了\n');
+                
+                % --- 特徴抽出と統合モデルの学習 ---
+                fprintf('\n--- 特徴統合と最終分類器の学習 ---\n');
+                
+                % CNNからの特徴抽出
+                cnnFeatures = activations(cnnModel, cnnTrainData, 'fc_cnn', 'OutputAs', 'rows');
+                
+                % LSTMからの特徴抽出 - 動的にサイズを決定
+                lstmFeatures = [];
+                for i = 1:length(lstmTrainData)
+                    % LSTM予測実行
+                    lstmOut = predict(lstmModel, lstmTrainData{i}, 'MiniBatchSize', 1);
                     
-                    if isCompletelyBiased
-                        fprintf('警告: 予測が特定のクラスに偏っています\n');
-                        if missingActual
-                            fprintf('  - 出現しない実際のクラスが存在\n');
-                        end
-                        if missingPredicted
-                            fprintf('  - 予測されないクラスが存在\n');
-                        end
+                    % 最初のサンプルで配列を初期化
+                    if i == 1
+                        lstmFeatureSize = size(lstmOut, 2);
+                        lstmFeatures = zeros(length(lstmTrainData), lstmFeatureSize);
+                    end
+                    
+                    % 特徴の格納
+                    lstmFeatures(i,:) = lstmOut;
+                end
+                
+                % 特徴の統合
+                combinedFeatures = [cnnFeatures, lstmFeatures];
+                
+                % AdaBoost分類器のパラメータ設定
+                adaParams = obj.params.classifier.hybrid.adaBoost;
+                
+                % AdaBoost分類器の学習
+                adaBoostModel = fitcensemble(combinedFeatures, trainLabels, ...
+                    'Method', 'AdaBoostM1', ...
+                    'NumLearningCycles', adaParams.numLearners, ...
+                    'Learners', 'tree', ...
+                    'LearnRate', adaParams.learnRate);
+                
+                fprintf('AdaBoost統合分類器の学習完了\n');
+                
+                % --- ここから新規追加部分: 検証データでのハイブリッドモデル全体の評価 ---
+                fprintf('\n--- 検証データでのハイブリッドモデル評価 ---\n');
+                
+                % 検証データからの特徴抽出 (CNN)
+                cnnValFeatures = activations(cnnModel, cnnValData, 'fc_cnn', 'OutputAs', 'rows');
+                
+                % 検証データからの特徴抽出 (LSTM)
+                lstmValFeatures = [];
+                for i = 1:length(lstmValData)
+                    lstmOut = predict(lstmModel, lstmValData{i}, 'MiniBatchSize', 1);
+                    
+                    % 最初のサンプルで配列を初期化
+                    if i == 1
+                        lstmValFeatures = zeros(length(lstmValData), size(lstmOut, 2));
+                    end
+                    
+                    % 特徴の格納
+                    lstmValFeatures(i,:) = lstmOut;
+                end
+                
+                % 特徴の統合 (検証データ)
+                combinedValFeatures = [cnnValFeatures, lstmValFeatures];
+                
+                % 検証データでの予測
+                [valPred, valScores] = predict(adaBoostModel, combinedValFeatures);
+                
+                % 検証精度の計算
+                hybridValAccuracy = mean(valPred == valLabels) * 100;  % パーセントに変換
+                fprintf('検証精度: %.2f%%\n', hybridValAccuracy);
+                
+                % クラスごとの評価指標 (検証データ)
+                classes = unique(valLabels);
+                classwise_val = struct();
+                
+                for i = 1:length(classes)
+                    className = classes(i);
+                    classIdx = (valLabels == className);
+                    
+                    % クラスごとの指標計算
+                    TP = sum(valPred(classIdx) == className);
+                    FP = sum(valPred == className) - TP;
+                    FN = sum(classIdx) - TP;
+                    
+                    % ゼロ除算防止
+                    precision = 0;
+                    recall = 0;
+                    f1score = 0;
+                    
+                    if (TP + FP) > 0
+                        precision = TP / (TP + FP);
+                    end
+                    
+                    if (TP + FN) > 0
+                        recall = TP / (TP + FN);
+                    end
+                    
+                    if (precision + recall) > 0
+                        f1score = 2 * (precision * recall) / (precision + recall);
+                    end
+                    
+                    % クラス指標の保存
+                    classwise_val(i).precision = precision;
+                    classwise_val(i).recall = recall;
+                    classwise_val(i).f1score = f1score;
+                end
+                
+                % 検証結果の詳細構造体
+                hybridValMetrics = struct(...
+                    'accuracy', hybridValAccuracy / 100, ...  % 比率に戻す
+                    'prediction', valPred, ...
+                    'scores', valScores, ...
+                    'classwise', classwise_val);
+                
+                % ハイブリッドモデル情報を構築
+                hybridModel = struct(...
+                    'netCNN', cnnModel, ...
+                    'netLSTM', lstmModel, ...
+                    'adaModel', adaBoostModel, ...
+                    'lstmFeatureSize', lstmFeatureSize);
+                
+                % 学習履歴情報の構築
+                trainInfo = struct(...
+                    'cnnHistory', cnnTrainInfo, ...
+                    'lstmHistory', lstmTrainInfo, ...
+                    'hybridValAccuracy', hybridValAccuracy, ...
+                    'hybridValMetrics', hybridValMetrics, ...
+                    'FinalEpoch', length(cnnTrainInfo.TrainingLoss));
+                
+                fprintf('\n=== ハイブリッドモデル学習が完了しました ===\n');
+                
+            catch ME
+                fprintf('\n=== ハイブリッドモデル学習中にエラーが発生 ===\n');
+                fprintf('エラーメッセージ: %s\n', ME.message);
+                fprintf('エラー詳細:\n');
+                disp(getReport(ME, 'extended'));
+                rethrow(ME);
+            end
+        end
+
+        %% CNNレイヤー構築メソッド
+        function layers = buildCNNLayers(obj, data, architecture)
+            % ハイブリッドモデルのCNN部分のアーキテクチャを構築
+            
+            fprintf('CNNアーキテクチャを構築中...\n');
+            
+            % 入力サイズの決定
+            inputSize = size(data);
+            if length(inputSize) >= 4
+                layerInputSize = inputSize(1:3);  % [サンプル数, チャンネル数, 1]
+            else
+                error('CNNデータの形式が不正です');
+            end
+            
+            % 入力層
+            layers = [
+                imageInputLayer(layerInputSize, 'Name', 'input', 'Normalization', 'none')
+            ];
+            
+            % 畳み込み層の追加
+            convFields = fieldnames(architecture.convLayers);
+            for i = 1:length(convFields)
+                convName = convFields{i};
+                convParams = architecture.convLayers.(convName);
+                
+                % 畳み込み層
+                layers = [layers
+                    convolution2dLayer(...
+                        convParams.size, convParams.filters, ...
+                        'Stride', convParams.stride, ...
+                        'Padding', convParams.padding, ...
+                        'Name', convName)
+                ];
+                
+                % バッチ正規化層（設定に応じて）
+                if architecture.batchNorm
+                    layers = [layers
+                        batchNormalizationLayer('Name', ['bn_' convName])
+                    ];
+                end
+                
+                % 活性化関数
+                layers = [layers
+                    reluLayer('Name', ['relu_' convName])
+                ];
+                
+                % プーリング層
+                poolName = ['pool' num2str(i)];
+                if isfield(architecture.poolLayers, poolName)
+                    poolParams = architecture.poolLayers.(poolName);
+                    layers = [layers
+                        maxPooling2dLayer(...
+                            poolParams.size, 'Stride', poolParams.stride, ...
+                            'Name', poolName)
+                    ];
+                end
+                
+                % ドロップアウト層
+                dropoutName = ['dropout' num2str(i)];
+                if isfield(architecture.dropoutLayers, dropoutName)
+                    dropoutRate = architecture.dropoutLayers.(dropoutName);
+                    layers = [layers
+                        dropoutLayer(dropoutRate, 'Name', dropoutName)
+                    ];
+                end
+            end
+            
+            % 全結合層（特徴出力用）
+            layers = [layers
+                globalAveragePooling2dLayer('Name', 'gap')
+                fullyConnectedLayer(architecture.fullyConnected, 'Name', 'fc_cnn')
+                reluLayer('Name', 'relu_fc')
+            ];
+            
+            % 出力層
+            layers = [layers
+                fullyConnectedLayer(obj.params.classifier.hybrid.architecture.numClasses, 'Name', 'fc_output')
+                softmaxLayer('Name', 'softmax')
+                classificationLayer('Name', 'output')
+            ];
+            
+            fprintf('CNNアーキテクチャ構築完了: %dレイヤー\n', length(layers));
+        end
+
+        %% LSTMレイヤー構築メソッド
+        function layers = buildLSTMLayers(obj, data, architecture)
+            % ハイブリッドモデルのLSTM部分のアーキテクチャを構築
+            
+            fprintf('LSTMアーキテクチャを構築中...\n');
+            
+            % 入力特徴量サイズの決定
+            if iscell(data)
+                % 最初のセルを使用
+                sampleData = data{1};
+                inputSize = size(sampleData, 1);  % チャンネル数
+            else
+                error('LSTMデータの形式が不正です');
+            end
+            
+            % 入力層
+            layers = [
+                sequenceInputLayer(inputSize, ...
+                    'Name', 'sequence_input', ...
+                    'Normalization', architecture.sequenceInputLayer.normalization)
+            ];
+            
+            % LSTM層の追加
+            lstmFields = fieldnames(architecture.lstmLayers);
+            for i = 1:length(lstmFields)
+                lstmName = lstmFields{i};
+                lstmParams = architecture.lstmLayers.(lstmName);
+                
+                % LSTM層
+                layers = [layers
+                    lstmLayer(lstmParams.numHiddenUnits, ...
+                        'OutputMode', lstmParams.OutputMode, ...
+                        'Name', lstmName)
+                ];
+                
+                % バッチ正規化層（設定に応じて）
+                if architecture.batchNorm
+                    layers = [layers
+                        batchNormalizationLayer('Name', ['bn_' lstmName])
+                    ];
+                end
+                
+                % ドロップアウト層
+                dropoutName = ['dropout' num2str(i)];
+                if isfield(architecture.dropoutLayers, dropoutName)
+                    dropoutRate = architecture.dropoutLayers.(dropoutName);
+                    layers = [layers
+                        dropoutLayer(dropoutRate, 'Name', dropoutName)
+                    ];
+                end
+            end
+            
+            % 全結合層（特徴出力用）
+            if isfield(architecture, 'fullyConnected')
+                layers = [layers
+                    fullyConnectedLayer(architecture.fullyConnected, 'Name', 'fc_lstm')
+                    reluLayer('Name', 'relu_fc')
+                ];
+            end
+            
+            % 出力層
+            layers = [layers
+                fullyConnectedLayer(obj.params.classifier.hybrid.architecture.numClasses, 'Name', 'fc_output')
+                softmaxLayer('Name', 'softmax')
+                classificationLayer('Name', 'output')
+            ];
+            
+            fprintf('LSTMアーキテクチャ構築完了: %dレイヤー\n', length(layers));
+        end
+
+        %% CNNトレーニングオプション設定メソッド
+        function options = getCNNTrainingOptions(obj, valData, valLabels)
+            % CNNのトレーニングオプションを設定
+            
+            % 実行環境の選択
+            executionEnvironment = 'cpu';
+            if obj.useGPU
+                executionEnvironment = 'gpu';
+            end
+            
+            % 検証データの準備
+            valLabels_cat = categorical(valLabels, unique(valLabels));
+            valDS = {valData, valLabels_cat};
+            
+            % トレーニングオプションの設定
+            options = trainingOptions(obj.params.classifier.hybrid.training.optimizer.type, ...
+                'InitialLearnRate', obj.params.classifier.hybrid.training.optimizer.learningRate, ...
+                'MaxEpochs', obj.params.classifier.hybrid.training.maxEpochs, ...
+                'MiniBatchSize', obj.params.classifier.hybrid.training.miniBatchSize, ...
+                'Plots', 'none', ...
+                'Shuffle', obj.params.classifier.hybrid.training.shuffle, ...
+                'ExecutionEnvironment', executionEnvironment, ...
+                'OutputNetwork', 'best-validation', ...
+                'Verbose', true, ...
+                'ValidationData', valDS, ...
+                'ValidationFrequency', obj.params.classifier.hybrid.training.frequency, ...
+                'ValidationPatience', obj.params.classifier.hybrid.training.patience, ...
+                'GradientThreshold', 1);
+        end
+
+        %% LSTMトレーニングオプション設定メソッド
+        function options = getLSTMTrainingOptions(obj, valData, valLabels)
+            % LSTMのトレーニングオプションを設定
+            
+            % 実行環境の選択
+            executionEnvironment = 'cpu';
+            if obj.useGPU
+                executionEnvironment = 'gpu';
+            end
+            
+            % 検証データの準備
+            valLabels_cat = categorical(valLabels, unique(valLabels));
+            valDS = {valData, valLabels_cat};
+            
+            % トレーニングオプションの設定
+            options = trainingOptions(obj.params.classifier.hybrid.training.optimizer.type, ...
+                'InitialLearnRate', obj.params.classifier.hybrid.training.optimizer.learningRate, ...
+                'MaxEpochs', obj.params.classifier.hybrid.training.maxEpochs, ...
+                'MiniBatchSize', obj.params.classifier.hybrid.training.miniBatchSize, ...
+                'Plots', 'none', ...
+                'Shuffle', obj.params.classifier.hybrid.training.shuffle, ...
+                'ExecutionEnvironment', executionEnvironment, ...
+                'OutputNetwork', 'best-validation', ...
+                'Verbose', true, ...
+                'ValidationData', valDS, ...
+                'ValidationFrequency', obj.params.classifier.hybrid.training.frequency, ...
+                'ValidationPatience', obj.params.classifier.hybrid.training.patience, ...
+                'GradientThreshold', obj.params.classifier.hybrid.training.optimizer.gradientThreshold);
+        end
+
+        %% モデル評価メソッド
+        function metrics = evaluateModel(obj, model, cnnTestData, lstmTestData, testLabels)
+            % 学習済みハイブリッドモデルの性能を評価
+            %
+            % 入力:
+            %   model - 学習済みハイブリッドモデル
+            %   cnnTestData - CNN用テストデータ
+            %   lstmTestData - LSTM用テストデータ
+            %   testLabels - テストラベル
+            %
+            % 出力:
+            %   metrics - 詳細な評価メトリクス
+            
+            fprintf('\n=== モデル評価を実行 ===\n');
+            
+            metrics = struct(...
+                'accuracy', [], ...
+                'confusionMat', [], ...
+                'classwise', [], ...
+                'roc', [], ...
+                'auc', [] ...
+            );
+        
+            try
+                % テストラベルをカテゴリカル型に変換
+                uniqueLabels = unique(testLabels);
+                testLabels_cat = categorical(testLabels, uniqueLabels);
+                
+                % CNNからの特徴抽出
+                cnnFeatures = activations(model.netCNN, cnnTestData, 'fc_cnn', 'OutputAs', 'rows');
+                
+                % LSTMからの特徴抽出
+                lstmFeatures = [];
+                for i = 1:length(lstmTestData)
+                    lstmOut = predict(model.netLSTM, lstmTestData{i}, 'MiniBatchSize', 1);
+                    
+                    % 最初のサンプルで配列を初期化
+                    if i == 1
+                        lstmFeatures = zeros(length(lstmTestData), size(lstmOut, 2));
+                    end
+                    
+                    lstmFeatures(i,:) = lstmOut;
+                end
+                
+                % 特徴の統合
+                combinedFeatures = [cnnFeatures, lstmFeatures];
+                
+                % AdaBoostによる予測
+                [pred, scores] = predict(model.adaModel, combinedFeatures);
+                
+                % 基本的な指標の計算
+                metrics.accuracy = mean(pred == testLabels);
+                metrics.confusionMat = confusionmat(testLabels, pred);
+                
+                fprintf('テスト精度: %.2f%%\n', metrics.accuracy * 100);
+                
+                % クラスごとの性能評価
+                classes = unique(testLabels);
+                metrics.classwise = struct('precision', zeros(1,length(classes)), ...
+                                        'recall', zeros(1,length(classes)), ...
+                                        'f1score', zeros(1,length(classes)));
+                
+                fprintf('\nクラスごとの評価:\n');
+                for i = 1:length(classes)
+                    className = classes(i);
+                    classIdx = (testLabels == className);
+                    
+                    % 各クラスの指標計算
+                    TP = sum(pred(classIdx) == className);
+                    FP = sum(pred == className) - TP;
+                    FN = sum(classIdx) - TP;
+                    
+                    % 0による除算を回避
+                    if (TP + FP) > 0
+                        precision = TP / (TP + FP);
+                    else
+                        precision = 0;
+                    end
+                    
+                    if (TP + FN) > 0
+                        recall = TP / (TP + FN);
+                    else
+                        recall = 0;
+                    end
+                    
+                    if (precision + recall) > 0
+                        f1 = 2 * (precision * recall) / (precision + recall);
+                    else
+                        f1 = 0;
+                    end
+                    
+                    metrics.classwise(i).precision = precision;
+                    metrics.classwise(i).recall = recall;
+                    metrics.classwise(i).f1score = f1;
+                    
+                    fprintf('  - クラス %d:\n', i);
+                    fprintf('    - 精度 (Precision): %.2f%%\n', precision * 100);
+                    fprintf('    - 再現率 (Recall): %.2f%%\n', recall * 100);
+                    fprintf('    - F1スコア: %.2f\n', f1);
+                end
+                
+                % 2クラス分類の場合のROC曲線とAUC
+                if length(classes) == 2
+                    [X, Y, T, AUC] = perfcurve(testLabels, scores(:,2), classes(2));
+                    metrics.roc = struct('X', X, 'Y', Y, 'T', T);
+                    metrics.auc = AUC;
+                    fprintf('\nAUC: %.3f\n', AUC);
+                end
+                
+                % 混同行列の表示
+                fprintf('\n混同行列:\n');
+                disp(metrics.confusionMat);
+                
+            catch ME
+                fprintf('モデル評価でエラーが発生: %s\n', ME.message);
+                fprintf('エラー詳細:\n');
+                disp(getReport(ME, 'extended'));
+                rethrow(ME);
+            end
+        end
+
+        %% 交差検証メソッド（有効時のみ実行）
+        function results = performCrossValidationIfEnabled(obj, data, labels)
+            % 交差検証が有効な場合に実行
+            
+            results = struct('meanAccuracy', [], 'stdAccuracy', []);
+            
+            % 交差検証の実行     
+            if obj.params.classifier.hybrid.training.validation.enable
+                results = obj.performCrossValidation(data, labels);
+                fprintf('交差検証平均精度: %.2f%% (±%.2f%%)\n', ...
+                    results.meanAccuracy * 100, ...
+                    results.stdAccuracy * 100);
+            else
+                fprintf('交差検証はスキップされました（設定で無効）\n');
+            end
+            
+            return;
+        end
+        
+        %% 交差検証メソッド
+        function results = performCrossValidation(obj, data, labels)
+            % k分割交差検証の実行
+            
+            try
+                % k-fold cross validationのパラメータ取得
+                k = obj.params.classifier.hybrid.training.validation.kfold;
+                fprintf('\n=== %d分割交差検証開始 ===\n', k);
+                
+                % 結果初期化
+                successCount = 0;
+                allAccuracies = [];
+                
+                % 交差検証分割の作成
+                cvp = cvpartition(length(labels), 'KFold', k);
+                
+                % 各フォールドの処理
+                for i = 1:k
+                    fprintf('\nフォールド %d/%d の処理を開始\n', i, k);
+                    
+                    try
+                        % データの分割
+                        trainIdx = cvp.training(i);
+                        testIdx = cvp.test(i);
+                        
+                        % 学習・検証データの準備
+                        foldTrainData = data(:,:,trainIdx);
+                        foldTrainLabels = labels(trainIdx);
+                        foldTestData = data(:,:,testIdx);
+                        foldTestLabels = labels(testIdx);
+                        
+                        % 内部検証分割の作成
+                        innerCVP = cvpartition(length(foldTrainLabels), 'Holdout', 0.2);
+                        valIdx = innerCVP.test;
+                        trainIdxInner = innerCVP.training;
+                        
+                        foldInnerTrainData = foldTrainData(:,:,trainIdxInner);
+                        foldInnerTrainLabels = foldTrainLabels(trainIdxInner);
+                        foldValData = foldTrainData(:,:,valIdx);
+                        foldValLabels = foldTrainLabels(valIdx);
+                        
+                        % データ準備（CNN用）
+                        cnnTrainData = obj.prepareDataForCNN(foldInnerTrainData);
+                        cnnValData = obj.prepareDataForCNN(foldValData);
+                        cnnTestData = obj.prepareDataForCNN(foldTestData);
+                        
+                        % データ準備（LSTM用）
+                        lstmTrainData = obj.prepareDataForLSTM(foldInnerTrainData);
+                        lstmValData = obj.prepareDataForLSTM(foldValData);
+                        lstmTestData = obj.prepareDataForLSTM(foldTestData);
+                        
+                        % ハイブリッドモデルの学習
+                        [foldModel, ~] = obj.trainHybridModel( ...
+                            cnnTrainData, lstmTrainData, foldInnerTrainLabels,cnnValData, lstmValData, foldValLabels);
+                        
+                        % テストデータでの評価
+                        metrics = obj.evaluateModel(foldModel, cnnTestData, lstmTestData, foldTestLabels);
+                        
+                        % 結果の保存
+                        successCount = successCount + 1;
+                        allAccuracies(successCount) = metrics.accuracy;
+                        
+                        fprintf('フォールド %d の精度: %.2f%%\n', i, metrics.accuracy * 100);
+                        
+                    catch ME
+                        warning('フォールド %d でエラーが発生: %s', i, ME.message);
+                        fprintf('エラー詳細:\n');
+                        disp(getReport(ME, 'extended'));
+                    end
+                    
+                    % GPUメモリの解放
+                    if obj.useGPU
+                        reset(gpuDevice);
                     end
                 end
-        
-                % 学習進行の確認
-                trainDiff = diff(trainAcc);
-                isLearningProgressing = std(trainDiff) > 0.01;
-                if ~isLearningProgressing
-                    fprintf('警告: 学習が十分に進行していない可能性があります\n');
-                    fprintf('  - 訓練精度の変化の標準偏差: %.4f\n', std(trainDiff));
+                
+                % 結果の集計
+                if successCount > 0
+                    meanAcc = mean(allAccuracies);
+                    stdAcc = std(allAccuracies);
+                else
+                    meanAcc = 0;
+                    stdAcc = 0;
                 end
                 
-                % 最適エポックの検出
-                [optimalEpoch, totalEpochs] = obj.findOptimalEpoch(valAcc);
-                fprintf('Optimal Epoch: %d/%d\n', optimalEpoch, totalEpochs);
-        
-                % 過学習の重大度判定
-                severity = obj.determineOverfittingSeverity(perfGap, isCompletelyBiased, isLearningProgressing);
-        
-                % メトリクスの構築
-                metrics = struct(...
-                    'performanceGap', perfGap, ...
-                    'isCompletelyBiased', isCompletelyBiased, ...
-                    'isLearningProgressing', isLearningProgressing, ...
-                    'validationTrend', valTrend, ...
-                    'trainingTrend', trainTrend, ...
-                    'severity', severity, ...
-                    'optimalEpoch', optimalEpoch, ...
-                    'totalEpochs', totalEpochs);
+                % 結果構造体の構築
+                results = struct(...
+                    'meanAccuracy', meanAcc, ...
+                    'stdAccuracy', stdAcc, ...
+                    'successCount', successCount, ...
+                    'totalFolds', k);
                 
-                % 過学習判定
-                isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
-                fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
-        
+                fprintf('\n交差検証結果:\n');
+                fprintf('  - 平均精度: %.2f%% (±%.2f%%)\n', meanAcc * 100, stdAcc * 100);
+                fprintf('  - 有効フォールド数: %d/%d\n', successCount, k);
+                
             catch ME
-                fprintf('\n=== 過学習検証中にエラーが発生 ===\n');
+                fprintf('\n=== 交差検証中にエラーが発生 ===\n');
                 fprintf('エラーメッセージ: %s\n', ME.message);
                 fprintf('エラースタック:\n');
                 disp(getReport(ME, 'extended'));
                 
+                % 最小限の結果構造体を返す
+                results = struct('meanAccuracy', 0, 'stdAccuracy', 0);
+            end
+        end
+
+        %% 過学習検証メソッド
+        function [isOverfit, metrics] = validateOverfitting(obj, trainInfo, testMetrics)
+            % トレーニング結果とテスト結果から過学習を分析
+            %
+            % 入力:
+            %   trainInfo - トレーニング情報（学習曲線を含む）
+            %   testMetrics - テストデータでの評価結果
+            %
+            % 出力:
+            %   isOverfit - 過学習の有無（論理値）
+            %   metrics - 詳細な過学習メトリクス
+            
+            fprintf('\n=== 過学習検証の実行 ===\n');
+            
+            try
+                % 初期化
+                isOverfit = false;
+                metrics = struct();
+                
+                % --- ハイブリッドモデル全体の検証精度を使用 ---
+                if isfield(trainInfo, 'hybridValAccuracy')
+                    % 統合ハイブリッドモデルの検証精度を使用
+                    meanValAcc = trainInfo.hybridValAccuracy;
+                    fprintf('検証精度: %.2f%%\n', meanValAcc);
+                    
+                    % テスト精度との比較
+                    testAcc = testMetrics.accuracy * 100;  % パーセントに変換
+                    fprintf('テスト精度: %.2f%%\n', testAcc);
+                    
+                    % 精度ギャップの計算
+                    perfGap = abs(meanValAcc - testAcc);
+                    fprintf('精度ギャップ: %.2f%%\n', perfGap);
+                    
+                    % 過学習の重大度判定
+                    if perfGap > 15
+                        severity = 'severe';      % 15%以上の差は重度の過学習
+                    elseif perfGap > 10
+                        severity = 'moderate';    % 10%以上の差は中程度の過学習
+                    elseif perfGap > 5
+                        severity = 'mild';        % 5%以上の差は軽度の過学習
+                    else
+                        severity = 'none';        % 5%未満の差は許容範囲
+                    end
+                else
+                    % 統合モデルの検証精度が利用できない場合はCNNとLSTMのデータを試用
+                    warning('検証精度がありません。CNNとLSTMのデータを使用します。');
+                    
+                    % CNN検証精度の取得
+                    cnnValAcc = [];
+                    if isfield(trainInfo, 'cnnHistory') && isfield(trainInfo.cnnHistory, 'ValidationAccuracy')
+                        cnnValAcc = trainInfo.cnnHistory.ValidationAccuracy;
+                        % NaN値をフィルタリング
+                        cnnValAcc = cnnValAcc(~isnan(cnnValAcc));
+                    end
+                    
+                    % LSTM検証精度の取得
+                    lstmValAcc = [];
+                    if isfield(trainInfo, 'lstmHistory') && isfield(trainInfo.lstmHistory, 'ValidationAccuracy')
+                        lstmValAcc = trainInfo.lstmHistory.ValidationAccuracy;
+                        % NaN値をフィルタリング
+                        lstmValAcc = lstmValAcc(~isnan(lstmValAcc));
+                    end
+                    
+                    % 利用可能なデータを使用
+                    if ~isempty(cnnValAcc) && ~isempty(lstmValAcc)
+                        % 両方あれば平均を使用
+                        meanCnnValAcc = mean(cnnValAcc(max(1, end-5):end));
+                        meanLstmValAcc = mean(lstmValAcc(max(1, end-5):end));
+                        meanValAcc = (meanCnnValAcc + meanLstmValAcc) / 2;
+                        fprintf('平均検証精度 (CNN+LSTM): %.2f%%\n', meanValAcc);
+                    elseif ~isempty(cnnValAcc)
+                        meanValAcc = mean(cnnValAcc(max(1, end-5):end));
+                        fprintf('CNN検証精度: %.2f%%\n', meanValAcc);
+                    elseif ~isempty(lstmValAcc)
+                        meanValAcc = mean(lstmValAcc(max(1, end-5):end));
+                        fprintf('LSTM検証精度: %.2f%%\n', meanValAcc);
+                    else
+                        % どのデータもなければテスト精度をそのまま使用
+                        warning('利用可能な検証精度データがありません。過学習判定をスキップします。');
+                        meanValAcc = testMetrics.accuracy * 100;
+                        fprintf('参考値として使用するテスト精度: %.2f%%\n', meanValAcc);
+                        
+                        % 過学習判定不可
+                        severity = 'unknown';
+                        perfGap = 0;
+                    end
+                    
+                    % テスト精度との比較（上記で判定できなかった場合のみ）
+                    if ~exist('severity', 'var')
+                        testAcc = testMetrics.accuracy * 100;
+                        fprintf('テスト精度: %.2f%%\n', testAcc);
+                        
+                        perfGap = abs(meanValAcc - testAcc);
+                        fprintf('精度ギャップ: %.2f%%\n', perfGap);
+                        
+                        % 過学習の重大度判定
+                        if perfGap > 15
+                            severity = 'severe';
+                        elseif perfGap > 10
+                            severity = 'moderate';
+                        elseif perfGap > 5
+                            severity = 'mild';
+                        else
+                            severity = 'none';
+                        end
+                    end
+                end
+                
+                % 分類バイアスの検出
+                isCompletelyBiased = obj.detectClassificationBias(testMetrics);
+                
+                % 学習曲線の分析（CNN）
+                trainTrend = struct('mean_change', 0, 'volatility', 0);
+                valTrend = struct('mean_change', 0, 'volatility', 0);
+                
+                if isfield(trainInfo, 'cnnHistory') && isfield(trainInfo.cnnHistory, 'TrainingAccuracy')
+                    trainAcc = trainInfo.cnnHistory.TrainingAccuracy;
+                    trainAcc = trainAcc(~isnan(trainAcc)); % NaN値を除去
+                    if ~isempty(trainAcc)
+                        trainTrend = obj.analyzeLearningCurve(trainAcc);
+                    end
+                end
+                
+                % 検証精度トレンド分析
+                if isfield(trainInfo, 'cnnHistory') && isfield(trainInfo.cnnHistory, 'ValidationAccuracy')
+                    valAcc = trainInfo.cnnHistory.ValidationAccuracy;
+                    valAcc = valAcc(~isnan(valAcc)); % NaN値を除去
+                    if ~isempty(valAcc)
+                        valTrend = obj.analyzeLearningCurve(valAcc);
+                    end
+                end
+                
+                % 学習が進行中かどうかチェック
+                isLearningProgressing = (trainTrend.mean_change > 0.001) || (valTrend.mean_change > 0.001);
+                
+                % 最適エポックの検出
+                if isfield(trainInfo, 'cnnHistory') && isfield(trainInfo.cnnHistory, 'ValidationAccuracy')
+                    valAcc = trainInfo.cnnHistory.ValidationAccuracy;
+                    valAcc = valAcc(~isnan(valAcc)); % NaN値を除去
+                    if ~isempty(valAcc)
+                        [optimalEpoch, totalEpochs] = obj.findOptimalEpoch(valAcc);
+                    else
+                        optimalEpoch = 0;
+                        totalEpochs = 0;
+                    end
+                else
+                    optimalEpoch = 0;
+                    totalEpochs = 0;
+                end
+                
+                % 結果の格納
                 metrics = struct(...
-                    'generalizationGap', Inf, ...
-                    'performanceGap', Inf, ...
-                    'isCompletelyBiased', true, ...
+                    'performanceGap', perfGap, ...
+                    'meanValAcc', meanValAcc, ...
+                    'testAcc', testMetrics.accuracy * 100, ...
+                    'isCompletelyBiased', isCompletelyBiased, ...
+                    'isLearningProgressing', isLearningProgressing, ...
+                    'severity', severity, ...
+                    'trainingTrend', trainTrend, ...
+                    'validationTrend', valTrend, ...
+                    'optimalEpoch', optimalEpoch, ...
+                    'totalEpochs', totalEpochs);
+                
+                % 過学習の最終判定（バイアスも加味）
+                isOverfit = strcmp(severity, 'severe') || ...
+                            strcmp(severity, 'moderate') || ...
+                            isCompletelyBiased;
+                
+                fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
+                
+            catch ME
+                fprintf('過学習検証でエラーが発生: %s\n', ME.message);
+                fprintf('エラー詳細:\n');
+                disp(getReport(ME, 'extended'));
+                
+                % エラー時のフォールバック値
+                metrics = struct(...
+                    'performanceGap', 0, ...
+                    'isCompletelyBiased', false, ...
                     'isLearningProgressing', false, ...
                     'severity', 'error', ...
                     'optimalEpoch', 0, ...
                     'totalEpochs', 0);
-                isOverfit = true;
+                isOverfit = false;
             end
         end
-        
-        % 学習曲線分析メソッド
-        function [trainTrend, valTrend] = analyzeLearningCurves(~, trainAcc, valAcc)
-            % 学習曲線の変化率（傾き）とボラティリティ（変動性）を計算する
-            if length(trainAcc) < 2 || length(valAcc) < 2
-                trainTrend = struct('mean_change', NaN, 'volatility', NaN);
-                valTrend = struct('mean_change', NaN, 'volatility', NaN);
+
+        %% 学習曲線分析メソッド
+        function trend = analyzeLearningCurve(~, acc)
+            % 学習曲線の変化率と変動性を分析
+            
+            if length(acc) < 2
+                trend = struct('mean_change', NaN, 'volatility', NaN);
                 return;
             end
             
             % 各エポック間の変化量を計算
-            trainDiff = diff(trainAcc);
-            valDiff = diff(valAcc);
+            diffValues = diff(acc);
             
-            % 平均変化量と標準偏差（ボラティリティ）を算出
-            trainTrend.mean_change = mean(trainDiff);
-            trainTrend.volatility = std(trainDiff);
-            
-            valTrend.mean_change = mean(valDiff);
-            valTrend.volatility = std(valDiff);
+            % 平均変化量とボラティリティ（標準偏差）を計算
+            trend = struct(...
+                'mean_change', mean(diffValues), ...
+                'volatility', std(diffValues), ...
+                'increasing_ratio', sum(diffValues > 0) / length(diffValues));
         end
-        
-        % 最適エポック特定メソッド
+
+        %% 最適エポック検出メソッド
         function [optimalEpoch, totalEpochs] = findOptimalEpoch(~, valAcc)
-            % 検証精度が最大となるエポックを最適エポックとして返す
+            % 検証精度が最大となるエポックを検出
+            
             totalEpochs = length(valAcc);
             [~, optimalEpoch] = max(valAcc);
-        end
-        
-        % 過学習重症度判定メソッド
-        function severity = determineOverfittingSeverity(~, perfGap, isCompletelyBiased, isLearningProgressing)
-            if isCompletelyBiased
-                severity = 'critical';
-            elseif ~isLearningProgressing
-                severity = 'failed';
-            elseif perfGap > 15
-                severity = 'severe';
-            elseif perfGap > 8
-                severity = 'moderate';
-            elseif perfGap > 5
-                severity = 'mild';
-            else
-                severity = 'none';
+            
+            % 最適エポックが最後のエポックの場合、学習が不十分の可能性
+            if optimalEpoch == totalEpochs
+                fprintf('警告: 最適エポックが最後のエポックです。より長い学習が必要かもしれません。\n');
             end
         end
-        
-        % 性能表示メソッド
+
+        %% 分類バイアス検出メソッド
+        function isCompletelyBiased = detectClassificationBias(~, testMetrics)
+            % 混同行列から分類バイアスを検出
+            
+            isCompletelyBiased = false;
+    
+            if isfield(testMetrics, 'confusionMat')
+                cm = testMetrics.confusionMat;
+                
+                % 各実際のクラス（行）のサンプル数を確認
+                rowSums = sum(cm, 2);
+                missingActual = any(rowSums == 0);
+                
+                % 各予測クラス（列）の予測件数を確認
+                colSums = sum(cm, 1);
+                missingPredicted = any(colSums == 0);
+                
+                % すべての予測が1クラスに集中しているかを検出
+                predictedClassCount = sum(colSums > 0);
+                
+                % いずれかが true ならば、全く現れないクラスがあると判断
+                isCompletelyBiased = missingActual || missingPredicted || predictedClassCount <= 1;
+                
+                if isCompletelyBiased
+                    fprintf('\n警告: 分類に完全な偏りが検出されました\n');
+                    fprintf('  - 分類された実際のクラス数: %d / %d\n', sum(rowSums > 0), size(cm, 1));
+                    fprintf('  - 予測されたクラス数: %d / %d\n', predictedClassCount, size(cm, 2));
+                end
+            end
+        end
+
+        %% 性能メトリクス更新メソッド
+        function updatePerformanceMetrics(obj, testMetrics)
+            % 評価結果から性能メトリクスを更新
+            
+            obj.performance = testMetrics;
+        end
+
+        %% GPUメモリ解放メソッド
+        function resetGPUMemory(obj)
+            % GPUメモリのリセットと解放
+            
+            if obj.useGPU
+                try
+                    % GPUデバイスのリセット
+                    reset(gpuDevice);
+                    fprintf('GPUメモリをリセットしました\n');
+                catch ME
+                    fprintf('GPUメモリのリセットに失敗: %s', ME.message);
+                end
+            end
+        end
+
+        %% 結果表示メソッド
         function displayResults(obj)
+            % 総合的な結果サマリーの表示
+            
             try
-                fprintf('\n=== Hybrid Classification Results with AdaBoost ===\n');
+                fprintf('\n=== ハイブリッド分類結果サマリー ===\n');
+                
                 if ~isempty(obj.performance)
-                    fprintf('Overall Accuracy: %.2f%%\n', obj.performance.overallAccuracy * 100);
-                    
-                    if ~isempty(obj.performance.confusionMatrix)
-                        fprintf('\nConfusion Matrix:\n');
-                        disp(obj.performance.confusionMatrix);
+                    % 精度情報
+                    fprintf('全体精度: %.2f%%\n', obj.performance.accuracy * 100);
+
+                    if isfield(obj.performance, 'auc')
+                        fprintf('AUC: %.3f\n', obj.performance.auc);
                     end
-                    
-                    fprintf('\nClass-wise Performance:\n');
-                    fprintf('  Precision: %.2f%%\n', obj.performance.precision * 100);
-                    fprintf('  Recall: %.2f%%\n', obj.performance.recall * 100);
-                    fprintf('  F1-Score: %.2f%%\n', obj.performance.f1score * 100);
+
+                    % 混同行列
+                    if ~isempty(obj.performance.confusionMat)
+                        fprintf('\n混同行列:\n');
+                        disp(obj.performance.confusionMat);
+                    end
+
+                    % クラスごとの性能
+                    if isfield(obj.performance, 'classwise') && ~isempty(obj.performance.classwise)
+                        fprintf('\nクラスごとの性能:\n');
+                        for i = 1:length(obj.performance.classwise)
+                            fprintf('クラス %d:\n', i);
+                            fprintf('  - 精度: %.2f%%\n', ...
+                                obj.performance.classwise(i).precision * 100);
+                            fprintf('  - 再現率: %.2f%%\n', ...
+                                obj.performance.classwise(i).recall * 100);
+                            fprintf('  - F1スコア: %.2f\n', ...
+                                obj.performance.classwise(i).f1score);
+                        end
+                    end
                 end
 
-                if ~isempty(obj.overfitMetrics)
-                    fprintf('\nOverfitting Analysis:\n');
-                    fprintf('Performance Gap: %.2f%%\n', obj.overfitMetrics.performanceGap);
-                    fprintf('Severity: %s\n', obj.overfitMetrics.severity);
+                % 過学習分析結果の表示
+                if ~isempty(obj.overfitMetrics) && isstruct(obj.overfitMetrics)
+                    fprintf('\n過学習分析:\n');
+                    fprintf('  - 性能ギャップ: %.2f%%\n', obj.overfitMetrics.performanceGap);
+                    fprintf('  - 重大度: %s\n', obj.overfitMetrics.severity);
                     
-                    if isfield(obj.overfitMetrics, 'validationTrend')
-                        fprintf('\nValidation Trend:\n');
-                        fprintf('Mean Change: %.4f\n', obj.overfitMetrics.validationTrend.mean_change);
-                        fprintf('Volatility: %.4f\n', obj.overfitMetrics.validationTrend.volatility);
+                    if isfield(obj.overfitMetrics, 'trainingTrend')
+                        fprintf('\n学習カーブ分析:\n');
+                        fprintf('  - 学習の進行: %s\n', ...
+                            mat2str(obj.overfitMetrics.isLearningProgressing));
+                        
+                        if isfield(obj.overfitMetrics, 'validationTrend')
+                            trend = obj.overfitMetrics.validationTrend;
+                            fprintf('  - 検証平均変化率: %.4f\n', trend.mean_change);
+                            fprintf('  - 検証変動性: %.4f\n', trend.volatility);
+                        end
+                    end
+                    
+                    if isfield(obj.overfitMetrics, 'optimalEpoch')
+                        fprintf('  - 最適エポック: %d/%d (%.2f%%)\n', ...
+                            obj.overfitMetrics.optimalEpoch, ...
+                            obj.overfitMetrics.totalEpochs, ...
+                            (obj.overfitMetrics.optimalEpoch / ...
+                             max(obj.overfitMetrics.totalEpochs, 1)) * 100);
                     end
                 end
 
             catch ME
-                warning(ME.identifier, '%s', ME.message);
+                fprintf('結果表示でエラーが発生: %s', ME.message);
+            end
+        end
+
+        %% 結果構造体構築メソッド
+        function results = buildResultsStruct(obj, hybridModel, testMetrics, trainInfo, ...
+            crossValidationResults, normParams)
+            % 結果構造体の構築
+            
+            results = struct(...
+                'model', hybridModel, ...
+                'performance', struct(...
+                    'overallAccuracy', testMetrics.accuracy, ...
+                    'crossValidation', struct(...
+                        'accuracy', crossValidationResults.meanAccuracy, ...
+                        'std', crossValidationResults.stdAccuracy ...
+                    ), ...
+                    'precision', [], ...
+                    'recall', [], ...
+                    'f1score', [], ...
+                    'auc', [], ...
+                    'confusionMatrix', testMetrics.confusionMat ...
+                ), ...
+                'trainInfo', trainInfo, ...
+                'overfitting', obj.overfitMetrics, ...
+                'normParams', normParams ...
+            );
+            
+            % クラスごとの性能メトリクスの追加（存在する場合）
+            if isfield(testMetrics, 'classwise') && ~isempty(testMetrics.classwise)
+                % 1クラス目の値をデフォルト値として使用
+                results.performance.precision = testMetrics.classwise(1).precision;
+                results.performance.recall = testMetrics.classwise(1).recall;
+                results.performance.f1score = testMetrics.classwise(1).f1score;
+            end
+            
+            % AUCの追加（存在する場合）
+            if isfield(testMetrics, 'auc')
+                results.performance.auc = testMetrics.auc;
+            else
+                results.performance.auc = [];
             end
         end
     end
