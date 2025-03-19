@@ -36,6 +36,7 @@ function setupPaths(currentDir)
             'preprocessing'
             'utils'
             'visualization'
+            'eeg_visualizer'
         };
         
         % LSLとconfigのパス設定
