@@ -442,77 +442,161 @@ classdef HybridClassifier < handle
         end
 
         %% データのLSTM形式への変換
-        function preparedData = prepareDataForLSTM(~, data)
+        function preparedData = prepareDataForLSTM(obj, data)
             % データをLSTMに適した形式に変換
             %
             % 入力:
-            %   data - 入力データ
+            %   data - 入力データ (3次元数値配列、2次元配列、またはセル配列)
             %
             % 出力:
             %   preparedData - LSTM用に整形されたデータ (セル配列)
             
             try
+                fprintf('LSTM用データ変換を開始...\n');
+                
                 if iscell(data)
                     % 入力が既にセル配列の場合
                     trials = numel(data);
                     preparedData = cell(trials, 1);
+                    fprintf('セル配列入力: %d試行\n', trials);
+                    
                     for i = 1:trials
                         currentData = data{i};
                         if ~isa(currentData, 'double')
                             currentData = double(currentData);
                         end
-                        % NaN, Inf のチェックと置換
-                        if any(isnan(currentData(:)))
-                            warning('Trial %d contains NaN values. Replacing with zeros.', i);
-                            currentData(isnan(currentData)) = 0;
-                        end
-                        if any(isinf(currentData(:)))
-                            warning('Trial %d contains Inf values. Replacing with zeros.', i);
-                            currentData(isinf(currentData)) = 0;
-                        end
+                        
+                        % 重要: LSTM用に時間軸と特徴量軸を転置
+                        % [チャンネル × 時間] → [時間 × チャンネル]
+                        currentData = currentData';
+                        
+                        % NaN/Inf値の検出と補間処理
+                        currentData = obj.interpolateInvalidValues(currentData, i);
+                        
                         preparedData{i} = currentData;
                     end
-                else
-                    % 入力が数値配列の場合（3次元: channels x timepoints x trials）
-                    if ndims(data) == 3
-                        [~, ~, trials] = size(data);
-                        preparedData = cell(trials, 1);
-                        for i = 1:trials
-                            currentData = data(:, :, i);
-                            if ~isa(currentData, 'double')
-                                currentData = double(currentData);
-                            end
-                            % NaN, Inf のチェックと置換
-                            if any(isnan(currentData(:)))
-                                warning('Trial %d contains NaN values. Replacing with zeros.', i);
-                                currentData(isnan(currentData)) = 0;
-                            end
-                            if any(isinf(currentData(:)))
-                                warning('Trial %d contains Inf values. Replacing with zeros.', i);
-                                currentData(isinf(currentData)) = 0;
-                            end
-                            preparedData{i} = currentData;
+                    
+                elseif ndims(data) == 3
+                    % 3次元数値配列の処理 [チャンネル × 時間ポイント × 試行]
+                    [channels, timepoints, trials] = size(data);
+                    preparedData = cell(trials, 1);
+                    fprintf('3次元データ入力: [%dチャンネル × %d時間ポイント × %d試行]\n', ...
+                        channels, timepoints, trials);
+                    
+                    for i = 1:trials
+                        currentData = data(:, :, i);
+                        if ~isa(currentData, 'double')
+                            currentData = double(currentData);
                         end
-                    else
-                        % 2次元データ（単一試行）の場合
-                        preparedData = {double(data)};
-                        % NaN, Inf のチェック
-                        if any(isnan(data(:)))
-                            warning('Data contains NaN values. Replacing with zeros.');
-                            preparedData{1}(isnan(preparedData{1})) = 0;
-                        end
-                        if any(isinf(data(:)))
-                            warning('Data contains Inf values. Replacing with zeros.');
-                            preparedData{1}(isinf(preparedData{1})) = 0;
-                        end
+                        
+                        % 重要: LSTM用に時間軸と特徴量軸を転置
+                        currentData = currentData';  % [時間 × チャンネル]
+                        
+                        % NaN/Inf値の検出と補間処理
+                        currentData = obj.interpolateInvalidValues(currentData, i);
+                        
+                        preparedData{i} = currentData;
                     end
+                    
+                elseif ismatrix(data)
+                    % 2次元データ（単一試行）の処理
+                    [channels, timepoints] = size(data);
+                    fprintf('2次元データ入力: [%dチャンネル × %d時間ポイント]\n', channels, timepoints);
+                    
+                    currentData = data;
+                    if ~isa(currentData, 'double')
+                        currentData = double(currentData);
+                    end
+                    
+                    % 重要: LSTM用に時間軸と特徴量軸を転置
+                    currentData = currentData';  % [時間 × チャンネル]
+                    
+                    % NaN/Inf値の検出と補間処理
+                    currentData = obj.interpolateInvalidValues(currentData, 1);
+                    
+                    preparedData = {currentData};
+                else
+                    error('対応していないデータ次元数: %d (最大3次元まで対応)', ndims(data));
                 end
-        
+                
+                % 結果検証
+                if isempty(preparedData)
+                    error('変換後のデータが空です');
+                end
+                
+                % サンプルとなる試行のサイズを表示（デバッグ用）
+                sampleData = preparedData{1};
+                [timepoints, features] = size(sampleData);
+                fprintf('LSTM用データ変換完了: 各試行は [%d時間ポイント × %d特徴量] の形式\n', ...
+                    timepoints, features);
+                
             catch ME
                 fprintf('LSTM用データ準備でエラーが発生: %s\n', ME.message);
+                fprintf('入力データサイズ: [%s]\n', num2str(size(data)));
                 fprintf('エラー詳細:\n');
                 disp(getReport(ME, 'extended'));
                 rethrow(ME);
+            end
+        end
+        
+        function processedData = interpolateInvalidValues(~, data, trialIndex)
+            % NaN/Infなどの無効値を線形補間で処理
+            %
+            % 入力:
+            %   data - 処理するデータ [時間 × チャンネル]
+            %   trialIndex - 試行インデックス（デバッグ情報用）
+            %
+            % 出力:
+            %   processedData - 補間処理済みデータ
+            
+            processedData = data;
+            [timepoints, channels] = size(data);
+            
+            % 無効値の検出
+            hasInvalidData = false;
+            invalidCount = 0;
+            
+            for ch = 1:channels
+                channelData = data(:, ch);
+                invalidIndices = isnan(channelData) | isinf(channelData);
+                invalidCount = invalidCount + sum(invalidIndices);
+                
+                if any(invalidIndices)
+                    hasInvalidData = true;
+                    validIndices = ~invalidIndices;
+                    
+                    % 有効なデータポイントが十分ある場合は線形補間を使用
+                    if sum(validIndices) > 1
+                        % 補間のための準備
+                        validTimePoints = find(validIndices);
+                        validValues = channelData(validIndices);
+                        invalidTimePoints = find(invalidIndices);
+                        
+                        % 線形補間を適用
+                        interpolatedValues = interp1(validTimePoints, validValues, invalidTimePoints, 'linear', 'extrap');
+                        channelData(invalidIndices) = interpolatedValues;
+                    else
+                        % 有効データが不足している場合はチャンネルの平均値または0で置換
+                        if sum(validIndices) == 1
+                            % 1点のみ有効な場合はその値を使用
+                            replacementValue = channelData(validIndices);
+                        else
+                            % 全て無効な場合は0を使用
+                            replacementValue = 0;
+                            fprintf('警告: 試行 %d, チャンネル %d の全データポイントが無効です。0で置換します。\n', ...
+                                trialIndex, ch);
+                        end
+                        channelData(invalidIndices) = replacementValue;
+                    end
+                    
+                    processedData(:, ch) = channelData;
+                end
+            end
+            
+            % 無効値があった場合に情報を表示
+            if hasInvalidData
+                fprintf('試行 %d: %d個の無効値を検出し補間処理しました (%.1f%%)\n', ...
+                    trialIndex, invalidCount, (invalidCount/(timepoints*channels))*100);
             end
         end
 
