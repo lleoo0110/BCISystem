@@ -171,164 +171,152 @@ function EEG = EEGLAB_Analyzer(processedData, labels, params)
     end
     
     if(params.analysis.ersp.enable)
-        % analyzeERSP(EEG,conditionData, params,conditions);
+        analyzeERSP(EEG,conditionData, params,conditions);
     end
     if(params.analysis.erp.enable)
-        % analyzeERP(conditionData, params,conditions);
+        % analyzeERP(EEG,conditionData, params,conditions);
     end
     if(params.analysis.topography.enable)
-        analyzeTopoplot(EEG,conditionData, params,conditions);
+        % analyzeTopoplot(EEG,conditionData, params,conditions);
     end
     disp('EEGLAB解析が完了しました');
 end
 
-function analyzeERP(conditionData, params,conditions)
-    % ERP（事象関連電位）解析を実行
+function analyzeERP(EEG, conditionData, params, conditions)
+    % ERP（事象関連電位）解析を実行 - トポグラフィカル表示
     % 
     % 入力:
+    %   EEG - EEGLABデータ構造体（チャンネル位置情報を含む）
     %   conditionData - 条件ごとのデータセル配列
     %   params - 解析パラメータ構造体
-    
-    disp('ERP解析を実行中...');
-    
+    %   conditions - 条件番号配列
+
+    disp('ERP解析（トポグラフィカル表示）を実行中...');
+
     % 出力ディレクトリの設定
     outDir = fullfile(params.analysis.outputDir, 'ERP');
     if ~exist(outDir, 'dir')
         mkdir(outDir);
     end
-    
+
     % 条件ごとの平均ERPを計算
+    meanERPs = cell(length(conditionData), 1);
     for i = 1:length(conditionData)
         if isempty(conditionData{i})
+            meanERPs{i} = [];
             continue;
         end
-        
+
         % 平均ERP計算（チャンネル×時間）
-        meanERP = mean(conditionData{i}, 3);
-        
-        % ベースライン補正（指定されていれば）
-        % if isfield(params, 'baseline') && ~isempty(params.baseline)
-        %     baselineIdx = find(params.signal.window.timeRange >= params.baseline(1) & params.signal.window.timeRange <= params.baseline(2));
-        %     if ~isempty(baselineIdx)
-        %         baseline = mean(meanERP(:, baselineIdx), 2);
-        %         meanERP = meanERP - repmat(baseline, 1, size(meanERP, 2));
-        %     end
-        % end
-        
-        % 各チャンネルのERPをプロット
-        if isfield(params, 'plotChannels') && ~isempty(params.plotChannels)
-            plotChannels = params.plotChannels;
-        else
-            % デフォルトで全チャンネルを使用
-            plotChannels = 1:size(meanERP, 1);
-        end
-        
-        % チャンネルグループごとにプロット
-        channelGroups = min(10, length(plotChannels)); % 一度に表示するチャンネル数を制限
-        for g = 1:ceil(length(plotChannels) / channelGroups)
-            startCh = (g-1) * channelGroups + 1;
-            endCh = min(g * channelGroups, length(plotChannels));
-            currentChannels = plotChannels(startCh:endCh);
-            
-            figure('Name', ['ERP - 条件: ' num2str(conditions(i)) ' - チャンネルグループ ' num2str(g)]);
-            
-            for ch = 1:length(currentChannels)
-                subplot(ceil(length(currentChannels)/2), 2, ch);
-                timeVals = linspace(params.signal.window.timeRange{1}(1), ...
-                                    params.signal.window.timeRange{1}(2), ...
-                                    size(meanERP, 2));
-                plot(timeVals, meanERP(currentChannels(ch), :));
-                title(['チャンネル ' num2str(currentChannels(ch))]);
-                xlabel('時間 (ms)');
-                ylabel('振幅 (μV)');
-                grid on;
-                
-                % ゼロ時点にラインを追加
-                hold on;
-                plot([0 0], ylim, 'k--');
-                hold off;
-            end
-            
-            % 図の保存
-            saveas(gcf, fullfile(outDir, ['ERP_' num2str(conditions(i)) '_Group' num2str(g) '.png']));
-            saveas(gcf, fullfile(outDir, ['ERP_' num2str(conditions(i)) '_Group' num2str(g) '.fig']));
-            close(gcf);
-        end
-        
-        % すべてのチャンネルのERPデータを保存
-        save(fullfile(outDir, ['ERP_' num2str(conditions(i)) '.mat']), 'meanERP', 'params');
+        meanERPs{i} = mean(conditionData{i}, 3);
     end
 
-  
-    
-    % 条件間比較（2つ以上の条件がある場合）
-    if length(conditionData) >= 2
-        figure('Name', 'ERP条件比較');
-        
-        % 代表的なチャンネルを選択（パラメータで指定されていればそれを使用）
-        if isfield(params, 'compareChannels') && ~isempty(params.compareChannels)
-            compareChannels = params.compareChannels;
-        else
-            % デフォルトで最初の数チャンネルを使用
-            compareChannels = 1:min(4, size(conditionData{1}, 1));
+    % 時間軸の設定
+    timeVals = linspace(params.signal.window.timeRange{1}(1), ...
+                        params.signal.window.timeRange{1}(2), ...
+                        size(meanERPs{1}, 2));
+
+    % 条件ごとにトポグラフィカル表示
+    for i = 1:length(conditionData)
+        if isempty(meanERPs{i})
+            continue;
         end
-        
-        % 生成する時間軸を統一
-        timeVals = linspace(params.signal.window.timeRange{1}(1), ...
-                            params.signal.window.timeRange{1}(2), ...
-                            size(meanERP, 2));
-        
-        % 各チャンネルごとに条件比較
-        for ch = 1:length(compareChannels)
-            subplot(ceil(length(compareChannels)/2), 2, ch);
-            
+
+        % トポグラフィカルプロット
+        figure('Name', ['ERP - 条件: ' num2str(conditions(i)) ' - トポグラフィカル表示'], 'Position', [200, 200, 600, 600]);
+
+        % チャンネル位置情報が存在するか確認
+        if ~isfield(EEG, 'chanlocs') || isempty(EEG.chanlocs)
+            error('チャンネル位置情報（EEG.chanlocs）が見つかりません。');
+        end
+
+        % チャンネル位置を取得
+        y = [EEG.chanlocs.X];
+        x = [EEG.chanlocs.Y];
+
+        % 位置情報がない場合のデフォルト処理
+        if isempty(x) || isempty(y)
+            error('チャンネル位置情報が不完全です。');
+        end
+
+        % x, yの値をスケーリング（プロットの配置に合わせる）
+        % 値を-1から1の範囲に正規化
+        maxVal = max(max(abs(x)), max(abs(y)));
+        x = x / maxVal * 0.4; % 0.8は余白のため
+        y = y / maxVal * 0.4;
+
+        % プロットの大きさを設定
+        subplotSize = 0.1; % 各サブプロットの相対サイズ
+
+        % 各チャンネルの位置に小さなERPプロットを配置
+        for ch = 1:length(EEG.chanlocs)
+            % 現在のチャンネルの位置を取得
+            posX = x(ch);
+            posY = y(ch);
+
+            % ERPプロットのサイズと位置を計算
+            plotLeft = posX - subplotSize/2;
+            plotBottom = posY - subplotSize/2;
+            plotWidth = subplotSize;
+            plotHeight = subplotSize;
+
+            % サブプロットを作成
+            ax = axes('Position', [plotLeft+0.5, plotBottom+0.5, plotWidth, plotHeight]);
+            hPlot = plot(timeVals, meanERPs{i}(ch, :), 'LineWidth', 1);
+            % 防止：子オブジェクトがクリックを捕捉しないように設定
+            set(hPlot, 'HitTest','off');
+            % 軸の設定を最小限に
+            set(gca, 'XTick', [], 'YTick', []);
+            set(gca, 'XColor', 'none', 'YColor', 'none');
             hold on;
-            for i = 1:length(conditionData)
-                if ~isempty(conditionData{i})
-                    meanERP = mean(conditionData{i}, 3);
-                    
-                    % % ベースライン補正
-                    % if isfield(params, 'baseline') && ~isempty(params.baseline)
-                    %     baselineIdx = find(params.signal.window.timeRange >= params.baseline(1) & params.signal.window.timeRange <= params.baseline(2));
-                    %     if ~isempty(baselineIdx)
-                    %         baseline = mean(meanERP(:, baselineIdx), 2);
-                    %         meanERP = meanERP - repmat(baseline, 1, size(meanERP, 2));
-                    %     end
-                    % end
-                    
-                    plot(timeVals, meanERP(compareChannels(ch), :), 'DisplayName', num2str(conditions(i)));
-                end
+            plot([0 0], ylim, 'k');
+            plot(xlim, [0 0], 'k');
+
+            % チャンネル名を取得
+            if isfield(EEG.chanlocs, 'labels') && ~isempty(EEG.chanlocs(ch).labels)
+                channelName = EEG.chanlocs(ch).labels;
+            else
+                channelName = num2str(ch);
             end
-            hold off;
-            
-            title(['チャンネル ' num2str(compareChannels(ch))]);
-            xlabel('時間 (ms)');
-            ylabel('振幅 (μV)');
-            legend('show');
-            grid on;
-            
-            % ゼロ時点にラインを追加
-            hold on;
-            plot([0 0], ylim, 'k--');
-            hold off;
+            text(min(timeVals), max(ylim), channelName, 'FontSize', 8, 'HorizontalAlignment', 'left', 'VerticalAlignment', 'top');
+            xlim([min(timeVals), max(timeVals)]);
+            box off;
+            set(gca, 'Color', [0.95, 0.95, 0.95]);
+
+            % 設定：クリック時に大画面でERPプロットを表示するコールバックを追加
+            set(ax, 'ButtonDownFcn', @(src, event) openLargeERPPlot(timeVals, meanERPs{i}(ch, :), channelName,conditions(i)));
         end
-        
+
+        % メインの図の設定
+        axes('Position', [0, 0, 1, 1]);
+        axis off;
+        axis equal;
+        xlim([-1.1, 1.1]);
+        ylim([-1.1, 1.1]);
+        title(['ERP - 条件: ' num2str(conditions(i))], 'FontSize', 16);
+
         % 図の保存
-        saveas(gcf, fullfile(outDir, 'ERP_Comparison.png'));
-        saveas(gcf, fullfile(outDir, 'ERP_Comparison.fig'));
-        close(gcf);
+        saveas(gcf, fullfile(outDir, ['ERP_Topographic_' num2str(conditions(i)) '.png']));
+        saveas(gcf, fullfile(outDir, ['ERP_Topographic_' num2str(conditions(i)) '.fig']));
+        % 高解像度版も保存
+        print(gcf, fullfile(outDir, ['ERP_Topographic_' num2str(conditions(i)) '_HighRes.png']), '-dpng', '-r300');
+        % close(gcf);
     end
-    
-    disp('ERP解析が完了しました');
+
+    disp('ERP解析（トポグラフィカル表示）が完了しました');
+
+    % ローカルコールバック関数：クリックされたプロットを大画面で表示
+    function openLargeERPPlot(timeVals, erpData, channelName,condition)
+        figure('Name', ['Large ERP Plot - 条件' num2str(condition) ' - channel - ' channelName ], 'Position', [300, 300, 800, 400]);
+        plot(timeVals, erpData, 'LineWidth', 2);
+        xlabel('Time (ms)');
+        ylabel('Amplitude');
+        title(['ERP - ' channelName]);
+        grid on;
+    end
 end
 
-function analyzeERSP(EEG, conditionData, params,conditions)
-    % ERSP（事象関連スペクトルパワー）解析を実行
-    % 
-    % 入力:
-    %   conditionData - 条件ごとのデータセル配列
-    %   params - 解析パラメータ構造体
-    
+function analyzeERSP(EEG, conditionData, params, conditions)
     disp('ERSP解析を実行中...');
     
     % 出力ディレクトリの設定
@@ -350,9 +338,25 @@ function analyzeERSP(EEG, conditionData, params,conditions)
         erspParams.baseline = params.baseline;
     end
     
+    % グローバルカラースケールの設定（オプション）
+    useGlobalScale = false;
+    if isfield(params.analysis.ersp, 'useGlobalScale') && ~isempty(params.analysis.ersp.useGlobalScale)
+        useGlobalScale = params.analysis.ersp.useGlobalScale;
+    end
+    
+    if isfield(params.analysis.ersp, 'colorScale') && ~isempty(params.analysis.ersp.colorScale)
+        erspParams.colorScale = params.analysis.ersp.colorScale;
+        useGlobalScale = true; % 明示的に設定されている場合はグローバルスケールを使用
+    end
+    
+    % カラーマップの設定
+    if isfield(params.analysis.ersp, 'colorMap') && ~isempty(params.analysis.ersp.colorMap)
+        erspParams.colorMap = params.analysis.ersp.colorMap;
+    else
+        erspParams.colorMap = 'jet'; % デフォルト
+    end
 
-
-    % 各条件のERSPを計算
+    % 各条件のERSPを計算・プロット
     for i = 1:length(conditionData)
         if isempty(conditionData{i})
             continue;
@@ -366,35 +370,38 @@ function analyzeERSP(EEG, conditionData, params,conditions)
             erspChannels = 1:size(conditionData{i}, 1);
         end
         
-
-        % チャンネルごとにERSPを計算
+        % 各チャンネルのERSP結果を格納するセル配列
+        erspResults = cell(length(erspChannels), 1);
+        channelScales = cell(length(erspChannels), 1); % 各チャンネルのカラースケール
+        
+        % 各チャンネルごとにERSPを計算しファイル保存
         for ch = 1:length(erspChannels)
             channel = erspChannels(ch);
+            channelName = EEG.chanlocs(ch).labels;
             
             % 全試行のデータを取得
             trialData = squeeze(conditionData{i}(channel, :, :));
-            disp(size(trialData));
-            figure('Name', ['ERSP - 条件: ' num2str(conditions(i)) ' - チャンネル ' num2str(channel)]);
-            % newtimefを使用してERSPを計算
             [ersp, itc, powbase, times, freqs] = newtimef(trialData, ...
                 EEG.pnts, ...                           % データ長
-                [EEG.xmin EEG.xmax], ...          % 時間範囲
-                EEG.srate, ...                                 % サンプリングレート
-                erspParams.cycles, ...                            % 周波数ビンに対する小波サイクル数
-                'freqs', erspParams.freqs, ...                    % 周波数範囲
-                'timesout', erspParams.timesout, ...              % 時間ビンの数
-                'plotersp', 'on', ...                            % ERSPをプロットしない
-                'plotitc', 'on', ...                             % ITCをプロットしない
-                'verbose', 'on');                                % 冗長な出力を抑制
+                [EEG.xmin EEG.xmax], ...                % 時間範囲
+                EEG.srate, ...                          % サンプリングレート
+                erspParams.cycles, ...                  % 周波数ビンに対する小波サイクル数
+                'freqs', erspParams.freqs, ...          % 周波数範囲
+                'timesout', erspParams.timesout, ...    % 時間ビンの数
+                'plotersp', 'off', ...                  % プロットは行わず
+                'plotitc', 'off', ...                    
+                'verbose', 'on');                       
             
+            % チャンネル個別のカラースケールを計算
+            maxVal = max(abs(ersp(:)));
+            channelScales{ch} = [-maxVal maxVal]; % 対称的なカラースケール
             
-            disp(num2str(conditions(i)));
-            % 図の保存
-            saveas(gcf, fullfile(outDir, ['ERSP_' num2str(conditions(i)) '_Ch' num2str(channel) '.png']));
-            saveas(gcf, fullfile(outDir, ['ERSP_' num2str(conditions(i)) '_Ch' num2str(channel) '.fig']));
-            close(gcf);
+            erspResults{ch} = struct('cycles', erspParams.cycles, 'timesout', erspParams.timesout, ...
+                'pnts', EEG.pnts, 'xmin', EEG.xmin, 'xmax', EEG.xmax, 'srate', EEG.srate, 'trialData', trialData, ...
+                'ersp', ersp, 'itc', itc, 'powbase', powbase, 'times', times, 'freqs', freqs, ...
+                'channel', channel, 'colorScale', channelScales{ch});
             
-            % ERSPデータを保存
+            % ERSPデータの保存
             erspData = struct(...
                 'ersp', ersp, ...
                 'itc', itc, ...
@@ -403,13 +410,157 @@ function analyzeERSP(EEG, conditionData, params,conditions)
                 'freqs', freqs, ...
                 'channel', channel, ...
                 'condition', conditions(i), ...
+                'colorScale', channelScales{ch}, ...
                 'params', params ...
             );
-            save(fullfile(outDir, ['ERSP_' num2str(conditions(i)) '_Ch' num2str(channel) '.mat']), 'erspData');
+            save(fullfile(outDir, ['ERSP_' num2str(conditions(i)) '_' channelName '.mat']), 'erspData');
+        end
+        
+        % グローバルスケールを使用する場合、全チャンネルのデータから計算
+        if useGlobalScale && (~isfield(erspParams, 'colorScale') || isempty(erspParams.colorScale))
+            allErspValues = [];
+            for idx = 1:length(erspChannels)
+                allErspValues = [allErspValues; erspResults{idx}.ersp(:)];
+            end
+            maxVal = max(abs(allErspValues));
+            if isfield(erspParams, 'ERSP_CAXIS_LIMIT') && erspParams.ERSP_CAXIS_LIMIT ~= 0
+                erspParams.colorScale = erspParams.ERSP_CAXIS_LIMIT * [-1 1];
+            else
+                erspParams.colorScale = [-1 1] * 1.1 * maxVal;
+            end
+            disp(['自動計算されたグローバルカラースケール: [' num2str(erspParams.colorScale(1)) ' ' num2str(erspParams.colorScale(2)) ']']);
+        end
+        
+        % チャンネル位置情報を取得し正規化
+        if ~isfield(EEG, 'chanlocs') || isempty(EEG.chanlocs)
+            error('チャンネル位置情報（EEG.chanlocs）が見つかりません。');
+        end
+        yCoords = [EEG.chanlocs.X];
+        xCoords = [EEG.chanlocs.Y];
+        if isempty(xCoords) || isempty(yCoords)
+            error('チャンネル位置情報が不完全です。');
+        end
+        maxVal = max(max(abs(xCoords)), max(abs(yCoords)));
+        xNorm = xCoords / maxVal * 0.4;
+        yNorm = yCoords / maxVal * 0.4;
+        
+        subplotSize = 0.15; % サブプロットの大きさ（必要に応じて調整）
+        
+        % 各条件のトポグラフィックなERSP図の作成
+        figure('Name', ['ERSP - 条件: ' num2str(conditions(i))], 'Position', [200, 200, 800, 600]);
+        
+        for idx = 1:length(erspChannels)
+            channel = erspResults{idx}.channel;
+            channelName = EEG.chanlocs(idx).labels;
+            % 対応するチャンネル位置（EEG.chanlocs のインデックスを利用）
+            posX = xNorm(channel);
+            posY = yNorm(channel);
+            
+            % 電極位置に小さなサブプロットを配置
+            ax = axes('Position', [posX + 0.5 - subplotSize/2, posY + 0.5 - subplotSize/2, subplotSize, subplotSize]);
+            
+            imagesc(erspResults{idx}.times, erspResults{idx}.freqs, erspResults{idx}.ersp);
+            axis xy;
+            
+            % カラースケールの適用（グローバルまたはチャンネル個別）
+            if useGlobalScale
+                clim(erspParams.colorScale);
+            else
+                clim(channelScales{idx});
+            end
+            
+            set(gca, 'XTick', [], 'YTick', []);
+            title(channelName, 'FontSize', 8);
+            
+            % カラーマップの適用
+            colormap(ax, erspParams.colorMap);
+            
+            % サブプロットクリック時に拡大表示するコールバック
+            set(ax, 'ButtonDownFcn', @(src, event) openLargeERSPPlot(erspResults{idx}, channelName));
+        end
+        
+        % メインの図の設定（全体タイトルとカラーバー）
+        axes('Position', [0, 0, 1, 1], 'Visible', 'off');
+        title(['ERSP - 条件: ' num2str(conditions(i))], 'FontSize', 16);
+        
+        % カラーバー（スケールタイプを示す追加情報）
+        % cbar = colorbar('Position', [0.92, 0.1, 0.02, 0.8]);
+        % ylabel(cbar, 'dB', 'FontSize', 10);
+        % if useGlobalScale
+        %     annotation('textbox', [0.85, 0.02, 0.14, 0.03], 'String', 'グローバルスケール', 'EdgeColor', 'none');
+        % else
+        %     annotation('textbox', [0.85, 0.02, 0.14, 0.03], 'String', 'チャンネル個別スケール', 'EdgeColor', 'none');
+        % end
+        
+        % 図の保存
+        saveas(gcf, fullfile(outDir, ['ERSP_Topographic_' num2str(conditions(i)) '.png']));
+        saveas(gcf, fullfile(outDir, ['ERSP_Topographic_' num2str(conditions(i)) '.fig']));
+        print(gcf, fullfile(outDir, ['ERSP_Topographic_' num2str(conditions(i)) '_HighRes.png']), '-dpng', '-r300');
+        close(gcf);
+        
+        % チャンネル個別のERSPプロットも保存（オプション）
+        if isfield(erspParams, 'saveIndividualPlots') && erspParams.saveIndividualPlots
+            for idx = 1:length(erspChannels)
+                channelName = EEG.chanlocs(erspChannels(idx)).labels;
+                figure('Position', [300, 300, 700, 500]);
+                
+                % ERSP
+                subplot(2, 1, 1);
+                imagesc(erspResults{idx}.times, erspResults{idx}.freqs, erspResults{idx}.ersp);
+                axis xy;
+                if useGlobalScale
+                    clim(erspParams.colorScale);
+                else
+                    clim(channelScales{idx});
+                end
+                colormap(erspParams.colorMap);
+                colorbar;
+                title(['ERSP - 条件: ' num2str(conditions(i)) ' - チャンネル: ' channelName], 'FontSize', 12);
+                xlabel('時間 (ms)', 'FontSize', 10);
+                ylabel('周波数 (Hz)', 'FontSize', 10);
+                
+                % ITC
+                subplot(2, 1, 2);
+                imagesc(erspResults{idx}.times, erspResults{idx}.freqs, erspResults{idx}.itc);
+                axis xy;
+                colormap(erspParams.colorMap);
+                colorbar;
+                title(['ITC - 条件: ' num2str(conditions(i)) ' - チャンネル: ' channelName], 'FontSize', 12);
+                xlabel('時間 (ms)', 'FontSize', 10);
+                ylabel('周波数 (Hz)', 'FontSize', 10);
+                
+                % 保存
+                saveas(gcf, fullfile(outDir, ['ERSP_' num2str(conditions(i)) '_' channelName '_Plot.png']));
+                close(gcf);
+            end
         end
     end
     
     disp('ERSP解析が完了しました');
+end
+
+
+% コールバック関数：クリックされたサブプロットを大画面で表示
+function openLargeERSPPlot(erspStruct,channelName)
+    figure('Name', ['Large ERSP Plot - ' channelName], 'Position', [300, 300, 800, 600]);
+    % imagesc(erspStruct.times, erspStruct.freqs, erspStruct.ersp);
+    % axis xy;
+    % xlabel('Time (ms)');
+    % ylabel('Frequency (Hz)');
+    title(['ERSP - ' channelName]);
+    % colormap jet;
+    % colorbar;
+
+    [ersp, itc, powbase, times, freqs] = newtimef(erspStruct.trialData, ...
+        erspStruct.pnts, ...                           % データ長
+        [erspStruct.xmin erspStruct.xmax], ...                 % 時間範囲
+        erspStruct.srate, ...                           % サンプリングレート
+        erspStruct.cycles, ...                   % 周波数ビンに対する小波サイクル数
+        'freqs', erspStruct.freqs, ...           % 周波数範囲
+        'timesout', erspStruct.timesout, ...     % 時間ビンの数
+        'plotersp', 'on', ...                   % プロットは行わず
+        'plotitc', 'on', ...                    
+        'verbose', 'on');   
 end
 
 function analyzeTopoplot(EEG,conditionData, params,conditions)
@@ -451,9 +602,9 @@ function analyzeTopoplot(EEG,conditionData, params,conditions)
         meanERP = mean(conditionData{i}, 3);
         
         % ベースライン補正（指定されていれば）
-        % if isfield(params.analysis.topography, 'baseline') && ~isempty(params.analysis.topography.baseline)
+        % if isfield(params.analysis.topography, 'baseline') && !isempty(params.analysis.topography.baseline)
         %     baselineIdx = find(params.signal.window.timeRange{1} >= params.analysis.topography.baseline(1) & params.signal.window.timeRange{1} <= params.analysis.topography.baseline(2));
-        %     if ~isempty(baselineIdx)
+        %     if !isempty(baselineIdx)
         %         baseline = mean(meanERP(:, baselineIdx), 2);
         %         meanERP = meanERP - repmat(baseline, 1, size(meanERP, 2));
         %     end
