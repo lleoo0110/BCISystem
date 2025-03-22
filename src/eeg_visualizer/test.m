@@ -1,1 +1,0 @@
-EEG = EEGLAB_Analyzer(processedData,labels,params);
