@@ -61,6 +61,7 @@ end
     %    labels構造体からイベント情報をEEG構造体に追加
     for i = 1:length(labels)
         EEG.event(i).type   = num2str(labels(i).value);   % イベントタイプ
+        disp(labels(i).sample);
         EEG.event(i).latency = labels(i).sample;  % レイテンシー (サンプル単位)
         EEG.event(i).urevent = i;                  % イベントのID
     end

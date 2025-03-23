@@ -98,18 +98,19 @@ function EEG = EEGLAB_Analyzer(processedData, labels, params)
     % 5. イベント情報の追加
     for i = 1:length(labels)
         EEG.event(i).type   = num2str(labels(i).value);
-        EEG.event(i).latency = labels(i).sample;
+        disp(labels(i).sample);
+        EEG.event(i).latency = (-EEG.xmin*EEG.srate + 1 )  + EEG.pnts * (i-1);
         EEG.event(i).urevent = i;
         EEG.event(i).epoch = i;
     end
 
     for i = 1:EEG.trials
-        EEG.epoch(i).event = { i }; 
+        EEG.epoch(i).event = i; 
         EEG.epoch(i).eventtype = EEG.event(i).type;
-        EEG.epoch(i).eventlatency = { (-EEG.xmin)*1000 };
+        EEG.epoch(i).eventlatency = 0;
         EEG.epoch(i).eventurevent = EEG.event(i).urevent;
     end
-    
+  
     if isfield(params, 'chanlocs') && ~isempty(params.chanlocs)
         EEG.chanlocs = params.chanlocs;
     end
@@ -161,13 +162,13 @@ function EEG = EEGLAB_Analyzer(processedData, labels, params)
     
     % 各解析関数の呼び出し（進行状況ログ付き）
     if(params.analysis.ersp.enable)
-        analyzeERSP(EEG,conditionData, params,conditions);
+        % analyzeERSP(EEG,conditionData, params,conditions);
     end
     if(params.analysis.erp.enable)
-        analyzeERP(EEG,conditionData, params,conditions);
+        % analyzeERP(EEG,conditionData, params,conditions);
     end
     if(params.analysis.topography.enable)
-        analyzeTopoplot(EEG,conditionData, params,conditions);
+        % analyzeTopoplot(EEG,conditionData, params,conditions);
     end
     disp('--- EEGLAB解析が完了しました ---');
 end
