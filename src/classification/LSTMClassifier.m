@@ -67,18 +67,6 @@ classdef LSTMClassifier < handle
             % コンポーネントの初期化
             obj.dataAugmenter = DataAugmenter(params);
             obj.normalizer = EEGNormalizer(params);
-            
-            % GPU利用可能性の確認
-            if obj.useGPU
-                try
-                    gpuInfo = gpuDevice();
-                    fprintf('GPUが検出されました: %s (メモリ: %.2f GB)\n', ...
-                        gpuInfo.Name, gpuInfo.TotalMemory/1e9);
-                catch
-                    warning('GPU使用が指定されていますが、GPUが利用できません。CPUで実行します。');
-                    obj.useGPU = false;
-                end
-            end
         end
         
         %% LSTM学習メソッド - モデルの学習と評価を実行
@@ -131,11 +119,11 @@ classdef LSTMClassifier < handle
                 obj.updatePerformanceMetrics(testMetrics);
                 
                 % 交差検証の実行
-                crossValidationResults = obj.performCrossValidationIfEnabled(processedData, processedLabel);
+                crossValidation = obj.performCrossValidationIfEnabled(processedData, processedLabel);
                 
                 % 結果構造体の構築
                 results = obj.buildResultsStruct(lstmModel, testMetrics, trainInfo, ...
-                    crossValidationResults, normParams);
+                    crossValidation, normParams);
 
                 % 結果のサマリー表示
                 obj.displayResults();
@@ -157,6 +145,93 @@ classdef LSTMClassifier < handle
                 % クリーンアップ処理
                 obj.resetGPUMemory();
                 rethrow(ME);
+            end
+        end
+
+        %% 過学習検証メソッド - モデルの過学習程度を評価
+        function [isOverfit, metrics] = validateOverfitting(obj, trainInfo, testMetrics)
+            % トレーニング結果とテスト結果から過学習を分析
+            %
+            % 入力:
+            %   trainInfo - トレーニング情報（学習曲線を含む）
+            %   testMetrics - テストデータでの評価結果
+            %
+            % 出力:
+            %   isOverfit - 過学習の有無（論理値）
+            %   metrics - 詳細な過学習メトリクス
+            
+            fprintf('\n=== 過学習検証の実行 ===\n');
+            
+            % 初期化
+            isOverfit = false;
+            metrics = struct();
+            
+            try
+                % trainInfoの構造を検証
+                obj.validateTrainInfo(trainInfo);
+                
+                % 精度データの取得
+                trainAcc = trainInfo.History.TrainingAccuracy;
+                valAcc = trainInfo.History.ValidationAccuracy;
+                
+                % テスト精度を取得
+                testAcc = testMetrics.accuracy;
+                
+                % 検証-テスト精度ギャップ分析を実行
+                [gapOverfit, gapMetrics] = obj.validateTestValidationGap(valAcc, testAcc, size(testMetrics.confusionMat, 1));
+                
+                % 学習曲線の詳細分析
+                [trainTrend, valTrend] = obj.analyzeLearningCurves(trainAcc, valAcc);
+                
+                % バイアスの検出（特定クラスへの偏り）
+                isCompletelyBiased = obj.detectClassificationBias(testMetrics);
+                
+                % 学習進行の評価
+                isLearningProgressing = std(diff(trainAcc)) > 0.01;
+                
+                % 最適エポックの分析
+                [optimalEpoch, totalEpochs] = obj.findOptimalEpoch(valAcc);
+                fprintf('最適エポック: %d/%d (%.1f%%)\n', optimalEpoch, totalEpochs, ... 
+                    (optimalEpoch/totalEpochs)*100);
+                
+                % Early Stoppingの効果分析
+                earlyStoppingEffect = obj.analyzeEarlyStoppingEffect(trainInfo);
+
+                % 複合判定 - バイアス検出を優先
+                if isCompletelyBiased
+                    severity = 'critical';  % 完全な偏りがある場合は最重度の過学習と判定
+                    fprintf('完全な分類バイアスが検出されたため、過学習を「%s」と判定\n', severity);
+                else
+                    % 通常のギャップベース判定を使用
+                    severity = gapMetrics.severity;
+                end
+                
+                % メトリクスの構築
+                metrics = struct(...
+                    'gapMetrics', gapMetrics, ...
+                    'performanceGap', gapMetrics.rawGap, ...
+                    'isCompletelyBiased', isCompletelyBiased, ...
+                    'isLearningProgressing', isLearningProgressing, ...
+                    'validationTrend', valTrend, ...
+                    'trainingTrend', trainTrend, ...
+                    'severity', severity, ...
+                    'optimalEpoch', optimalEpoch, ...
+                    'totalEpochs', totalEpochs, ...
+                    'earlyStoppingEffect', earlyStoppingEffect ...
+                );
+                
+                % 過学習判定
+                isOverfit = gapOverfit || isCompletelyBiased || (~isLearningProgressing && severity ~= 'none');
+                fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
+                
+            catch ME
+                fprintf('過学習検証でエラーが発生: %s\n', ME.message);
+                fprintf('エラー詳細:\n');
+                disp(getReport(ME, 'extended'));
+                
+                % エラー時のフォールバック値を設定
+                metrics = obj.createFallbackOverfitMetrics();
+                isOverfit = true;
             end
         end
 
@@ -246,6 +321,8 @@ classdef LSTMClassifier < handle
             % データの妥当性検証
             validateattributes(validatedData, {'numeric'}, {'finite', 'nonnan'}, ...
                 'validateAndPrepareData', 'data');
+            
+            return;
         end
         
         %% 学習データの前処理
@@ -269,6 +346,56 @@ classdef LSTMClassifier < handle
             if obj.params.classifier.normalize.enable
                 [procTrainData, normParams] = obj.normalizer.normalize(procTrainData);
                 fprintf('データを正規化しました（%s法）\n', normParams.method);
+                
+                % 正規化パラメータの検証
+                obj.validateNormalizationParams(normParams);
+            end
+            
+            return;
+        end
+        
+        %% 正規化パラメータの検証
+        function validateNormalizationParams(~, params)
+            % 正規化パラメータの妥当性を検証
+            
+            if ~isstruct(params)
+                error('正規化パラメータが構造体ではありません');
+            end
+            
+            % 正規化方法ごとの必須パラメータを確認
+            switch params.method
+                case 'zscore'
+                    % Z-score正規化パラメータの検証
+                    if ~isfield(params, 'mean') || ~isfield(params, 'std')
+                        error('Z-score正規化に必要なパラメータ(mean, std)が不足しています');
+                    end
+                    
+                    if any(params.std == 0)
+                        warning('標準偏差が0のチャンネルがあります。正規化で問題が発生する可能性があります');
+                    end
+                    
+                case 'minmax'
+                    % MinMax正規化パラメータの検証
+                    if ~isfield(params, 'min') || ~isfield(params, 'max')
+                        error('MinMax正規化に必要なパラメータ(min, max)が不足しています');
+                    end
+                    
+                    if any(params.max - params.min < eps)
+                        warning('最大値と最小値がほぼ同じチャンネルがあります。正規化で問題が発生する可能性があります');
+                    end
+                    
+                case 'robust'
+                    % Robust正規化パラメータの検証
+                    if ~isfield(params, 'median') || ~isfield(params, 'mad')
+                        error('Robust正規化に必要なパラメータ(median, mad)が不足しています');
+                    end
+                    
+                    if any(params.mad < eps)
+                        warning('MADが極めて小さいチャンネルがあります。正規化で問題が発生する可能性があります');
+                    end
+                    
+                otherwise
+                    warning('未知の正規化方法: %s', params.method);
             end
         end
         
@@ -362,9 +489,8 @@ classdef LSTMClassifier < handle
             end
             
             % クラス不均衡の評価
-            counts = histcounts(labels);
-            maxCount = max(counts);
-            minCount = min(counts);
+            maxCount = max(histcounts(labels));
+            minCount = min(histcounts(labels));
             imbalanceRatio = maxCount / max(minCount, 1);
             
             if imbalanceRatio > 3
@@ -376,6 +502,8 @@ classdef LSTMClassifier < handle
         %% LSTM用のデータ前処理（セル配列へ変換）
         function preparedData = prepareDataForLSTM(obj, data)
             % データをLSTMに適した形式に変換
+            % MATLABのLSTMでは、各シーケンスのデータは [特徴量 × 時間ステップ] の形式である必要があります
+            % (特徴量を行、時間ステップを列とする)
             %
             % 入力:
             %   data - 入力データ (3次元数値配列、2次元配列、またはセル配列)
@@ -384,13 +512,10 @@ classdef LSTMClassifier < handle
             %   preparedData - LSTM用に整形されたデータ (セル配列)
             
             try
-                fprintf('LSTM用データ変換を開始...\n');
-                
                 if iscell(data)
                     % 入力が既にセル配列の場合
                     trials = numel(data);
                     preparedData = cell(trials, 1);
-                    fprintf('セル配列入力: %d試行\n', trials);
                     
                     for i = 1:trials
                         currentData = data{i};
@@ -398,9 +523,15 @@ classdef LSTMClassifier < handle
                             currentData = double(currentData);
                         end
                         
-                        % 重要: LSTM用に時間軸と特徴量軸を転置
-                        % [チャンネル × 時間] → [時間 × チャンネル]
-                        currentData = currentData';
+                        % 重要: MATLABのLSTMでは [特徴量 × 時間ステップ] の形式が必要
+                        [dim1, dim2] = size(currentData);
+                        % 時間ステップの方が特徴量より多いことが一般的
+                        if dim1 > dim2
+                            % データは [時間ステップ × 特徴量] の形式と思われるので、転置して
+                            % [特徴量 × 時間ステップ] の形式に変換
+                            currentData = currentData';
+                            fprintf('  データ形状を変換: [%d×%d] → [%d×%d] (特徴量×時間ステップ)\n', dim1, dim2, dim2, dim1);
+                        end
                         
                         % NaN/Inf値の検出と補間処理
                         currentData = obj.interpolateInvalidValues(currentData, i);
@@ -412,8 +543,6 @@ classdef LSTMClassifier < handle
                     % 3次元数値配列の処理 [チャンネル × 時間ポイント × 試行]
                     [channels, timepoints, trials] = size(data);
                     preparedData = cell(trials, 1);
-                    fprintf('3次元データ入力: [%dチャンネル × %d時間ポイント × %d試行]\n', ...
-                        channels, timepoints, trials);
                     
                     for i = 1:trials
                         currentData = data(:, :, i);
@@ -421,8 +550,8 @@ classdef LSTMClassifier < handle
                             currentData = double(currentData);
                         end
                         
-                        % 重要: LSTM用に時間軸と特徴量軸を転置
-                        currentData = currentData';  % [時間 × チャンネル]
+                        % 既に [チャンネル × 時間ポイント] の形式になっているので、そのまま使用
+                        % これはMATLABのLSTMが期待する [特徴量 × 時間ステップ] の形式と一致
                         
                         % NaN/Inf値の検出と補間処理
                         currentData = obj.interpolateInvalidValues(currentData, i);
@@ -432,19 +561,23 @@ classdef LSTMClassifier < handle
                     
                 elseif ismatrix(data)
                     % 2次元データ（単一試行）の処理
-                    [channels, timepoints] = size(data);
-                    fprintf('2次元データ入力: [%dチャンネル × %d時間ポイント]\n', channels, timepoints);
+                    [dim1, dim2] = size(data);
                     
                     currentData = data;
                     if ~isa(currentData, 'double')
                         currentData = double(currentData);
                     end
                     
-                    % 重要: LSTM用に時間軸と特徴量軸を転置
-                    currentData = currentData';  % [時間 × チャンネル]
+                    % チャンネル数が時点数より少ないことが一般的
+                    if dim1 > dim2
+                        % データは [時間ステップ × 特徴量] の形式と思われるので、転置して
+                        % [特徴量 × 時間ステップ] の形式に変換
+                        currentData = currentData';
+                        fprintf('  データ形状を変換: [%d×%d] → [%d×%d] (特徴量×時間ステップ)\n', dim1, dim2, dim2, dim1);
+                    end
                     
                     % NaN/Inf値の検出と補間処理
-                    currentData = obj.interpolateInvalidValues(currentData, 1);
+                    currentData = obj.interpolateInvalidValues(currentData, i);
                     
                     preparedData = {currentData};
                 else
@@ -455,12 +588,6 @@ classdef LSTMClassifier < handle
                 if isempty(preparedData)
                     error('変換後のデータが空です');
                 end
-                
-                % サンプルとなる試行のサイズを表示（デバッグ用）
-                sampleData = preparedData{1};
-                [timepoints, features] = size(sampleData);
-                fprintf('LSTM用データ変換完了: 各試行は [%d時間ポイント × %d特徴量] の形式\n', ...
-                    timepoints, features);
                 
             catch ME
                 fprintf('LSTM用データ準備でエラーが発生: %s\n', ME.message);
@@ -473,24 +600,25 @@ classdef LSTMClassifier < handle
         
         function processedData = interpolateInvalidValues(~, data, trialIndex)
             % NaN/Infなどの無効値を線形補間で処理
+            % MATLABのLSTMでは、データは [特徴量 × 時間ステップ] の形式
             %
             % 入力:
-            %   data - 処理するデータ [時間 × チャンネル]
+            %   data - 処理するデータ [特徴量 × 時間ステップ]
             %   trialIndex - 試行インデックス（デバッグ情報用）
             %
             % 出力:
             %   processedData - 補間処理済みデータ
             
             processedData = data;
-            [timepoints, channels] = size(data);
+            [features, timepoints] = size(data);
             
             % 無効値の検出
             hasInvalidData = false;
             invalidCount = 0;
             
-            for ch = 1:channels
-                channelData = data(:, ch);
-                invalidIndices = isnan(channelData) | isinf(channelData);
+            for f = 1:features
+                featureData = data(f, :);
+                invalidIndices = isnan(featureData) | isinf(featureData);
                 invalidCount = invalidCount + sum(invalidIndices);
                 
                 if any(invalidIndices)
@@ -501,34 +629,34 @@ classdef LSTMClassifier < handle
                     if sum(validIndices) > 1
                         % 補間のための準備
                         validTimePoints = find(validIndices);
-                        validValues = channelData(validIndices);
+                        validValues = featureData(validIndices);
                         invalidTimePoints = find(invalidIndices);
                         
                         % 線形補間を適用
                         interpolatedValues = interp1(validTimePoints, validValues, invalidTimePoints, 'linear', 'extrap');
-                        channelData(invalidIndices) = interpolatedValues;
+                        featureData(invalidIndices) = interpolatedValues;
                     else
-                        % 有効データが不足している場合はチャンネルの平均値または0で置換
+                        % 有効データが不足している場合は特徴量の平均値または0で置換
                         if sum(validIndices) == 1
                             % 1点のみ有効な場合はその値を使用
-                            replacementValue = channelData(validIndices);
+                            replacementValue = featureData(validIndices);
                         else
                             % 全て無効な場合は0を使用
                             replacementValue = 0;
-                            fprintf('警告: 試行 %d, チャンネル %d の全データポイントが無効です。0で置換します。\n', ...
-                                trialIndex, ch);
+                            fprintf('警告: 試行 %d, 特徴量 %d の全データポイントが無効です。0で置換します。\n', ...
+                                trialIndex, f);
                         end
-                        channelData(invalidIndices) = replacementValue;
+                        featureData(invalidIndices) = replacementValue;
                     end
                     
-                    processedData(:, ch) = channelData;
+                    processedData(f, :) = featureData;
                 end
             end
             
             % 無効値があった場合に情報を表示
             if hasInvalidData
                 fprintf('試行 %d: %d個の無効値を検出し補間処理しました (%.1f%%)\n', ...
-                    trialIndex, invalidCount, (invalidCount/(timepoints*channels))*100);
+                    trialIndex, invalidCount, (invalidCount/(features*timepoints))*100);
             end
         end
 
@@ -552,16 +680,18 @@ classdef LSTMClassifier < handle
                % GPUメモリの確認
                obj.checkGPUMemory();
                
-               % データの構造確認
-               sampleData = trainData{1};
-               inputSize = size(sampleData, 1);
-               sequenceLength = size(sampleData, 2);
-               fprintf('入力データ構造: [%d特徴量 x %d時点]\n', inputSize, sequenceLength);
+               % データの構造確認と検証
+               if ~isempty(trainData) && iscell(trainData) && ~isempty(trainData{1})
+                   sampleData = trainData{1};
+                   [numFeatures, numTimeSteps] = size(sampleData);
+               else
+                   error('不正な学習データ形式');
+               end
         
                % ラベルのカテゴリカル変換
                uniqueLabels = unique(trainLabels);
                trainLabels = categorical(trainLabels, uniqueLabels);
-
+        
                % 検証データの処理
                valDS = {};
                if ~isempty(valData)
@@ -586,9 +716,9 @@ classdef LSTMClassifier < handle
                    executionEnvironment = 'gpu';
                end
         
-               % レイヤーの構築
+               % レイヤーの構築 - 入力サイズを正しく渡す
                fprintf('LSTMアーキテクチャを構築中...\n');
-               layers = obj.buildLSTMLayers(inputSize);
+               layers = obj.buildLSTMLayers(numFeatures);  % ここで正しい特徴量次元を渡す
                
                % トレーニングオプションの設定
                options = trainingOptions(obj.params.classifier.lstm.training.optimizer.type, ...
@@ -609,9 +739,24 @@ classdef LSTMClassifier < handle
                fprintf('LSTMモデルの学習を開始...\n');
                [lstmModel, trainHistory] = trainNetwork(trainData, trainLabels, layers, options);
         
+               % GPU使用時は、データをCPUに明示的に移動
+               if obj.useGPU
+                   try
+                       trainHistory.TrainingLoss = gather(trainHistory.TrainingLoss);
+                       trainHistory.ValidationLoss = gather(trainHistory.ValidationLoss);
+                       trainHistory.TrainingAccuracy = gather(trainHistory.TrainingAccuracy);
+                       trainHistory.ValidationAccuracy = gather(trainHistory.ValidationAccuracy);
+                   catch ME
+                       warning('GPU上のデータをCPUに移動中にエラーが発生しました');
+                   end
+               end
+               
                % 学習履歴の保存
                trainInfo.History = trainHistory;
                trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
+               
+               % 学習情報の詳細ログ出力（デバッグ用）
+               obj.logTrainInfo(trainInfo);
         
                fprintf('学習完了: %d エポック\n', trainInfo.FinalEpoch);
                fprintf('  - 最終学習損失: %.4f\n', trainHistory.TrainingLoss(end));
@@ -622,7 +767,7 @@ classdef LSTMClassifier < handle
                % 最良の検証精度
                [bestValAcc, bestEpoch] = max(trainHistory.ValidationAccuracy);
                fprintf('  - 最良検証精度: %.2f%% (エポック %d)\n', bestValAcc, bestEpoch);
-
+        
                % GPUメモリ解放
                obj.resetGPUMemory();
         
@@ -658,7 +803,7 @@ classdef LSTMClassifier < handle
                 layers = cell(1, numLSTMLayers * 3 + numFCLayers * 2 + 3);
                 layerIdx = 1;
                 
-                % 入力層
+                % 入力層 - ここで正しい入力サイズを指定することが重要
                 layers{layerIdx} = sequenceInputLayer(inputSize, ...
                     'Normalization', 'none', ...
                     'Name', 'input');
@@ -835,6 +980,8 @@ classdef LSTMClassifier < handle
             else
                 fprintf('交差検証はスキップされました（設定で無効）\n');
             end
+            
+            return;
         end
         
         %% 交差検証メソッド
@@ -1000,88 +1147,6 @@ classdef LSTMClassifier < handle
             end
         end
 
-        %% 過学習検証メソッド
-        function [isOverfit, metrics] = validateOverfitting(obj, trainInfo, testMetrics)
-            % トレーニング結果とテスト結果から過学習を分析
-            %
-            % 入力:
-            %   trainInfo - トレーニング情報（学習曲線を含む）
-            %   testMetrics - テストデータでの評価結果
-            %
-            % 出力:
-            %   isOverfit - 過学習の有無（論理値）
-            %   metrics - 詳細な過学習メトリクス
-            
-            fprintf('\n=== 過学習検証の実行 ===\n');
-            
-            % 初期化
-            isOverfit = false;
-            metrics = struct();
-            
-            try
-                % trainInfoの構造を検証
-                obj.validateTrainInfo(trainInfo);
-                
-                % 精度データの取得
-                trainAcc = trainInfo.History.TrainingAccuracy;
-                valAcc = trainInfo.History.ValidationAccuracy;
-                
-                % テスト精度を取得
-                testAcc = testMetrics.accuracy * 100;
-                
-                % 検証-テスト精度ギャップ分析を実行
-                [gapOverfit, gapMetrics] = obj.validateTestValidationGap(valAcc, testAcc, size(testMetrics.confusionMat, 1));
-                
-                % 学習曲線の詳細分析
-                [trainTrend, valTrend] = obj.analyzeLearningCurves(trainAcc, valAcc);
-                
-                % バイアスの検出（特定クラスへの偏り）
-                isCompletelyBiased = obj.detectClassificationBias(testMetrics);
-                
-                % 学習進行の評価
-                isLearningProgressing = std(diff(trainAcc)) > 0.01;
-                
-                % 最適エポックの分析
-                [optimalEpoch, totalEpochs] = obj.findOptimalEpoch(valAcc);
-                fprintf('最適エポック: %d/%d (%.1f%%)\n', optimalEpoch, totalEpochs, ... 
-                    (optimalEpoch/totalEpochs)*100);
-                
-                % 複合判定 - バイアス検出を優先
-                if isCompletelyBiased
-                    severity = 'critical';  % 完全な偏りがある場合は最重度の過学習と判定
-                    fprintf('完全な分類バイアスが検出されたため、過学習を「%s」と判定\n', severity);
-                else
-                    % 通常のギャップベース判定を使用
-                    severity = gapMetrics.severity;
-                end
-                
-                % メトリクスの構築
-                metrics = struct(...
-                    'gapMetrics', gapMetrics, ...
-                    'performanceGap', gapMetrics.rawGap, ...
-                    'isCompletelyBiased', isCompletelyBiased, ...
-                    'isLearningProgressing', isLearningProgressing, ...
-                    'validationTrend', valTrend, ...
-                    'trainingTrend', trainTrend, ...
-                    'severity', severity, ...
-                    'optimalEpoch', optimalEpoch, ...
-                    'totalEpochs', totalEpochs);
-                
-                % 過学習判定
-                isOverfit = gapOverfit || isCompletelyBiased || (~isLearningProgressing && severity ~= 'none');
-                fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
-                
-            catch ME
-                fprintf('過学習検証でエラーが発生: %s\n', ME.message);
-                fprintf('エラー詳細:\n');
-                disp(getReport(ME, 'extended'));
-                
-                % エラー時のフォールバック値を設定
-                metrics = obj.createFallbackOverfitMetrics();
-                isOverfit = true;
-            end
-        end
-
         %% トレーニング情報検証メソッド
         function validateTrainInfo(~, trainInfo)
             % トレーニング情報の構造を検証
@@ -1101,7 +1166,7 @@ classdef LSTMClassifier < handle
         end
 
         %% 学習曲線分析メソッド
-        function [trainTrend, valTrend] = analyzeLearningCurves(obj, trainAcc, valAcc)
+        function [trainTrend, valTrend] = analyzeLearningCurves(~, trainAcc, valAcc)
             % 学習曲線を分析し、傾向と特性を抽出
             %
             % 入力:
@@ -1152,16 +1217,18 @@ classdef LSTMClassifier < handle
                     'mean_change', mean(trainDiff), ...
                     'volatility', std(trainDiff), ...
                     'increasing_ratio', sum(trainDiff > 0) / max(length(trainDiff), 1), ...
-                    'plateau_detected', detectPlateau(obj, trainSmooth), ...
-                    'convergence_epoch', estimateConvergenceEpoch(obj, trainSmooth) ...
+                    'plateau_detected', detectPlateau(trainSmooth), ...
+                    'oscillation_strength', calculateOscillation(trainDiff), ...
+                    'convergence_epoch', estimateConvergenceEpoch(trainSmooth) ...
                 );
                 
                 valTrend = struct(...
                     'mean_change', mean(valDiff), ...
                     'volatility', std(valDiff), ...
                     'increasing_ratio', sum(valDiff > 0) / max(length(valDiff), 1), ...
-                    'plateau_detected', detectPlateau(obj, valSmooth), ...
-                    'convergence_epoch', estimateConvergenceEpoch(obj, valSmooth) ...
+                    'plateau_detected', detectPlateau(valSmooth), ...
+                    'oscillation_strength', calculateOscillation(valDiff), ...
+                    'convergence_epoch', estimateConvergenceEpoch(valSmooth) ...
                 );
                 
                 % 詳細な分析結果の表示
@@ -1184,66 +1251,69 @@ classdef LSTMClassifier < handle
                 
                 % エラー時のフォールバック値を設定
                 trainTrend = struct('mean_change', 0, 'volatility', 0, 'increasing_ratio', 0, ...
-                    'plateau_detected', false, 'convergence_epoch', 0);
+                    'plateau_detected', false, 'oscillation_strength', 0, 'convergence_epoch', 0);
                 valTrend = struct('mean_change', 0, 'volatility', 0, 'increasing_ratio', 0, ...
-                    'plateau_detected', false, 'convergence_epoch', 0);
+                    'plateau_detected', false, 'oscillation_strength', 0, 'convergence_epoch', 0);
             end
-        end
-        
-        %% プラトー検出メソッド
-        function isPlateau = detectPlateau(~, smoothedCurve)
-            % 学習曲線でのプラトー（停滞）状態を検出
-            %
-            % 入力:
-            %   smoothedCurve - 平滑化された学習曲線
-            %
-            % 出力:
-            %   isPlateau - プラトー検出フラグ
-            
-            % 最小必要長のチェック
-            if length(smoothedCurve) < 5
-                isPlateau = false;
-                return;
-            end
-            
-            % 後半部分の変化率を分析
-            halfLength = max(3, floor(length(smoothedCurve)/2));
-            lastSegment = smoothedCurve(end-halfLength+1:end);
-            segmentDiff = diff(lastSegment);
-            
-            % 変化が非常に小さい場合はプラトーと見なす
-            isPlateau = mean(abs(segmentDiff)) < 0.001;
-        end
 
-        %% 収束エポック推定メソッド
-        function convergenceEpoch = estimateConvergenceEpoch(~, smoothedCurve)
-            % 学習が収束したエポックを推定
-            %
-            % 入力:
-            %   smoothedCurve - 平滑化された学習曲線
-            %
-            % 出力:
-            %   convergenceEpoch - 推定収束エポック
-            
-            % 最小必要長のチェック
-            if length(smoothedCurve) < 5
-                convergenceEpoch = length(smoothedCurve);
-                return;
+            % 補助関数: プラトー検出
+            function isPlateau = detectPlateau(smoothedCurve)
+                % 学習曲線でのプラトー（停滞）状態を検出
+                
+                % 最小必要長のチェック
+                if length(smoothedCurve) < 5
+                    isPlateau = false;
+                    return;
+                end
+                
+                % 後半部分の変化率を分析
+                halfLength = max(3, floor(length(smoothedCurve)/2));
+                lastSegment = smoothedCurve(end-halfLength+1:end);
+                segmentDiff = diff(lastSegment);
+                
+                % 変化が非常に小さい場合はプラトーと見なす
+                isPlateau = mean(abs(segmentDiff)) < 0.001;
             end
-            
-            % 曲線の変化率を計算
-            diffValues = abs(diff(smoothedCurve));
-            threshold = 0.001;  % 収束判定の閾値
-            
-            % 連続する数ポイントで閾値以下を検出
-            convergedIdx = find(diffValues < threshold, 3, 'first');
-            
-            if length(convergedIdx) >= 3 && (convergedIdx(3) - convergedIdx(1)) == 2
-                % 3ポイント連続で変化が小さい場合
-                convergenceEpoch = convergedIdx(1) + 1;  % +1は差分からインデックスへの調整
-            else
-                % 収束点が見つからない場合は終点を返す
-                convergenceEpoch = length(smoothedCurve);
+
+            % 補助関数: 振動強度計算
+            function oscillation = calculateOscillation(diffValues)
+                % 学習曲線の振動強度を計算
+                
+                % 最小必要長のチェック
+                if length(diffValues) < 2
+                    oscillation = 0;
+                    return;
+                end
+                
+                % 符号変化の数をカウント（振動の指標）
+                signChanges = sum(diff(sign(diffValues)) ~= 0);
+                oscillation = signChanges / (length(diffValues) - 1);  % 正規化
+            end
+
+            % 補助関数: 収束エポック推定
+            function convergenceEpoch = estimateConvergenceEpoch(smoothedCurve)
+                % 学習が収束したエポックを推定
+                
+                % 最小必要長のチェック
+                if length(smoothedCurve) < 5
+                    convergenceEpoch = length(smoothedCurve);
+                    return;
+                end
+                
+                % 曲線の変化率を計算
+                diffValues = abs(diff(smoothedCurve));
+                threshold = 0.001;  % 収束判定の閾値
+                
+                % 連続する数ポイントで閾値以下を検出
+                convergedIdx = find(diffValues < threshold, 3, 'first');
+                
+                if length(convergedIdx) >= 3 && (convergedIdx(3) - convergedIdx(1)) == 2
+                    % 3ポイント連続で変化が小さい場合
+                    convergenceEpoch = convergedIdx(1) + 1;  % +1は差分からインデックスへの調整
+                else
+                    % 収束点が見つからない場合は終点を返す
+                    convergenceEpoch = length(smoothedCurve);
+                end
             end
         end
 
@@ -1274,6 +1344,40 @@ classdef LSTMClassifier < handle
             end
         end
 
+        %% Early Stopping効果分析メソッド
+        function effect = analyzeEarlyStoppingEffect(~, trainInfo)
+            % Early Stoppingの効果を分析
+            %
+            % 入力:
+            %   trainInfo - トレーニング情報
+            %
+            % 出力:
+            %   effect - Early Stopping効果の分析結果
+            
+            % バリデーション損失を取得
+            valLoss = trainInfo.History.ValidationLoss;
+            
+            % 最小損失エポックを特定
+            [~, minLossEpoch] = min(valLoss);
+            totalEpochs = length(valLoss);
+            
+            % 効果分析の構造体を作成
+            effect = struct(...
+                'optimal_epoch', minLossEpoch, ...
+                'total_epochs', totalEpochs, ...
+                'stopping_efficiency', minLossEpoch / totalEpochs, ...
+                'potential_savings', totalEpochs - minLossEpoch ...
+            );
+            
+            fprintf('Early Stopping分析:\n');
+            fprintf('  - 最適エポック: %d/%d (%.1f%%)\n', ...
+                effect.optimal_epoch, effect.total_epochs, effect.stopping_efficiency*100);
+            
+            if effect.potential_savings > 0
+                fprintf('  - 潜在的節約: %dエポック\n', effect.potential_savings);
+            end
+        end
+
         %% 検証-テスト精度ギャップ分析メソッド
         function [isOverfit, metrics] = validateTestValidationGap(~, valAccHistory, testAcc, dataSize)
             % 検証精度とテスト精度の差を統計的に評価
@@ -1296,7 +1400,7 @@ classdef LSTMClassifier < handle
                     'adjustedGap', NaN, ...
                     'meanValAcc', NaN, ...
                     'stdValAcc', NaN, ...
-                    'testAcc', testAcc, ...
+                    'testAcc', testAcc*100, ...
                     'severity', 'unknown' ...
                 );
                 isOverfit = true;
@@ -1314,7 +1418,7 @@ classdef LSTMClassifier < handle
                     'adjustedGap', NaN, ...
                     'meanValAcc', NaN, ...
                     'stdValAcc', NaN, ...
-                    'testAcc', testAcc, ...
+                    'testAcc', testAcc*100, ...
                     'severity', 'unknown' ...
                 );
                 isOverfit = true;
@@ -1340,7 +1444,7 @@ classdef LSTMClassifier < handle
             scaleFactor = min(1, sqrt(dataSize / 1000));  % データサイズに基づく調整
             
             % 正規化された差（z-スコア的アプローチ）
-            normalizedGap = abs(meanValAcc - testAcc) / stdValAcc;
+            normalizedGap = abs(meanValAcc - testAcc*100) / max(stdValAcc, 1);
             
             % スケール調整されたギャップ
             adjustedGap = normalizedGap * scaleFactor;
@@ -1360,12 +1464,12 @@ classdef LSTMClassifier < handle
             
             % 結果の格納
             metrics = struct(...
-                'rawGap', abs(meanValAcc - testAcc), ...
+                'rawGap', abs(meanValAcc - testAcc*100), ...
                 'normalizedGap', normalizedGap, ...
                 'adjustedGap', adjustedGap, ...
                 'meanValAcc', meanValAcc, ...
                 'stdValAcc', stdValAcc, ...
-                'testAcc', testAcc, ...
+                'testAcc', testAcc*100, ...
                 'severity', severity ...
             );
             
@@ -1374,7 +1478,7 @@ classdef LSTMClassifier < handle
             % 結果の表示
             fprintf('\n=== 検証-テスト精度ギャップ分析 ===\n');
             fprintf('  平均検証精度: %.2f%% (±%.2f%%)\n', meanValAcc, stdValAcc);
-            fprintf('  テスト精度: %.2f%%\n', testAcc);
+            fprintf('  テスト精度: %.2f%%\n', testAcc*100);
             fprintf('  基本ギャップ: %.2f%%\n', metrics.rawGap);
             fprintf('  正規化ギャップ: %.2f (スケーリング後: %.2f)\n', normalizedGap, adjustedGap);
             fprintf('  判定結果: %s\n', severity);
@@ -1434,6 +1538,62 @@ classdef LSTMClassifier < handle
                 'severity', 'error', ...
                 'optimalEpoch', 0, ...
                 'totalEpochs', 0);
+        end
+
+        %% 学習情報ログ出力メソッド
+        function logTrainInfo(~, trainInfo)
+            % trainInfoの内容を詳細にログ出力（デバッグ用）
+            
+            fprintf('\n=== 学習情報の詳細 ===\n');
+            
+            if ~isstruct(trainInfo)
+                fprintf('trainInfoが構造体ではありません\n');
+                return;
+            end
+            
+            % フィールド一覧の表示
+            fprintf('trainInfoのフィールド: %s\n', strjoin(fieldnames(trainInfo), ', '));
+            
+            % Historyフィールドの詳細
+            if isfield(trainInfo, 'History')
+                fprintf('Historyフィールドのサブフィールド: %s\n', strjoin(fieldnames(trainInfo.History), ', '));
+                
+                % 各履歴データのサイズと値
+                if isfield(trainInfo.History, 'TrainingLoss')
+                    loss = trainInfo.History.TrainingLoss;
+                    fprintf('TrainingLoss: %d要素, 範囲[%.4f, %.4f]\n', ...
+                        length(loss), min(loss), max(loss));
+                end
+                
+                if isfield(trainInfo.History, 'ValidationLoss')
+                    loss = trainInfo.History.ValidationLoss;
+                    fprintf('ValidationLoss: %d要素, 範囲[%.4f, %.4f]\n', ...
+                        length(loss), min(loss), max(loss));
+                end
+                
+                if isfield(trainInfo.History, 'TrainingAccuracy')
+                    acc = trainInfo.History.TrainingAccuracy;
+                    fprintf('TrainingAccuracy: %d要素, 範囲[%.2f%%, %.2f%%]\n', ...
+                        length(acc), min(acc), max(acc));
+                end
+                
+                if isfield(trainInfo.History, 'ValidationAccuracy')
+                    acc = trainInfo.History.ValidationAccuracy;
+                    fprintf('ValidationAccuracy: %d要素, 範囲[%.2f%%, %.2f%%]\n', ...
+                        length(acc), min(acc), max(acc));
+                end
+            else
+                fprintf('Historyフィールドがありません\n');
+            end
+            
+            % その他のフィールド
+            if isfield(trainInfo, 'FinalEpoch')
+                fprintf('FinalEpoch: %d\n', trainInfo.FinalEpoch);
+            else
+                fprintf('FinalEpochフィールドがありません\n');
+            end
+            
+            fprintf('=== 学習情報の詳細終了 ===\n\n');
         end
 
         %% 性能指標の更新
@@ -1509,16 +1669,150 @@ classdef LSTMClassifier < handle
             crossValidation, normParams)
             % 結果構造体の構築
             
+            % trainInfoの検証と安全なディープコピー
+            obj.validateTrainInfo(trainInfo);
+            trainInfoCopy = obj.createDeepCopy(trainInfo);
+            
+            % 結果構造体の構築
             results = struct(...
                 'model', lstmModel, ...
                 'performance', metrics, ...
                 'crossValidation', crossValidation, ...
-                'trainInfo', trainInfo, ...
+                'trainInfo', trainInfoCopy, ...
                 'overfitting', obj.overfitMetrics, ...
-                'normParams', normParams ...
+                'normParams', normParams, ...
+                'params', obj.extractParams() ...
             );
+            
+            % 出力前に結果の検証
+            obj.validateResults(results);
         end
         
+        %% パラメータ抽出メソッド
+        function params = extractParams(obj)
+            % LSTMのパラメータを抽出して配列として返す
+            
+            % デフォルト値で初期化
+            params = [0, 0, 0, 0, 0, 0];
+            
+            try
+                % 1. 学習率
+                if isfield(obj.params.classifier.lstm.training.optimizer, 'learningRate')
+                    params(1) = obj.params.classifier.lstm.training.optimizer.learningRate;
+                end
+                
+                % 2. バッチサイズ
+                if isfield(obj.params.classifier.lstm.training, 'miniBatchSize')
+                    params(2) = obj.params.classifier.lstm.training.miniBatchSize;
+                end
+                
+                % 3. LSTMユニット数
+                if isfield(obj.params.classifier.lstm.architecture, 'lstmLayers')
+                    lstmFields = fieldnames(obj.params.classifier.lstm.architecture.lstmLayers);
+                    if ~isempty(lstmFields)
+                        firstLSTM = obj.params.classifier.lstm.architecture.lstmLayers.(lstmFields{1});
+                        if isfield(firstLSTM, 'numHiddenUnits')
+                            params(3) = firstLSTM.numHiddenUnits;
+                        end
+                    end
+                end
+                
+                % 4. LSTM層数
+                if isfield(obj.params.classifier.lstm.architecture, 'lstmLayers')
+                    params(4) = length(fieldnames(obj.params.classifier.lstm.architecture.lstmLayers));
+                end
+                
+                % 5. ドロップアウト率
+                if isfield(obj.params.classifier.lstm.architecture, 'dropoutLayers')
+                    dropout = obj.params.classifier.lstm.architecture.dropoutLayers;
+                    dropoutFields = fieldnames(dropout);
+                    if ~isempty(dropoutFields)
+                        params(5) = dropout.(dropoutFields{1});
+                    end
+                end
+                
+                % 6. 全結合層ユニット数
+                if isfield(obj.params.classifier.lstm.architecture, 'fullyConnected')
+                    fc = obj.params.classifier.lstm.architecture.fullyConnected;
+                    if ~isempty(fc)
+                        params(6) = fc(1);
+                    end
+                end
+            catch ME
+                warning('パラメータ抽出中にエラーが発生');
+            end
+        end
+        
+        %% 結果検証メソッド
+        function validateResults(~, results)
+            % 結果構造体の妥当性を検証
+            
+            if ~isstruct(results)
+                warning('結果が構造体ではありません');
+                return;
+            end
+            
+            % 必須フィールドのチェック
+            requiredFields = {'model', 'performance', 'trainInfo', 'params'};
+            for i = 1:length(requiredFields)
+                if ~isfield(results, requiredFields{i})
+                    warning('結果構造体に必須フィールド「%s」がありません', requiredFields{i});
+                end
+            end
+            
+            % paramsフィールドのチェック
+            if isfield(results, 'params')
+                if length(results.params) ~= 6
+                    warning('paramsフィールドの長さが期待値と異なります: %d (期待値: 6)', length(results.params));
+                end
+            end
+            
+            % パフォーマンスフィールドのチェック
+            if isfield(results, 'performance')
+                if ~isfield(results.performance, 'accuracy')
+                    warning('performance構造体にaccuracyフィールドがありません');
+                end
+            end
+        end
+        
+        %% 構造体の深いコピー作成
+        function copy = createDeepCopy(obj, original)
+            % 構造体のコピーを作成
+            
+            if ~isstruct(original)
+                copy = original;
+                return;
+            end
+            
+            % 新しい構造体を作成
+            copy = struct();
+            
+            % 各フィールドを再帰的にコピー
+            fields = fieldnames(original);
+            for i = 1:length(fields)
+                field = fields{i};
+                if isstruct(original.(field))
+                    % 構造体の場合は再帰的にコピー
+                    copy.(field) = obj.createDeepCopy(original.(field));
+                elseif iscell(original.(field))
+                    % セル配列の場合
+                    cellArray = original.(field);
+                    newCellArray = cell(size(cellArray));
+                    for j = 1:numel(cellArray)
+                        if isstruct(cellArray{j})
+                            newCellArray{j} = obj.createDeepCopy(cellArray{j});
+                        else
+                            newCellArray{j} = cellArray{j};
+                        end
+                    end
+                    copy.(field) = newCellArray;
+                else
+                    % その他のデータ型はそのままコピー
+                    copy.(field) = original.(field);
+                end
+            end
+        end
+
         %% 結果表示メソッド
         function displayResults(obj)
             % 総合的な結果サマリーの表示
@@ -1579,6 +1873,15 @@ classdef LSTMClassifier < handle
                             obj.overfitMetrics.totalEpochs, ...
                             (obj.overfitMetrics.optimalEpoch / ...
                              max(obj.overfitMetrics.totalEpochs, 1)) * 100);
+                    end
+                    
+                    % Early Stopping効果
+                    if isfield(obj.overfitMetrics, 'earlyStoppingEffect')
+                        effect = obj.overfitMetrics.earlyStoppingEffect;
+                        fprintf('  - Early Stopping効率: %.2f\n', effect.stopping_efficiency);
+                        if effect.potential_savings > 0
+                            fprintf('  - 潜在的エポック節約: %d\n', effect.potential_savings);
+                        end
                     end
                 end
 

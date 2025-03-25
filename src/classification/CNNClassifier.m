@@ -67,18 +67,6 @@ classdef CNNClassifier < handle
             % コンポーネントの初期化
             obj.dataAugmenter = DataAugmenter(params);
             obj.normalizer = EEGNormalizer(params);
-            
-            % GPU利用可能性の確認
-            if obj.useGPU
-                try
-                    gpuInfo = gpuDevice();
-                    fprintf('GPUが検出されました: %s (メモリ: %.2f GB)\n', ...
-                        gpuInfo.Name, gpuInfo.TotalMemory/1e9);
-                catch
-                    warning('GPU使用が指定されていますが、GPUが利用できません。CPUで実行します。');
-                    obj.useGPU = false;
-                end
-            end
         end
 
         %% CNN学習メソッド - モデルの学習と評価を実行
@@ -523,91 +511,108 @@ classdef CNNClassifier < handle
             %   cnnModel - 学習済みCNNモデル
             %   trainInfo - 学習に関する情報
             
-           try        
-               fprintf('\n=== CNNモデルの学習開始 ===\n');
-               
-               % GPUメモリの確認
-               obj.checkGPUMemory();
-               
-               % データの形状確認
-               if ndims(trainData) ~= 4
-                   trainData = obj.prepareDataForCNN(trainData);
-               end
+            try        
+                fprintf('\n=== CNNモデルの学習開始 ===\n');
+                
+                % GPUメモリの確認
+                obj.checkGPUMemory();
+                
+                % データの形状確認
+                if ndims(trainData) ~= 4
+                    trainData = obj.prepareDataForCNN(trainData);
+                end
         
-               % ラベルのカテゴリカル変換
-               uniqueLabels = unique(trainLabels);
-               trainLabels = categorical(trainLabels, uniqueLabels);
-
-               % 検証データの処理
-               valDS = {};
-               if ~isempty(valData)
-                   if ndims(valData) ~= 4
-                       valData = obj.prepareDataForCNN(valData);
-                   end
-                   valLabels = categorical(valLabels, uniqueLabels);
-                   valDS = {valData, valLabels};
-               end
+                % ラベルのカテゴリカル変換
+                uniqueLabels = unique(trainLabels);
+                trainLabels = categorical(trainLabels, uniqueLabels);
         
-               % トレーニング情報の初期化
-               trainInfo = struct(...
-                   'TrainingLoss', [], ...
-                   'ValidationLoss', [], ...
-                   'TrainingAccuracy', [], ...
-                   'ValidationAccuracy', [], ...
-                   'FinalEpoch', 0 ...
-               );
+                % 検証データの処理
+                valDS = {};
+                if ~isempty(valData)
+                    if ndims(valData) ~= 4
+                        valData = obj.prepareDataForCNN(valData);
+                    end
+                    valLabels = categorical(valLabels, uniqueLabels);
+                    valDS = {valData, valLabels};
+                end
         
-               % 実行環境の選択
-               executionEnvironment = 'cpu';
-               if obj.useGPU
-                   executionEnvironment = 'gpu';
-               end
+                % トレーニング情報の初期化
+                trainInfo = struct(...
+                    'History', struct(...
+                        'TrainingLoss', [], ...
+                        'ValidationLoss', [], ...
+                        'TrainingAccuracy', [], ...
+                        'ValidationAccuracy', [] ...
+                    ), ...
+                    'FinalEpoch', 0 ...
+                );
         
-               % トレーニングオプションの設定
-               options = trainingOptions(obj.params.classifier.cnn.training.optimizer.type, ...
-                   'InitialLearnRate', obj.params.classifier.cnn.training.optimizer.learningRate, ...
-                   'MaxEpochs', obj.params.classifier.cnn.training.maxEpochs, ...
-                   'MiniBatchSize', obj.params.classifier.cnn.training.miniBatchSize, ...
-                   'Plots', 'none', ...
-                   'Shuffle', obj.params.classifier.cnn.training.shuffle, ...
-                   'ExecutionEnvironment', executionEnvironment, ...
-                   'OutputNetwork', 'best-validation', ...
-                   'Verbose', true, ...
-                   'ValidationData', valDS, ...
-                   'ValidationFrequency', obj.params.classifier.cnn.training.frequency, ...
-                   'ValidationPatience', obj.params.classifier.cnn.training.patience, ...
-                   'GradientThreshold', obj.params.classifier.cnn.training.patience);
-       
-               % レイヤーの構築
-               fprintf('CNNアーキテクチャを構築中...\n');
-               layers = obj.buildCNNLayers(trainData);
-               
-               % モデルの学習
-               fprintf('CNNモデルの学習を開始...\n');
-               [cnnModel, trainHistory] = trainNetwork(trainData, trainLabels, layers, options);
+                % 実行環境の選択
+                executionEnvironment = 'cpu';
+                if obj.useGPU
+                    executionEnvironment = 'gpu';
+                end
         
-               % 学習履歴の保存
-               trainInfo.History = trainHistory;
-               trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
+                % トレーニングオプションの設定
+                options = trainingOptions(obj.params.classifier.cnn.training.optimizer.type, ...
+                    'InitialLearnRate', obj.params.classifier.cnn.training.optimizer.learningRate, ...
+                    'MaxEpochs', obj.params.classifier.cnn.training.maxEpochs, ...
+                    'MiniBatchSize', obj.params.classifier.cnn.training.miniBatchSize, ...
+                    'Plots', 'none', ...
+                    'Shuffle', obj.params.classifier.cnn.training.shuffle, ...
+                    'ExecutionEnvironment', executionEnvironment, ...
+                    'OutputNetwork', 'best-validation', ...
+                    'Verbose', true, ...
+                    'ValidationData', valDS, ...
+                    'ValidationFrequency', obj.params.classifier.cnn.training.frequency, ...
+                    'ValidationPatience', obj.params.classifier.cnn.training.patience, ...
+                    'GradientThreshold', obj.params.classifier.cnn.training.patience);
         
-               fprintf('学習完了: %d エポック\n', trainInfo.FinalEpoch);
-               fprintf('  - 最終学習損失: %.4f\n', trainHistory.TrainingLoss(end));
-               fprintf('  - 最終検証損失: %.4f\n', trainHistory.ValidationLoss(end));
-               fprintf('  - 最終学習精度: %.2f%%\n', trainHistory.TrainingAccuracy(end));
-               fprintf('  - 最終検証精度: %.2f%%\n', trainHistory.ValidationAccuracy(end));
-               
-               % 最良の検証精度
-               [bestValAcc, bestEpoch] = max(trainHistory.ValidationAccuracy);
-               fprintf('  - 最良検証精度: %.2f%% (エポック %d)\n', bestValAcc, bestEpoch);
-
-               % GPUメモリ解放
-               obj.resetGPUMemory();
+                % レイヤーの構築
+                fprintf('CNNアーキテクチャを構築中...\n');
+                layers = obj.buildCNNLayers(trainData);
+                
+                % モデルの学習
+                fprintf('CNNモデルの学習を開始...\n');
+                [cnnModel, trainHistory] = trainNetwork(trainData, trainLabels, layers, options);
         
-           catch ME
-               fprintf('CNNモデル学習でエラーが発生: %s\n', ME.message);
-               obj.resetGPUMemory();
-               rethrow(ME);
-           end
+                % GPU使用時は、データをCPUに明示的に移動
+                if obj.useGPU
+                    try
+                        trainHistory.TrainingLoss = gather(trainHistory.TrainingLoss);
+                        trainHistory.ValidationLoss = gather(trainHistory.ValidationLoss);
+                        trainHistory.TrainingAccuracy = gather(trainHistory.TrainingAccuracy);
+                        trainHistory.ValidationAccuracy = gather(trainHistory.ValidationAccuracy);
+                    catch ME
+                        warning('GPU上のデータをCPUに移動中にエラーが発生しました');
+                    end
+                end
+        
+                % 学習履歴の保存
+                trainInfo.History = trainHistory;
+                trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
+        
+                % 学習情報の詳細ログ出力（デバッグ用）
+                obj.logTrainInfo(trainInfo);
+        
+                fprintf('学習完了: %d エポック\n', trainInfo.FinalEpoch);
+                fprintf('  - 最終学習損失: %.4f\n', trainHistory.TrainingLoss(end));
+                fprintf('  - 最終検証損失: %.4f\n', trainHistory.ValidationLoss(end));
+                fprintf('  - 最終学習精度: %.2f%%\n', trainHistory.TrainingAccuracy(end));
+                fprintf('  - 最終検証精度: %.2f%%\n', trainHistory.ValidationAccuracy(end));
+                
+                % 最良の検証精度
+                [bestValAcc, bestEpoch] = max(trainHistory.ValidationAccuracy);
+                fprintf('  - 最良検証精度: %.2f%% (エポック %d)\n', bestValAcc, bestEpoch);
+        
+                % GPUメモリ解放
+                obj.resetGPUMemory();
+        
+            catch ME
+                fprintf('CNNモデル学習でエラーが発生: %s\n', ME.message);
+                obj.resetGPUMemory();
+                rethrow(ME);
+            end
         end
 
         %% CNNレイヤー構築メソッド
@@ -1408,19 +1413,225 @@ classdef CNNClassifier < handle
         
         %% トレーニング情報検証メソッド
         function validateTrainInfo(~, trainInfo)
-            % トレーニング情報の構造を検証
+            % trainInfo構造体の妥当性を検証
             
-            if ~isstruct(trainInfo) 
-                error('trainInfoが構造体ではありません');
+            if ~isstruct(trainInfo)
+                warning('trainInfoが構造体ではありません');
+                return;
             end
             
-            if ~isfield(trainInfo, 'History')
-                error('trainInfoにHistoryフィールドがありません');
+            % 必須フィールドの確認
+            requiredFields = {'History', 'FinalEpoch'};
+            for i = 1:length(requiredFields)
+                if ~isfield(trainInfo, requiredFields{i})
+                    warning('trainInfoに必須フィールド「%s」がありません', requiredFields{i});
+                end
             end
             
-            if ~isfield(trainInfo.History, 'TrainingAccuracy') || ...
-               ~isfield(trainInfo.History, 'ValidationAccuracy')
-                error('Historyに必要な精度フィールドがありません');
+            % History構造体の検証
+            if isfield(trainInfo, 'History')
+                historyFields = {'TrainingLoss', 'ValidationLoss', 'TrainingAccuracy', 'ValidationAccuracy'};
+                for i = 1:length(historyFields)
+                    if ~isfield(trainInfo.History, historyFields{i})
+                        warning('History構造体に「%s」フィールドがありません', historyFields{i});
+                    elseif isempty(trainInfo.History.(historyFields{i}))
+                        warning('History構造体の「%s」フィールドが空です', historyFields{i});
+                    end
+                end
+            end
+            
+            % FinalEpochの妥当性検証
+            if isfield(trainInfo, 'FinalEpoch')
+                if trainInfo.FinalEpoch <= 0
+                    warning('FinalEpochが0以下です: %d', trainInfo.FinalEpoch);
+                end
+            end
+        end
+
+        function logTrainInfo(~, trainInfo)
+            % trainInfoの内容を詳細にログ出力（デバッグ用）
+            
+            fprintf('\n=== 学習情報の詳細 ===\n');
+            
+            if ~isstruct(trainInfo)
+                fprintf('trainInfoが構造体ではありません\n');
+                return;
+            end
+            
+            % フィールド一覧の表示
+            fprintf('trainInfoのフィールド: %s\n', strjoin(fieldnames(trainInfo), ', '));
+            
+            % Historyフィールドの詳細
+            if isfield(trainInfo, 'History')
+                fprintf('Historyフィールドのサブフィールド: %s\n', strjoin(fieldnames(trainInfo.History), ', '));
+                
+                % 各履歴データのサイズと値
+                if isfield(trainInfo.History, 'TrainingLoss')
+                    loss = trainInfo.History.TrainingLoss;
+                    fprintf('TrainingLoss: %d要素, 範囲[%.4f, %.4f]\n', ...
+                        length(loss), min(loss), max(loss));
+                end
+                
+                if isfield(trainInfo.History, 'ValidationLoss')
+                    loss = trainInfo.History.ValidationLoss;
+                    fprintf('ValidationLoss: %d要素, 範囲[%.4f, %.4f]\n', ...
+                        length(loss), min(loss), max(loss));
+                end
+                
+                if isfield(trainInfo.History, 'TrainingAccuracy')
+                    acc = trainInfo.History.TrainingAccuracy;
+                    fprintf('TrainingAccuracy: %d要素, 範囲[%.2f%%, %.2f%%]\n', ...
+                        length(acc), min(acc), max(acc));
+                end
+                
+                if isfield(trainInfo.History, 'ValidationAccuracy')
+                    acc = trainInfo.History.ValidationAccuracy;
+                    fprintf('ValidationAccuracy: %d要素, 範囲[%.2f%%, %.2f%%]\n', ...
+                        length(acc), min(acc), max(acc));
+                end
+            else
+                fprintf('Historyフィールドがありません\n');
+            end
+            
+            % その他のフィールド
+            if isfield(trainInfo, 'FinalEpoch')
+                fprintf('FinalEpoch: %d\n', trainInfo.FinalEpoch);
+            else
+                fprintf('FinalEpochフィールドがありません\n');
+            end
+            
+            fprintf('=== 学習情報の詳細終了 ===\n\n');
+        end
+
+        function copy = createDeepCopy(obj, original)
+            % 構造体のコピーを作成
+            
+            if ~isstruct(original)
+                copy = original;
+                return;
+            end
+            
+            % 新しい構造体を作成
+            copy = struct();
+            
+            % 各フィールドを再帰的にコピー
+            fields = fieldnames(original);
+            for i = 1:length(fields)
+                field = fields{i};
+                if isstruct(original.(field))
+                    % 構造体の場合は再帰的にコピー
+                    copy.(field) = obj.createDeepCopy(original.(field));
+                elseif iscell(original.(field))
+                    % セル配列の場合
+                    cellArray = original.(field);
+                    newCellArray = cell(size(cellArray));
+                    for j = 1:numel(cellArray)
+                        if isstruct(cellArray{j})
+                            newCellArray{j} = obj.createDeepCopy(cellArray{j});
+                        else
+                            newCellArray{j} = cellArray{j};
+                        end
+                    end
+                    copy.(field) = newCellArray;
+                else
+                    % その他のデータ型はそのままコピー
+                    copy.(field) = original.(field);
+                end
+            end
+        end
+
+        function params = extractParams(obj)
+            % CNNのパラメータを抽出して7要素の配列として返す
+            
+            % デフォルト値で初期化
+            params = [0, 0, 0, 0, 0, 0, 0];
+            
+            try
+                % 1. 学習率
+                if isfield(obj.params.classifier.cnn.training.optimizer, 'learningRate')
+                    params(1) = obj.params.classifier.cnn.training.optimizer.learningRate;
+                end
+                
+                % 2. バッチサイズ
+                if isfield(obj.params.classifier.cnn.training, 'miniBatchSize')
+                    params(2) = obj.params.classifier.cnn.training.miniBatchSize;
+                end
+                
+                % 3. 畳み込み層数
+                if isfield(obj.params.classifier.cnn.architecture, 'convLayers')
+                    params(3) = length(fieldnames(obj.params.classifier.cnn.architecture.convLayers));
+                end
+                
+                % 4. フィルタサイズと5. フィルタ数
+                if isfield(obj.params.classifier.cnn.architecture, 'convLayers')
+                    convFields = fieldnames(obj.params.classifier.cnn.architecture.convLayers);
+                    if ~isempty(convFields)
+                        firstConv = obj.params.classifier.cnn.architecture.convLayers.(convFields{1});
+                        if isfield(firstConv, 'size')
+                            if length(firstConv.size) >= 1
+                                params(4) = firstConv.size(1);
+                            end
+                        end
+                        if isfield(firstConv, 'filters')
+                            params(5) = firstConv.filters;
+                        end
+                    end
+                end
+                
+                % 6. ドロップアウト率
+                if isfield(obj.params.classifier.cnn.architecture, 'dropoutLayers')
+                    dropout = obj.params.classifier.cnn.architecture.dropoutLayers;
+                    dropoutFields = fieldnames(dropout);
+                    if ~isempty(dropoutFields)
+                        params(6) = dropout.(dropoutFields{1});
+                    end
+                end
+                
+                % 7. 全結合層ユニット数
+                if isfield(obj.params.classifier.cnn.architecture, 'fullyConnected')
+                    fc = obj.params.classifier.cnn.architecture.fullyConnected;
+                    if ~isempty(fc)
+                        params(7) = fc(1);
+                    end
+                end
+            catch ME
+                warning('パラメータ抽出中にエラーが発生');
+            end
+        end
+
+        function validateResults(obj, results)
+            % 結果構造体の妥当性を検証
+            
+            if ~isstruct(results)
+                warning('結果が構造体ではありません');
+                return;
+            end
+            
+            % 必須フィールドのチェック
+            requiredFields = {'model', 'performance', 'trainInfo', 'params'};
+            for i = 1:length(requiredFields)
+                if ~isfield(results, requiredFields{i})
+                    warning('結果構造体に必須フィールド「%s」がありません', requiredFields{i});
+                end
+            end
+            
+            % paramsフィールドのチェック
+            if isfield(results, 'params')
+                if length(results.params) ~= 7
+                    warning('paramsフィールドの長さが期待値と異なります: %d (期待値: 7)', length(results.params));
+                end
+            end
+            
+            % trainInfoフィールドのチェック
+            if isfield(results, 'trainInfo')
+                obj.validateTrainInfo(results.trainInfo);
+            end
+            
+            % パフォーマンスフィールドのチェック
+            if isfield(results, 'performance')
+                if ~isfield(results.performance, 'accuracy')
+                    warning('performance構造体にaccuracyフィールドがありません');
+                end
             end
         end
         
@@ -1754,17 +1965,29 @@ classdef CNNClassifier < handle
         end
         
         %% 結果構造体構築メソッド
-        function results = buildResultsStruct(obj, cnnModel, metrics, trainInfo, ...
-            crossValidation, normParams)
+        function results = buildResultsStruct(obj, cnnModel, metrics, trainInfo, crossValidation, normParams)
+            % 結果構造体の構築
+            
+            % trainInfoの検証と安全なディープコピー
+            obj.validateTrainInfo(trainInfo);
+            trainInfoCopy = obj.createDeepCopy(trainInfo);
+            
+            % パラメータ情報の抽出
+            params = obj.extractParams();
+            
             % 結果構造体の構築
             results = struct(...
                 'model', cnnModel, ...
                 'performance', metrics, ...
                 'crossValidation', crossValidation, ...
-                'trainInfo', trainInfo, ...
+                'trainInfo', trainInfoCopy, ...
                 'overfitting', obj.overfitMetrics, ...
-                'normParams', normParams ...
+                'normParams', normParams, ...
+                'params', params ...
             );
+            
+            % 出力前に結果の検証
+            obj.validateResults(results);
         end
     end
 end
