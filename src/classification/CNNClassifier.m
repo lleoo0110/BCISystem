@@ -54,7 +54,7 @@ classdef CNNClassifier < handle
             % CNNClassifierのインスタンスを初期化
             %
             % 入力:
-            %   params - 設定パラメータ（getConfig関数から取得）
+            %   params - 設定パラメータ
             
             % 基本パラメータの設定
             obj.params = params;
@@ -87,8 +87,7 @@ classdef CNNClassifier < handle
                 fprintf('データ検証: %s\n', processInfo);
                 
                 % データを学習・検証・テストセットに分割
-                [trainData, trainLabels, valData, valLabels, testData, testLabels] = ...
-                    obj.splitDataset(processedData, processedLabel);
+                [trainData, trainLabels, valData, valLabels, testData, testLabels] = obj.splitDataset(processedData, processedLabel);
 
                 % 学習データの拡張処理
                 [trainData, trainLabels, normParams] = obj.preprocessTrainingData(trainData, trainLabels);
@@ -118,12 +117,8 @@ classdef CNNClassifier < handle
                 % 性能指標の更新
                 obj.updatePerformanceMetrics(testMetrics);
                 
-                % 交差検証の実行
-                crossValidation = obj.performCrossValidationIfEnabled(processedData, processedLabel);
-                
                 % 結果構造体の構築
-                results = obj.buildResultsStruct(cnnModel, testMetrics, trainInfo, ...
-                    crossValidation, normParams);
+                results = obj.buildResultsStruct(cnnModel, testMetrics, trainInfo, normParams);
 
                 % 結果のサマリー表示
                 obj.displayResults();
@@ -397,9 +392,8 @@ classdef CNNClassifier < handle
             end
         end
         
-        %% データセット分割メソッド
         function [trainData, trainLabels, valData, valLabels, testData, testLabels] = splitDataset(obj, data, labels)
-            % データを学習・検証・テストセットに分割
+            % データを学習・検証・テストセットに分割（クラスバランスを維持）
             %
             % 入力:
             %   data - 前処理済みEEGデータ [チャンネル x サンプル x エポック]
@@ -416,29 +410,51 @@ classdef CNNClassifier < handle
             try
                 % 分割数の取得
                 k = obj.params.classifier.cnn.training.validation.kfold;
-                
+
                 % データサイズの取得
                 [~, ~, numEpochs] = size(data);
-                fprintf('\nデータセット分割 (k=%d):\n', k);
+                fprintf('\nデータセット分割:\n');
                 fprintf('  - 総エポック数: %d\n', numEpochs);
-        
-                % インデックスのシャッフル
-                rng('default'); % 再現性のため
-                shuffledIdx = randperm(numEpochs);
-        
+
                 % 分割比率の計算
                 trainRatio = (k-1)/k;  % (k-1)/k
                 valRatio = 1/(2*k);    % 0.5/k
                 testRatio = 1/(2*k);   % 0.5/k
         
-                % データ数の計算
-                numTrain = floor(numEpochs * trainRatio);
-                numVal = floor(numEpochs * valRatio);
+                % クラスバランスを維持するため、層別化サンプリングを使用
+                uniqueLabels = unique(labels);
+                numClasses = length(uniqueLabels);
                 
-                % インデックスの分割
-                trainIdx = shuffledIdx(1:numTrain);
-                valIdx = shuffledIdx(numTrain+1:numTrain+numVal);
-                testIdx = shuffledIdx(numTrain+numVal+1:end);
+                fprintf('  - クラス数: %d\n', numClasses);
+                
+                % クラスごとのインデックスを取得
+                classIndices = cell(numClasses, 1);
+                for i = 1:numClasses
+                    classIndices{i} = find(labels == uniqueLabels(i));
+                    fprintf('  - クラス %d: %d サンプル\n', uniqueLabels(i), length(classIndices{i}));
+                end
+                
+                % 各クラスごとに分割
+                trainIdx = [];
+                valIdx = [];
+                testIdx = [];
+                
+                for i = 1:numClasses
+                    currentIndices = classIndices{i};
+                    
+                    % インデックスをランダムに並べ替え（毎回異なる結果になる）
+                    randomOrder = randperm(length(currentIndices));
+                    shuffledIndices = currentIndices(randomOrder);
+                    
+                    % 分割数の計算
+                    numTrain = round(length(shuffledIndices) * trainRatio);
+                    numVal = round(length(shuffledIndices) * valRatio);
+                    
+                    % インデックスの分割
+                    trainIdx = [trainIdx; shuffledIndices(1:numTrain)];
+                    valIdx = [valIdx; shuffledIndices(numTrain+1:numTrain+numVal)];
+                    testIdx = [testIdx; shuffledIndices(numTrain+numVal+1:end)];
+                end
         
                 % データの分割
                 trainData = data(:,:,trainIdx);
@@ -449,7 +465,7 @@ classdef CNNClassifier < handle
                 
                 testData = data(:,:,testIdx);
                 testLabels = labels(testIdx);
-
+        
                 % 分割結果のサマリー表示
                 fprintf('  - 学習データ: %d サンプル (%.1f%%)\n', ...
                     length(trainIdx), (length(trainIdx)/numEpochs)*100);
@@ -463,7 +479,7 @@ classdef CNNClassifier < handle
                     error('分割後に空のデータセットが存在します');
                 end
         
-                % クラスの分布を確認
+                % 分割後のクラス分布確認
                 obj.checkClassDistribution('学習', trainLabels);
                 obj.checkClassDistribution('検証', valLabels);
                 obj.checkClassDistribution('テスト', testLabels);
@@ -1635,188 +1651,6 @@ classdef CNNClassifier < handle
             end
         end
         
-        %% 交差検証実行メソッド
-        function results = performCrossValidationIfEnabled(obj, data, labels)
-            % 交差検証が有効な場合に実行
-            
-            results = struct('meanAccuracy', [], 'stdAccuracy', []);
-            
-            % 交差検証の実行     
-            if obj.params.classifier.cnn.training.validation.enable
-                results = obj.performCrossValidation(data, labels);
-                fprintf('交差検証平均精度: %.2f%% (±%.2f%%)\n', ...
-                    results.meanAccuracy * 100, ...
-                    results.stdAccuracy * 100);
-            else
-                fprintf('交差検証はスキップされました（設定で無効）\n');
-            end
-            
-            return;
-        end
-        
-        %% 交差検証メソッド
-        function cvResults = performCrossValidation(obj, data, labels)
-            % k分割交差検証の実行
-            
-            try
-                % k-fold cross validationのパラメータ取得
-                k = obj.params.classifier.cnn.training.validation.kfold;
-                fprintf('\n=== %d分割交差検証開始 ===\n', k);
-                
-                % データとラベルの検証
-                validateattributes(data, {'numeric'}, {'finite', 'nonnan'}, ...
-                    'performCrossValidation', 'data');
-                
-                if length(labels) ~= size(data, 3)
-                    error('データとラベルのサンプル数が一致しません');
-                end
-        
-                % cvResultsの初期化
-                cvResults = struct();
-                cvResults.folds = struct(...
-                    'accuracy', zeros(1, k), ...
-                    'confusionMat', cell(1, k), ...
-                    'classwise', cell(1, k), ...
-                    'validation_curve', cell(1, k) ...
-                );
-                
-                % 分割設定
-                cvp = cvpartition(length(labels), 'KFold', k);
-                
-                % 各フォールドでの処理
-                for i = 1:k
-                    fprintf('\nフォールド %d/%d の処理を開始\n', i, k);
-                    
-                    % データの分割
-                    trainIdx = cvp.training(i);
-                    testIdx = cvp.test(i);
-                    
-                    % 学習・検証セットの作成
-                    trainData = data(:,:,trainIdx);
-                    trainLabels = labels(trainIdx);
-                    testData = data(:,:,testIdx);
-                    testLabels = labels(testIdx);
-                    
-                    % さらに学習セットを学習・検証に分割
-                    cvpInner = cvpartition(length(trainLabels), 'HoldOut', 0.2);
-                    valIdx = cvpInner.test;
-                    trainIdxInner = cvpInner.training;
-                    
-                    foldTrainData = trainData(:,:,trainIdxInner);
-                    foldTrainLabels = trainLabels(trainIdxInner);
-                    foldValData = trainData(:,:,valIdx);
-                    foldValLabels = trainLabels(valIdx);
-                    
-                    try
-                        % データの準備
-                        prepTrainData = obj.prepareDataForCNN(foldTrainData);
-                        prepValData = obj.prepareDataForCNN(foldValData);
-                        prepTestData = obj.prepareDataForCNN(testData);
-        
-                        % モデルの学習
-                        [model, trainInfo] = obj.trainCNNModel(...
-                            prepTrainData, foldTrainLabels, prepValData, foldValLabels);
-        
-                        % テストデータでの評価
-                        metrics = obj.evaluateModel(model, prepTestData, testLabels);
-        
-                        % 結果の保存
-                        cvResults.folds.accuracy(i) = metrics.accuracy;
-                        cvResults.folds.confusionMat{i} = metrics.confusionMat;
-                        cvResults.folds.classwise{i} = metrics.classwise;
-                        
-                        % 学習曲線の保存
-                        cvResults.folds.validation_curve{i} = struct(...
-                            'train_accuracy', trainInfo.History.TrainingAccuracy, ...
-                            'val_accuracy', trainInfo.History.ValidationAccuracy, ...
-                            'train_loss', trainInfo.History.TrainingLoss, ...
-                            'val_loss', trainInfo.History.ValidationLoss ...
-                        );
-        
-                        fprintf('フォールド %d の精度: %.2f%%\n', i, cvResults.folds.accuracy(i) * 100);
-        
-                    catch ME
-                        warning('フォールド %d でエラーが発生: %s', i, ME.message);
-                        % エラーが発生したフォールドは精度0として記録
-                        cvResults.folds.accuracy(i) = 0;
-                        cvResults.folds.confusionMat{i} = [];
-                        cvResults.folds.classwise{i} = [];
-                        cvResults.folds.validation_curve{i} = [];
-                    end
-                    
-                    % GPUメモリの解放
-                    obj.resetGPUMemory();
-                end
-        
-                % 統計量の計算
-                validFolds = cvResults.folds.accuracy > 0;
-                if any(validFolds)
-                    cvResults.meanAccuracy = mean(cvResults.folds.accuracy(validFolds));
-                    cvResults.stdAccuracy = std(cvResults.folds.accuracy(validFolds));
-                    cvResults.minAccuracy = min(cvResults.folds.accuracy(validFolds));
-                    cvResults.maxAccuracy = max(cvResults.folds.accuracy(validFolds));
-                else
-                    cvResults.meanAccuracy = 0;
-                    cvResults.stdAccuracy = 0;
-                    cvResults.minAccuracy = 0;
-                    cvResults.maxAccuracy = 0;
-                end
-        
-                % クラスごとの平均性能
-                if ~isempty(cvResults.folds.classwise{1})
-                    numClasses = length(cvResults.folds.classwise{1});
-                    cvResults.classwise_mean = struct(...
-                        'precision', zeros(1, numClasses), ...
-                        'recall', zeros(1, numClasses), ...
-                        'f1score', zeros(1, numClasses) ...
-                    );
-        
-                    for class = 1:numClasses
-                        validClassMetrics = cellfun(@(x) ~isempty(x), cvResults.folds.classwise);
-                        precision_values = cellfun(@(x) x(class).precision, ...
-                            cvResults.folds.classwise(validClassMetrics));
-                        recall_values = cellfun(@(x) x(class).recall, ...
-                            cvResults.folds.classwise(validClassMetrics));
-                        f1_values = cellfun(@(x) x(class).f1score, ...
-                            cvResults.folds.classwise(validClassMetrics));
-        
-                        cvResults.classwise_mean.precision(class) = mean(precision_values);
-                        cvResults.classwise_mean.recall(class) = mean(recall_values);
-                        cvResults.classwise_mean.f1score(class) = mean(f1_values);
-                    end
-                end
-        
-                % 結果の表示
-                fprintf('\n交差検証結果:\n');
-                fprintf('  - 平均精度: %.2f%% (±%.2f%%)\n', ...
-                    cvResults.meanAccuracy * 100, cvResults.stdAccuracy * 100);
-                fprintf('  - 最小精度: %.2f%%\n', cvResults.minAccuracy * 100);
-                fprintf('  - 最大精度: %.2f%%\n', cvResults.maxAccuracy * 100);
-                fprintf('  - 成功フォールド: %d/%d\n', ...
-                    sum(validFolds), k);
-        
-                if isfield(cvResults, 'classwise_mean')
-                    fprintf('\nクラス別平均性能:\n');
-                    for class = 1:numClasses
-                        fprintf('  - クラス %d:\n', class);
-                        fprintf('    - 精度: %.2f%%\n', ...
-                            cvResults.classwise_mean.precision(class) * 100);
-                        fprintf('    - 再現率: %.2f%%\n', ...
-                            cvResults.classwise_mean.recall(class) * 100);
-                        fprintf('    - F1スコア: %.2f\n', ...
-                            cvResults.classwise_mean.f1score(class));
-                    end
-                end
-        
-            catch ME
-                fprintf('交差検証でエラーが発生: %s\n', ME.message);
-                fprintf('エラー詳細:\n');
-                disp(getReport(ME, 'extended'));
-                
-                cvResults = struct('meanAccuracy', 0, 'stdAccuracy', 0);
-            end
-        end
-        
         %% 性能メトリクス更新メソッド
         function updatePerformanceMetrics(obj, testMetrics)
             % 評価結果から性能メトリクスを更新
@@ -1965,7 +1799,7 @@ classdef CNNClassifier < handle
         end
         
         %% 結果構造体構築メソッド
-        function results = buildResultsStruct(obj, cnnModel, metrics, trainInfo, crossValidation, normParams)
+        function results = buildResultsStruct(obj, cnnModel, metrics, trainInfo, normParams)
             % 結果構造体の構築
             
             % trainInfoの検証と安全なディープコピー
@@ -1979,7 +1813,6 @@ classdef CNNClassifier < handle
             results = struct(...
                 'model', cnnModel, ...
                 'performance', metrics, ...
-                'crossValidation', crossValidation, ...
                 'trainInfo', trainInfoCopy, ...
                 'overfitting', obj.overfitMetrics, ...
                 'normParams', normParams, ...

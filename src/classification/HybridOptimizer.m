@@ -26,7 +26,6 @@ classdef HybridOptimizer < handle
         optimizationHistory % 最適化履歴
         useGPU              % GPU使用フラグ
         maxTrials           % 最大試行回数
-        earlyStopParams     % 早期停止パラメータ
         
         % 評価重み
         evaluationWeights   % 各評価指標の重みづけ
@@ -50,21 +49,10 @@ classdef HybridOptimizer < handle
             obj.useGPU = params.classifier.hybrid.gpu;
             obj.maxTrials = params.classifier.hybrid.optimization.maxTrials;
             
-            % 早期停止パラメータの初期化
-            obj.earlyStopParams = struct(...
-                'enable', true, ...     % 早期停止を有効化
-                'patience', 5, ...      % 改善なしで待機する試行回数
-                'min_delta', 0.005, ... % 有意な改善と見なす最小値
-                'best_score', -inf, ... % 最良スコア初期値
-                'counter', 0, ...       % 改善なしカウンター
-                'history', [] ...       % スコア履歴
-            );
-            
             % 評価重みの初期化
             obj.evaluationWeights = struct(...
                 'test', 0.6, ...        % テスト精度の重み
                 'validation', 0.4, ...  % 検証精度の重み
-                'crossValidation', 0.3, ... % 交差検証の重み（検証精度の代わりに使用する場合）
                 'f1Score', 0.3, ...     % F1スコアの重み
                 'complexity', 0.1, ...  % 複雑性のペナルティ最大値
                 'overfitMax', 0.5 ...   % 過学習の最大ペナルティ値
@@ -156,8 +144,7 @@ classdef HybridOptimizer < handle
                             'performance', trainResults.performance, ...
                             'trainInfo', trainResults.trainInfo, ...
                             'overfitting', trainResults.overfitting, ...
-                            'normParams', trainResults.normParams, ...
-                            'crossValidation', trainResults.crossValidation ...
+                            'normParams', trainResults.normParams ...
                         );
         
                         % モデル性能の総合スコアを計算
@@ -187,42 +174,14 @@ classdef HybridOptimizer < handle
                             end
                         end
                         
-                        % 交差検証データの使用
-                        cvAccuracy = 0;
-                        if isfield(trainResults, 'crossValidation') && ...
-                           isfield(trainResults.crossValidation, 'meanAccuracy')
-                            cvAccuracy = trainResults.crossValidation.meanAccuracy;
-                        end
-                        
                         % F1スコア計算
                         f1Score = obj.calculateMeanF1Score(trainResults.performance);
                         
                         % 総合評価スコアの計算
-                        evaluationScore = obj.calculateTrialScore(performance, valAccuracy, cvAccuracy, f1Score, trainResults);
+                        evaluationScore = obj.calculateTrialScore(performance, valAccuracy, f1Score, trainResults);
         
                         fprintf('組み合わせ %d/%d: テスト精度 = %.4f, 総合スコア = %.4f\n', ...
                             i, size(paramSets, 1), performance, evaluationScore);
-                        
-                        % 早期停止のチェック
-                        if obj.earlyStopParams.enable
-                            obj.earlyStopParams.history = [obj.earlyStopParams.history; evaluationScore];
-                            
-                            if evaluationScore > obj.earlyStopParams.best_score + obj.earlyStopParams.min_delta
-                                obj.earlyStopParams.best_score = evaluationScore;
-                                obj.earlyStopParams.counter = 0;
-                                fprintf('新しい最良スコア: %.4f\n', evaluationScore);
-                            else
-                                obj.earlyStopParams.counter = obj.earlyStopParams.counter + 1;
-                                fprintf('スコア改善なし: %d/%d\n', ...
-                                    obj.earlyStopParams.counter, obj.earlyStopParams.patience);
-                                
-                                if obj.earlyStopParams.counter >= obj.earlyStopParams.patience
-                                    fprintf('\n=== 早期停止条件を満たしました (%d試行後) ===\n', i);
-                                    fprintf('最良スコア: %.4f\n', obj.earlyStopParams.best_score);
-                                    break;
-                                end
-                            end
-                        end
                         
                         % GPUメモリの解放
                         if obj.useGPU
@@ -264,8 +223,7 @@ classdef HybridOptimizer < handle
                     'performance', bestResults.performance, ...
                     'trainInfo', bestResults.trainInfo, ...
                     'overfitting', bestResults.overfitting, ...
-                    'normParams', bestResults.normParams, ...
-                    'crossValidation', bestResults.crossValidation ...
+                    'normParams', bestResults.normParams ...
                 );
                 
                 fprintf('\n=== ハイブリッドモデル最適化が完了しました ===\n');
@@ -529,10 +487,7 @@ classdef HybridOptimizer < handle
             % グリッド数が多すぎる場合は警告し、サブサンプリング
             if size(paramSets, 1) > 200
                 warning(['グリッドサーチのパラメータ数が非常に多いです (%d組)。' ...
-                    '最適化には長時間かかる可能性があります。上位200組をサンプリングします。'], size(paramSets, 1));
-                rng('default'); % 再現性のため
-                subsampleIdx = randperm(size(paramSets, 1), 200);
-                paramSets = paramSets(subsampleIdx, :);
+                    '最適化には長時間かかる可能性があります。'], size(paramSets, 1));
             end
             
             fprintf('グリッドサーチによりパラメータセットを生成しました（%d組）\n', size(paramSets, 1));
@@ -646,13 +601,12 @@ classdef HybridOptimizer < handle
         end
         
         %% モデル評価スコア計算メソッド
-        function score = calculateTrialScore(obj, testAccuracy, valAccuracy, cvAccuracy, f1Score, results)
+        function score = calculateTrialScore(obj, testAccuracy, valAccuracy, f1Score, results)
             % モデルの総合評価スコアを計算
             %
             % 入力:
             %   testAccuracy - テスト精度
             %   valAccuracy - 検証精度
-            %   cvAccuracy - 交差検証精度
             %   f1Score - F1スコア
             %   results - 評価結果全体（過学習情報含む）
             %
@@ -664,28 +618,11 @@ classdef HybridOptimizer < handle
                 testWeight = obj.evaluationWeights.test;
                 valWeight = obj.evaluationWeights.validation;
                 
-                % 検証精度かクロスバリデーション精度のいずれかを選択
-                validationScore = 0;
-                if cvAccuracy > 0
-                    % 交差検証があれば優先的に使用
-                    validationScore = cvAccuracy;
-                    valWeight = obj.evaluationWeights.crossValidation;
-                    
-                    % 交差検証の標準偏差で重み付け
-                    if isfield(results, 'crossValidation') && ...
-                       isfield(results.crossValidation, 'stdAccuracy')
-                        cvStd = results.crossValidation.stdAccuracy;
-                        if cvStd > 0
-                            % 標準偏差の逆数で安定性を表現
-                            cvStability = 1 / (1 + 10 * cvStd);  % 低い標準偏差 = 高い安定性
-                            validationScore = validationScore * (0.7 + 0.3 * cvStability);
-                        end
-                    end
-                elseif valAccuracy > 0
-                    % 交差検証がなければ検証精度を使用
+                % 検証精度のスコア
+                if valAccuracy > 0
                     validationScore = valAccuracy;
                 else
-                    % どちらもなければテスト精度のみで評価
+                    % なければテスト精度のみで評価
                     validationScore = testAccuracy;
                     valWeight = 0;
                 end
@@ -799,22 +736,54 @@ classdef HybridOptimizer < handle
                 
                 % 有効な結果のみを抽出
                 validResults = results(~cellfun(@isempty, results));
-                validResults = validResults(~cellfun(@(x) isfield(x, 'error') && x.error, validResults));
-                numResults = length(validResults);
+                % エラーフラグのない結果のみを有効とする
+                validResultsNoError = validResults(~cellfun(@(x) isfield(x, 'error') && x.error, validResults));
+                numResults = length(validResultsNoError);
                 
                 fprintf('有効なパラメータセット数: %d\n', numResults);
                 fprintf('無効な試行数: %d\n', length(results) - numResults);
                 
-                % 結果がない場合のエラー処理
+                % 結果がない場合のエラー処理 - 修正: 通常の空の結果を返す
                 if numResults == 0
-                    error('有効な結果がありません。全ての試行が失敗しました。');
+                    fprintf('有効な結果がありません。最初の結果を使用します。\n');
+                    if ~isempty(validResults)
+                        bestResults = validResults{1};
+                    else
+                        bestResults = struct(...
+                            'model', [], ...
+                            'performance', struct('accuracy', 0), ...
+                            'trainInfo', struct('cnnHistory', struct(), 'lstmHistory', struct()), ...
+                            'overfitting', struct('severity', 'unknown'), ...
+                            'normParams', [] ...
+                        );
+                    end
+                    
+                    summary = struct(...
+                        'total_trials', length(results), ...
+                        'valid_trials', length(validResults), ...
+                        'overfit_models', 0, ...
+                        'best_accuracy', 0, ...
+                        'worst_accuracy', 0, ...
+                        'mean_accuracy', 0, ...
+                        'learning_rates', [], ...
+                        'batch_sizes', [], ...
+                        'num_conv_layers', [], ...
+                        'cnn_filters', [], ...
+                        'filter_sizes', [], ...
+                        'lstm_units', [], ...
+                        'num_lstm_layers', [], ...
+                        'dropout_rates', [], ...
+                        'fc_units', [] ...
+                    );
+                    
+                    fprintf('警告: 有効な結果がないため、デフォルト値を返します。\n');
+                    return;
                 end
                 
                 % 評価結果保存用の変数
                 modelScores = zeros(numResults, 1);
                 testAccuracies = zeros(numResults, 1);
                 valAccuracies = zeros(numResults, 1);
-                cvAccuracies = zeros(numResults, 1);
                 f1Scores = zeros(numResults, 1);
                 overfitPenalties = zeros(numResults, 1);
                 complexityPenalties = zeros(numResults, 1);
@@ -840,8 +809,11 @@ classdef HybridOptimizer < handle
                 );
                 
                 fprintf('\n=== 各試行の詳細評価 ===\n');
+                validIndices = []; % 有効な結果のインデックスを保存する配列（修正）
+                validScores = []; % 有効なスコアを保存する配列（修正）
+                
                 for i = 1:numResults
-                    result = validResults{i};
+                    result = validResultsNoError{i};
                     
                     try
                         if ~isempty(result) && isfield(result, 'model') && ~isempty(result.model) && ...
@@ -877,14 +849,6 @@ classdef HybridOptimizer < handle
                             end
                             
                             valAccuracies(i) = valAccuracy;
-                            
-                            % 交差検証精度の取得
-                            cvAccuracy = 0;
-                            if isfield(result, 'crossValidation') && ...
-                               isfield(result.crossValidation, 'meanAccuracy')
-                                cvAccuracy = result.crossValidation.meanAccuracy;
-                                cvAccuracies(i) = cvAccuracy;
-                            end
                             
                             % F1スコアの計算
                             f1Score = obj.calculateMeanF1Score(result.performance);
@@ -964,8 +928,12 @@ classdef HybridOptimizer < handle
                             complexityPenalties(i) = complexityPenalty;
                             
                             % 総合スコアの計算
-                            score = obj.calculateTrialScore(testAccuracy, valAccuracy, cvAccuracy, f1Score, result);
+                            score = obj.calculateTrialScore(testAccuracy, valAccuracy, f1Score, result);
                             modelScores(i) = score;
+                            
+                            % 修正: 有効なスコアと結果インデックスを追加
+                            validIndices = [validIndices, i];
+                            validScores = [validScores, score];
                             
                             % 過学習フラグの設定
                             if isOverfitFlags(i)
@@ -994,13 +962,6 @@ classdef HybridOptimizer < handle
                                 fprintf('  - 検証精度: %.4f\n', valAccuracy);
                             end
                             
-                            if cvAccuracy > 0
-                                fprintf('  - 交差検証精度: %.4f\n', cvAccuracy);
-                                if isfield(result.crossValidation, 'stdAccuracy')
-                                    fprintf('    - 標準偏差: %.4f\n', result.crossValidation.stdAccuracy);
-                                end
-                            end
-                            
                             if f1Score > 0
                                 fprintf('  - 平均F1スコア: %.4f\n', f1Score);
                             end
@@ -1017,7 +978,7 @@ classdef HybridOptimizer < handle
                             fprintf('モデル構造:\n');
                             fprintf('  - CNN層数: %d\n', round(result.params(3)));
                             fprintf('  - LSTM層数: %d\n', round(result.params(7)));
-                            fprintf('  - 総パラメータ数: 約 %dk\n', round((cnnFilters * filterSize * filterSize * cnnLayers + lstmUnits * lstmUnits * 4 * lstmLayers + fcUnits * (cnnFilters + lstmUnits))/1000));
+                            fprintf('  - 総パラメータ数: 約 %dk\n', round((cnnFilters * 5 * 5 * cnnLayers + lstmUnits * lstmUnits * 4 * lstmLayers + fcUnits * (cnnFilters + lstmUnits))/1000));
                         else
                             fprintf('\n--- パラメータセット %d/%d: 有効なモデルがありません ---\n', i, numResults);
                         end
@@ -1026,9 +987,24 @@ classdef HybridOptimizer < handle
                     end
                 end
                 
-                % 有効な結果がない場合はエラーを返す
-                if all(modelScores == 0)
-                    error('有効な評価結果がありません。詳細な解析ができません。');
+                % 有効な結果がない場合はエラーを返す - 修正: validScoresの確認に変更
+                if isempty(validScores)
+                    fprintf('有効な評価結果がありません。最初の有効な結果を使用します。\n');
+                    
+                    % 有効な結果が1つでもあれば使用
+                    if ~isempty(validResultsNoError)
+                        bestResults = validResultsNoError{1};
+                    else
+                        bestResults = struct(...
+                            'model', [], ...
+                            'performance', struct('accuracy', 0), ...
+                            'trainInfo', struct('cnnHistory', struct(), 'lstmHistory', struct()), ...
+                            'overfitting', struct('severity', 'unknown'), ...
+                            'normParams', [] ...
+                        );
+                    end
+                    
+                    return;
                 end
                 
                 % 統計サマリーの計算
@@ -1043,8 +1019,7 @@ classdef HybridOptimizer < handle
                 
                 % モデル選択の詳細情報
                 fprintf('\n=== モデルスコアの分布 ===\n');
-                if ~isempty(modelScores) && any(modelScores > 0)
-                    validScores = modelScores(modelScores > 0);
+                if ~isempty(validScores)
                     scorePercentiles = prctile(validScores, [0, 25, 50, 75, 100]);
                     fprintf('  - 最小値: %.4f\n', scorePercentiles(1));
                     fprintf('  - 25パーセンタイル: %.4f\n', scorePercentiles(2));
@@ -1056,16 +1031,24 @@ classdef HybridOptimizer < handle
                 % 最良モデルの選択戦略
                 fprintf('\n=== 最良モデル選択戦略 ===\n');
                 fprintf('過学習モデル数: %d/%d (%.1f%%)\n', ...
-                    summary.overfit_models, numResults, (summary.overfit_models/numResults)*100);
+                    summary.overfit_models, numResults, (summary.overfit_models/max(numResults, 1))*100);
+                
+                % 修正: validIndicesが空の場合のチェックを追加
+                if isempty(validIndices)
+                    fprintf('有効な評価結果がありません。最初の有効な結果を使用します。\n');
+                    bestResults = validResultsNoError{1};
+                    return;
+                end
                 
                 % 過学習していないモデルがあるかをチェック
-                nonOverfitIndices = find(~isOverfitFlags);
+                nonOverfitIndices = validIndices(~isOverfitFlags(validIndices));
                 
                 % 選択方法の決定
                 if ~isempty(nonOverfitIndices) && length(nonOverfitIndices) >= 3
                     fprintf('過学習していないモデルが十分にあります。これらから最良モデルを選択します。\n');
-                    [bestNonOverfitScore, bestLocalIdx] = max(modelScores(nonOverfitIndices));
-                    bestIdx = nonOverfitIndices(bestLocalIdx);
+                    nonOverfitScores = modelScores(nonOverfitIndices);
+                    [bestNonOverfitScore, localIdx] = max(nonOverfitScores);
+                    bestIdx = nonOverfitIndices(localIdx);
                     fprintf('非過学習モデルから選択 - 最良スコア: %.4f\n', bestNonOverfitScore);
                     
                     % 全体最良スコアとの比較
@@ -1076,15 +1059,16 @@ classdef HybridOptimizer < handle
                     end
                 else
                     fprintf('過学習していないモデルが不足しています。全モデルから最良を選択します。\n');
-                    [~, bestIdx] = max(modelScores);
+                    [~, localIdx] = max(modelScores(validIndices));
+                    bestIdx = validIndices(localIdx);
                     
-                    if isOverfitFlags(bestIdx)
+                    if bestIdx <= length(isOverfitFlags) && isOverfitFlags(bestIdx)
                         fprintf('警告: 選択された最良モデルは過学習の兆候があります\n');
                     end
                 end
                 
                 % 最良モデルの選択
-                bestResults = validResults{bestIdx};
+                bestResults = validResultsNoError{bestIdx};
                 
                 fprintf('\n最良モデル選択 (インデックス: %d)\n', bestIdx);
                 fprintf('  - 最終スコア: %.4f\n', modelScores(bestIdx));
@@ -1092,10 +1076,6 @@ classdef HybridOptimizer < handle
                 
                 if bestIdx <= length(valAccuracies) && valAccuracies(bestIdx) > 0
                     fprintf('  - 検証精度: %.4f\n', valAccuracies(bestIdx));
-                end
-                
-                if bestIdx <= length(cvAccuracies) && cvAccuracies(bestIdx) > 0
-                    fprintf('  - 交差検証精度: %.4f\n', cvAccuracies(bestIdx));
                 end
                 
                 if bestIdx <= length(f1Scores) && f1Scores(bestIdx) > 0
@@ -1115,22 +1095,23 @@ classdef HybridOptimizer < handle
                     obj.bestParams = bestResults.params;
                     obj.bestPerformance = modelScores(bestIdx);
                     obj.optimizedModel = bestResults.model;
-
+                    
                     % 上位モデルのパラメータ傾向分析
-                    topN = min(5, numResults);
+                    topN = min(5, length(validIndices));
                     if topN > 0
-                        [~, topIndices] = sort(modelScores, 'descend');
-                        topIndices = topIndices(1:topN);
+                        [~, sortedIdxList] = sort(modelScores(validIndices), 'descend');
+                        topLocalIndices = sortedIdxList(1:topN);
+                        topIndices = validIndices(topLocalIndices);
                         
                         % パラメータ情報のあるモデルを集計
                         top_params = [];
                         valid_top_count = 0;
                         
                         for j = 1:length(topIndices)
-                            if isfield(validResults{topIndices(j)}, 'params') && ...
-                               length(validResults{topIndices(j)}.params) >= 9
+                            if isfield(validResultsNoError{topIndices(j)}, 'params') && ...
+                               length(validResultsNoError{topIndices(j)}.params) >= 9
                                 valid_top_count = valid_top_count + 1;
-                                top_params(valid_top_count, :) = validResults{topIndices(j)}.params;
+                                top_params(valid_top_count, :) = validResultsNoError{topIndices(j)}.params;
                             end
                         end
                         
@@ -1163,14 +1144,13 @@ classdef HybridOptimizer < handle
                 disp(getReport(ME, 'extended'));
                 
                 % 最低限の結果を返す
-                if ~isempty(validResults)
-                    bestResults = validResults{1};
+                if ~isempty(validResultsNoError)
+                    bestResults = validResultsNoError{1};
                 else
                     bestResults = struct(...
                         'model', [], ...
                         'performance', struct('accuracy', 0), ...
                         'trainInfo', struct('cnnHistory', struct(), 'lstmHistory', struct()), ...
-                        'crossValidation', struct('meanAccuracy', 0), ...
                         'overfitting', struct('severity', 'unknown'), ...
                         'normParams', [] ...
                     );
@@ -1178,7 +1158,7 @@ classdef HybridOptimizer < handle
                 
                 summary = struct(...
                     'total_trials', length(results), ...
-                    'valid_trials', length(validResults), ...
+                    'valid_trials', length(validResultsNoError), ...
                     'overfit_models', 0, ...
                     'best_accuracy', 0, ...
                     'worst_accuracy', 0, ...
@@ -1240,16 +1220,10 @@ classdef HybridOptimizer < handle
                             end
                         end
                         
-                        cvAccuracy = 0;
-                        if isfield(result, 'crossValidation') && ...
-                           isfield(result.crossValidation, 'meanAccuracy')
-                            cvAccuracy = result.crossValidation.meanAccuracy;
-                        end
-                        
                         f1Score = obj.calculateMeanF1Score(result.performance);
                         
                         % 総合スコアの計算
-                        score = obj.calculateTrialScore(testAccuracy, valAccuracy, cvAccuracy, f1Score, result);
+                        score = obj.calculateTrialScore(testAccuracy, valAccuracy, f1Score, result);
                         
                         % モデル構造とサイズの計算
                         modelSize = 0;
@@ -1277,7 +1251,6 @@ classdef HybridOptimizer < handle
                             'params', result.params, ...
                             'testAccuracy', testAccuracy, ...
                             'valAccuracy', valAccuracy, ...
-                            'cvAccuracy', cvAccuracy, ...
                             'f1Score', f1Score, ...
                             'score', score, ...
                             'modelSize', modelSize, ...
@@ -1605,7 +1578,6 @@ classdef HybridOptimizer < handle
                 'model', [], ...
                 'performance', [], ...
                 'trainInfo', struct('cnnHistory', struct(), 'lstmHistory', struct()), ...
-                'crossValidation', [], ...
                 'overfitting', [], ...
                 'normParams', [] ...
             );
@@ -1645,8 +1617,7 @@ classdef HybridOptimizer < handle
                             'lstmHistory', struct('TrainingAccuracy', [], 'ValidationAccuracy', []) ...
                         ), ...
                         'overfitting', struct('severity', 'unknown'), ...
-                        'normParams', [], ...
-                        'crossValidation', [] ...
+                        'normParams', [] ...
                     );
                     
                     return;
@@ -1661,4 +1632,3 @@ classdef HybridOptimizer < handle
         end
     end
 end
-

@@ -26,8 +26,7 @@ classdef CNNOptimizer < handle
         optimizationHistory % 最適化履歴
         useGPU              % GPU使用フラグ
         maxTrials           % 最大試行回数
-        earlyStopParams     % 早期停止パラメータ
-        
+
         % 評価重み
         evaluationWeights   % 各評価指標の重みづけ
     end
@@ -47,21 +46,10 @@ classdef CNNOptimizer < handle
             obj.useGPU = params.classifier.cnn.gpu;
             obj.maxTrials = params.classifier.cnn.optimization.maxTrials;
             
-            % 早期停止パラメータの初期化
-            obj.earlyStopParams = struct(...
-                'enable', true, ...     % 早期停止を有効化
-                'patience', 5, ...      % 改善なしで待機する試行回数
-                'min_delta', 0.005, ... % 有意な改善と見なす最小値
-                'best_score', -inf, ... % 最良スコア初期値
-                'counter', 0, ...       % 改善なしカウンター
-                'history', [] ...       % スコア履歴
-            );
-            
             % 評価重みの初期化
             obj.evaluationWeights = struct(...
                 'test', 0.6, ...        % テスト精度の重み
                 'validation', 0.4, ...  % 検証精度の重み
-                'crossValidation', 0.3, ... % 交差検証の重み（検証精度の代わりに使用する場合）
                 'f1Score', 0.3, ...     % F1スコアの重み
                 'complexity', 0.1, ...  % 複雑性のペナルティ最大値
                 'overfitMax', 0.5 ...   % 過学習の最大ペナルティ値
@@ -140,8 +128,7 @@ classdef CNNOptimizer < handle
                             'performance', trainResults.performance, ...
                             'trainInfo', trainResults.trainInfo, ...
                             'overfitting', trainResults.overfitting, ...
-                            'normParams', trainResults.normParams, ...
-                            'crossValidation', trainResults.crossValidation ...
+                            'normParams', trainResults.normParams ...
                         );
         
                         % モデル性能の総合スコアを計算（早期停止用）
@@ -152,21 +139,14 @@ classdef CNNOptimizer < handle
                         if isfield(trainResults.trainInfo.History, 'ValidationAccuracy') && ...
                            ~isempty(trainResults.trainInfo.History.ValidationAccuracy)
                             valAcc = trainResults.trainInfo.History.ValidationAccuracy;
-                            valAccuracy = mean(valAcc(max(1, end-5):end)); % 最後の5エポックの平均
+                            valAccuracy = mean(valAcc(max(1, end-30):end)); % 最後の30エポックの平均
                         end
                         
-                        % 交差検証データの使用
-                        cvAccuracy = 0;
-                        if isfield(trainResults, 'crossValidation') && ...
-                           isfield(trainResults.crossValidation, 'meanAccuracy')
-                            cvAccuracy = trainResults.crossValidation.meanAccuracy;
-                        end
-                        
-                        % 改良: F1スコア計算
+                        % F1スコア計算
                         f1Score = obj.calculateMeanF1Score(trainResults.performance);
                         
                         % 総合評価スコアの計算
-                        evaluationScore = obj.calculateTrialScore(performance, valAccuracy, cvAccuracy, f1Score, trainResults);
+                        evaluationScore = obj.calculateTrialScore(performance, valAccuracy, f1Score, trainResults);
         
                         fprintf('組み合わせ %d/%d: テスト精度 = %.4f, 総合スコア = %.4f\n', ...
                             i, size(paramSets, 1), performance, evaluationScore);
@@ -211,8 +191,7 @@ classdef CNNOptimizer < handle
                     'performance', bestResults.performance, ...
                     'trainInfo', bestResults.trainInfo, ...
                     'overfitting', bestResults.overfitting, ...
-                    'normParams', bestResults.normParams, ...
-                    'crossValidation', bestResults.crossValidation ...
+                    'normParams', bestResults.normParams ...
                 );
                 
                 fprintf('\n=== CNN最適化が完了しました ===\n');
@@ -479,13 +458,12 @@ classdef CNNOptimizer < handle
         end
         
         %% モデル評価スコア計算メソッド
-        function score = calculateTrialScore(obj, testAccuracy, valAccuracy, cvAccuracy, f1Score, results)
+        function score = calculateTrialScore(obj, testAccuracy, valAccuracy, f1Score, results)
             % モデルの総合評価スコアを計算
             %
             % 入力:
             %   testAccuracy - テスト精度
             %   valAccuracy - 検証精度
-            %   cvAccuracy - 交差検証精度
             %   f1Score - F1スコア
             %   results - 評価結果全体（過学習情報含む）
             %
@@ -496,27 +474,12 @@ classdef CNNOptimizer < handle
             testWeight = obj.evaluationWeights.test;
             valWeight = obj.evaluationWeights.validation;
             
-            % 検証精度かクロスバリデーション精度のいずれかを選択
+            % 検証精度のスコア計算
             validationScore = 0;
-            if cvAccuracy > 0
-                % 交差検証があれば優先的に使用
-                validationScore = cvAccuracy;
-                
-                % 交差検証の標準偏差で重み付け
-                if isfield(results, 'crossValidation') && ...
-                   isfield(results.crossValidation, 'stdAccuracy')
-                    cvStd = results.crossValidation.stdAccuracy;
-                    if cvStd > 0
-                        % 標準偏差の逆数で安定性を表現
-                        cvStability = 1 / (1 + 10 * cvStd);  % 低い標準偏差 = 高い安定性
-                        validationScore = validationScore * (0.7 + 0.3 * cvStability);
-                    end
-                end
-            elseif valAccuracy > 0
-                % 交差検証がなければ検証精度を使用
+            if valAccuracy > 0
                 validationScore = valAccuracy;
             else
-                % どちらもなければテスト精度のみで評価
+                % なければテスト精度のみで評価
                 validationScore = testAccuracy;
                 valWeight = 0;
             end
@@ -605,7 +568,6 @@ classdef CNNOptimizer < handle
                 modelScores = [];
                 testAccuracies = [];
                 valAccuracies = [];
-                cvAccuracies = [];
                 f1Scores = [];
                 overfitPenalties = [];
                 complexityPenalties = [];
@@ -641,14 +603,7 @@ classdef CNNOptimizer < handle
                             if isfield(result.trainInfo.History, 'ValidationAccuracy') && ...
                                ~isempty(result.trainInfo.History.ValidationAccuracy)
                                 valAcc = result.trainInfo.History.ValidationAccuracy;
-                                valAccuracy = mean(valAcc(max(1, end-5):end)); % 最後の5エポックの平均
-                            end
-                            
-                            % 交差検証精度の取得
-                            cvAccuracy = 0;
-                            if isfield(result, 'crossValidation') && ...
-                               isfield(result.crossValidation, 'meanAccuracy')
-                                cvAccuracy = result.crossValidation.meanAccuracy;
+                                valAccuracy = mean(valAcc(max(1, end-30):end)); % 最後の30エポックの平均
                             end
                             
                             % F1スコアの計算
@@ -699,12 +654,11 @@ classdef CNNOptimizer < handle
                             end
                             
                             % 総合スコアの計算
-                            score = obj.calculateTrialScore(testAccuracy, valAccuracy, cvAccuracy, f1Score, result);
+                            score = obj.calculateTrialScore(testAccuracy, valAccuracy, f1Score, result);
                             
                             % 配列に追加
                             testAccuracies = [testAccuracies; testAccuracy];
                             valAccuracies = [valAccuracies; valAccuracy];
-                            cvAccuracies = [cvAccuracies; cvAccuracy];
                             f1Scores = [f1Scores; f1Score];
                             overfitPenalties = [overfitPenalties; overfitPenalty];
                             complexityPenalties = [complexityPenalties; complexityPenalty];
@@ -738,13 +692,6 @@ classdef CNNOptimizer < handle
                             
                             if valAccuracy > 0
                                 fprintf('  - 検証精度: %.4f\n', valAccuracy);
-                            end
-                            
-                            if cvAccuracy > 0
-                                fprintf('  - 交差検証精度: %.4f\n', cvAccuracy);
-                                if isfield(result.crossValidation, 'stdAccuracy')
-                                    fprintf('    - 標準偏差: %.4f\n', result.crossValidation.stdAccuracy);
-                                end
                             end
                             
                             if f1Score > 0
@@ -802,10 +749,6 @@ classdef CNNOptimizer < handle
                     % 検証精度の表示部分を修正
                     if bestLocalIdx <= length(valAccuracies)
                         fprintf('  - 検証精度: %.4f\n', valAccuracies(bestLocalIdx)/100);
-                    end
-                    
-                    if bestLocalIdx <= length(cvAccuracies) && cvAccuracies(bestLocalIdx) > 0
-                        fprintf('  - 交差検証精度: %.4f\n', cvAccuracies(bestLocalIdx));
                     end
                     
                     if bestLocalIdx <= length(f1Scores) && f1Scores(bestLocalIdx) > 0
@@ -881,7 +824,6 @@ classdef CNNOptimizer < handle
                         'model', [], ...
                         'performance', struct('accuracy', 0), ...
                         'trainInfo', struct('History', struct('TrainingAccuracy', [], 'ValidationAccuracy', [])), ...
-                        'crossValidation', struct('meanAccuracy', 0), ...
                         'overfitting', struct('severity', 'unknown'), ...
                         'normParams', [] ...
                     );
@@ -923,22 +865,15 @@ classdef CNNOptimizer < handle
                             valAccuracy = mean(valAcc(max(1, end-5):end));
                         end
                         
-                        cvAccuracy = 0;
-                        if isfield(result, 'crossValidation') && ...
-                           isfield(result.crossValidation, 'meanAccuracy')
-                            cvAccuracy = result.crossValidation.meanAccuracy;
-                        end
-                        
                         f1Score = obj.calculateMeanF1Score(result.performance);
                         
                         % 総合スコアの計算
-                        score = obj.calculateTrialScore(testAccuracy, valAccuracy, cvAccuracy, f1Score, result);
+                        score = obj.calculateTrialScore(testAccuracy, valAccuracy, f1Score, result);
                         
                         newEntry = struct(...
                             'params', result.params, ...
                             'testAccuracy', testAccuracy, ...
                             'valAccuracy', valAccuracy, ...
-                            'cvAccuracy', cvAccuracy, ...
                             'f1Score', f1Score, ...
                             'score', score, ...
                             'model', result.model);
@@ -1097,7 +1032,6 @@ classdef CNNOptimizer < handle
             results = struct(...
                 'model', [], ...
                 'performance', [], ...
-                'crossValidation', [], ...
                 'trainInfo', [], ...
                 'overfitting', [], ...
                 'normParams', [] ...

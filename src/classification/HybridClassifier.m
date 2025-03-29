@@ -99,8 +99,7 @@ classdef HybridClassifier < handle
                 [processedData, processInfo] = obj.validateAndPrepareData(processedData);
                 
                 % データを学習・検証・テストセットに分割
-                [trainData, trainLabels, valData, valLabels, testData, testLabels] = ...
-                    obj.splitDataset(processedData, processedLabel);
+                [trainData, trainLabels, valData, valLabels, testData, testLabels] = obj.splitDataset(processedData, processedLabel);
 
                 % 学習データの拡張と正規化処理
                 [trainData, trainLabels, normParams] = obj.preprocessTrainingData(trainData, trainLabels);
@@ -142,12 +141,8 @@ classdef HybridClassifier < handle
                 % 性能指標の更新
                 obj.updatePerformanceMetrics(testMetrics);
                 
-                % 交差検証の実行
-                crossValidation = obj.performCrossValidationIfEnabled(processedData, processedLabel);
-                
                 % 結果構造体の構築
-                results = obj.buildResultsStruct(hybridModel, testMetrics, trainInfo, ...
-                    crossValidation, normParams);
+                results = obj.buildResultsStruct(hybridModel, testMetrics, trainInfo, normParams);
 
                 % 結果のサマリー表示
                 obj.displayResults();
@@ -558,7 +553,7 @@ classdef HybridClassifier < handle
         
         %% データセット分割メソッド
         function [trainData, trainLabels, valData, valLabels, testData, testLabels] = splitDataset(obj, data, labels)
-            % データを学習・検証・テストセットに分割
+            % データを学習・検証・テストセットに分割（クラスバランスを維持）
             %
             % 入力:
             %   data - 前処理済みEEGデータ [チャンネル x サンプル x エポック]
@@ -574,30 +569,52 @@ classdef HybridClassifier < handle
             
             try
                 % 分割数の取得
-                k = obj.params.classifier.hybrid.training.validation.kfold;
-                
+                k = obj.params.classifier.cnn.training.validation.kfold;
+
                 % データサイズの取得
                 [~, ~, numEpochs] = size(data);
-                fprintf('\nデータセット分割 (k=%d):\n', k);
+                fprintf('\nデータセット分割:\n');
                 fprintf('  - 総エポック数: %d\n', numEpochs);
-        
-                % インデックスのシャッフル
-                rng('default'); % 再現性のため
-                shuffledIdx = randperm(numEpochs);
-        
+
                 % 分割比率の計算
                 trainRatio = (k-1)/k;  % (k-1)/k
                 valRatio = 1/(2*k);    % 0.5/k
                 testRatio = 1/(2*k);   % 0.5/k
         
-                % データ数の計算
-                numTrain = floor(numEpochs * trainRatio);
-                numVal = floor(numEpochs * valRatio);
+                % クラスバランスを維持するため、層別化サンプリングを使用
+                uniqueLabels = unique(labels);
+                numClasses = length(uniqueLabels);
                 
-                % インデックスの分割
-                trainIdx = shuffledIdx(1:numTrain);
-                valIdx = shuffledIdx(numTrain+1:numTrain+numVal);
-                testIdx = shuffledIdx(numTrain+numVal+1:end);
+                fprintf('  - クラス数: %d\n', numClasses);
+                
+                % クラスごとのインデックスを取得
+                classIndices = cell(numClasses, 1);
+                for i = 1:numClasses
+                    classIndices{i} = find(labels == uniqueLabels(i));
+                    fprintf('  - クラス %d: %d サンプル\n', uniqueLabels(i), length(classIndices{i}));
+                end
+                
+                % 各クラスごとに分割
+                trainIdx = [];
+                valIdx = [];
+                testIdx = [];
+                
+                for i = 1:numClasses
+                    currentIndices = classIndices{i};
+                    
+                    % インデックスをランダムに並べ替え（毎回異なる結果になる）
+                    randomOrder = randperm(length(currentIndices));
+                    shuffledIndices = currentIndices(randomOrder);
+                    
+                    % 分割数の計算
+                    numTrain = round(length(shuffledIndices) * trainRatio);
+                    numVal = round(length(shuffledIndices) * valRatio);
+                    
+                    % インデックスの分割
+                    trainIdx = [trainIdx; shuffledIndices(1:numTrain)];
+                    valIdx = [valIdx; shuffledIndices(numTrain+1:numTrain+numVal)];
+                    testIdx = [testIdx; shuffledIndices(numTrain+numVal+1:end)];
+                end
         
                 % データの分割
                 trainData = data(:,:,trainIdx);
@@ -608,7 +625,7 @@ classdef HybridClassifier < handle
                 
                 testData = data(:,:,testIdx);
                 testLabels = labels(testIdx);
-
+        
                 % 分割結果のサマリー表示
                 fprintf('  - 学習データ: %d サンプル (%.1f%%)\n', ...
                     length(trainIdx), (length(trainIdx)/numEpochs)*100);
@@ -622,7 +639,7 @@ classdef HybridClassifier < handle
                     error('分割後に空のデータセットが存在します');
                 end
         
-                % クラスの分布を確認
+                % 分割後のクラス分布確認
                 obj.checkClassDistribution('学習', trainLabels);
                 obj.checkClassDistribution('検証', valLabels);
                 obj.checkClassDistribution('テスト', testLabels);
@@ -1894,332 +1911,6 @@ classdef HybridClassifier < handle
             if isfield(testMetrics, 'classwise') && ~isempty(testMetrics.classwise)
                 fprintf('クラスごとの性能指標が更新されました\n');
             end
-        end
-
-        %% 交差検証メソッド（有効時のみ実行）
-        function results = performCrossValidationIfEnabled(obj, data, labels)
-            % 交差検証が有効な場合に実行
-            
-            results = struct('meanAccuracy', [], 'stdAccuracy', []);
-            
-            % 交差検証の実行     
-            if obj.params.classifier.hybrid.training.validation.enable
-                fprintf('\n=== 交差検証を開始 ===\n');
-                results = obj.performCrossValidation(data, labels);
-                fprintf('交差検証平均精度: %.2f%% (±%.2f%%)\n', ...
-                    results.meanAccuracy * 100, ...
-                    results.stdAccuracy * 100);
-            else
-                fprintf('交差検証はスキップされました（設定で無効）\n');
-            end
-            
-            return;
-        end
-        
-        %% 交差検証メソッド
-        function results = performCrossValidation(obj, data, labels)
-            % k分割交差検証の実行
-            %
-            % 入力:
-            %   data - 前処理済みEEGデータ
-            %   labels - クラスラベル
-            %
-            % 出力:
-            %   results - 交差検証結果を含む構造体
-            
-            try
-                % k-fold cross validationのパラメータ取得
-                k = obj.params.classifier.hybrid.training.validation.kfold;
-                fprintf('\n=== %d分割交差検証開始 ===\n', k);
-                
-                % 結果初期化
-                successCount = 0;
-                allAccuracies = [];
-                allF1Scores = [];
-                confusionMatrices = cell(1, k);
-                
-                % 交差検証分割の作成
-                cvp = cvpartition(length(labels), 'KFold', k);
-                
-                % クラス情報
-                uniqueClasses = unique(labels);
-                numClasses = length(uniqueClasses);
-                
-                % クラスごとの性能指標の初期化
-                classwise_cv = struct(...
-                    'precision', zeros(1, numClasses), ...
-                    'recall', zeros(1, numClasses), ...
-                    'f1score', zeros(1, numClasses));
-                
-                % 各フォールドの処理
-                for i = 1:k
-                    fprintf('\nフォールド %d/%d の処理を開始\n', i, k);
-                    
-                    try
-                        % データの分割
-                        trainIdx = cvp.training(i);
-                        testIdx = cvp.test(i);
-                        
-                        % 学習・検証データの準備
-                        foldTrainData = data(:,:,trainIdx);
-                        foldTrainLabels = labels(trainIdx);
-                        foldTestData = data(:,:,testIdx);
-                        foldTestLabels = labels(testIdx);
-                        
-                        % 内部検証分割の作成
-                        innerCVP = cvpartition(length(foldTrainLabels), 'Holdout', 0.2);
-                        valIdx = innerCVP.test;
-                        trainIdxInner = innerCVP.training;
-                        
-                        foldInnerTrainData = foldTrainData(:,:,trainIdxInner);
-                        foldInnerTrainLabels = foldTrainLabels(trainIdxInner);
-                        foldValData = foldTrainData(:,:,valIdx);
-                        foldValLabels = foldTrainLabels(valIdx);
-                        
-                        % データ前処理 (正規化)
-                        [procTrainData, ~, normParams] = obj.preprocessTrainingData(foldInnerTrainData, foldInnerTrainLabels);
-                        procValData = obj.normalizer.normalizeOnline(foldValData, normParams);
-                        procTestData = obj.normalizer.normalizeOnline(foldTestData, normParams);
-                        
-                        % データ準備（CNN用）
-                        cnnTrainData = obj.prepareDataForCNN(procTrainData);
-                        cnnValData = obj.prepareDataForCNN(procValData);
-                        cnnTestData = obj.prepareDataForCNN(procTestData);
-                        
-                        % データ準備（LSTM用）
-                        lstmTrainData = obj.prepareDataForLSTM(procTrainData);
-                        lstmValData = obj.prepareDataForLSTM(procValData);
-                        lstmTestData = obj.prepareDataForLSTM(procTestData);
-                        
-                        % GPUメモリの確認とリセット
-                        if obj.useGPU
-                            obj.checkGPUMemory();
-                        end
-                        
-                        % ハイブリッドモデルの学習
-                        [foldModel, ~] = obj.trainHybridModel( ...
-                            cnnTrainData, lstmTrainData, foldInnerTrainLabels, cnnValData, lstmValData, foldValLabels);
-                        
-                        % テストデータでの評価
-                        metrics = obj.evaluateModel(foldModel, cnnTestData, lstmTestData, foldTestLabels);
-                        
-                        % 結果の保存
-                        successCount = successCount + 1;
-                        allAccuracies(successCount) = metrics.accuracy;
-                        confusionMatrices{successCount} = metrics.confusionMat;
-                        
-                        % F1スコアを計算して保存
-                        meanF1 = 0;
-                        if isfield(metrics, 'classwise') && ~isempty(metrics.classwise)
-                            f1Values = zeros(1, length(metrics.classwise));
-                            for j = 1:length(metrics.classwise)
-                                f1Values(j) = metrics.classwise(j).f1score;
-                                
-                                % クラスごとの累積結果の更新
-                                classwise_cv.precision(j) = classwise_cv.precision(j) + metrics.classwise(j).precision;
-                                classwise_cv.recall(j) = classwise_cv.recall(j) + metrics.classwise(j).recall;
-                                classwise_cv.f1score(j) = classwise_cv.f1score(j) + metrics.classwise(j).f1score;
-                            end
-                            meanF1 = mean(f1Values);
-                            allF1Scores(successCount) = meanF1;
-                        end
-                        
-                        fprintf('フォールド %d の評価結果:\n', i);
-                        fprintf('  - 精度: %.2f%%\n', metrics.accuracy * 100);
-                        fprintf('  - 平均F1スコア: %.2f\n', meanF1);
-                        
-                    catch ME
-                        warning('フォールド %d でエラーが発生: %s', i, ME.message);
-                        fprintf('エラー詳細:\n');
-                        disp(getReport(ME, 'extended'));
-                    end
-                    
-                    % GPUメモリの解放
-                    if obj.useGPU
-                        obj.resetGPUMemory();
-                    end
-                end
-                
-                % 結果の集計
-                if successCount > 0
-                    meanAcc = mean(allAccuracies);
-                    stdAcc = std(allAccuracies);
-                    
-                    % クラスごとの平均指標を計算
-                    for j = 1:numClasses
-                        classwise_cv.precision(j) = classwise_cv.precision(j) / successCount;
-                        classwise_cv.recall(j) = classwise_cv.recall(j) / successCount;
-                        classwise_cv.f1score(j) = classwise_cv.f1score(j) / successCount;
-                    end
-                    
-                    % 平均F1スコア
-                    if ~isempty(allF1Scores)
-                        meanF1 = mean(allF1Scores);
-                        stdF1 = std(allF1Scores);
-                    else
-                        meanF1 = 0;
-                        stdF1 = 0;
-                    end
-                    
-                    % 平均混同行列の計算
-                    if ~isempty(confusionMatrices) && ~isempty(confusionMatrices{1})
-                        avgConfMat = zeros(size(confusionMatrices{1}));
-                        validMatrices = 0;
-                        
-                        for i = 1:length(confusionMatrices)
-                            if ~isempty(confusionMatrices{i})
-                                avgConfMat = avgConfMat + confusionMatrices{i};
-                                validMatrices = validMatrices + 1;
-                            end
-                        end
-                        
-                        if validMatrices > 0
-                            avgConfMat = avgConfMat / validMatrices;
-                        end
-                    else
-                        avgConfMat = [];
-                    end
-                else
-                    meanAcc = 0;
-                    stdAcc = 0;
-                    meanF1 = 0;
-                    stdF1 = 0;
-                    avgConfMat = [];
-                end
-                
-                % 結果構造体の構築
-                results = struct(...
-                    'meanAccuracy', meanAcc, ...
-                    'stdAccuracy', stdAcc, ...
-                    'meanF1', meanF1, ...
-                    'stdF1', stdF1, ...
-                    'classwise', classwise_cv, ...
-                    'avgConfusionMatrix', avgConfMat, ...
-                    'foldAccuracies', allAccuracies, ...
-                    'foldF1Scores', allF1Scores, ...
-                    'successCount', successCount, ...
-                    'totalFolds', k);
-                
-                fprintf('\n交差検証結果サマリー:\n');
-                fprintf('  - 平均精度: %.2f%% (±%.2f%%)\n', meanAcc * 100, stdAcc * 100);
-                fprintf('  - 平均F1スコア: %.2f (±%.2f)\n', meanF1, stdF1);
-                fprintf('  - 有効フォールド数: %d/%d\n', successCount, k);
-                
-                % クラスごとの平均性能表示
-                fprintf('\nクラス別平均性能:\n');
-                for j = 1:numClasses
-                    fprintf('  - クラス %d:\n', uniqueClasses(j));
-                    fprintf('    - 精度: %.2f%%\n', classwise_cv.precision(j) * 100);
-                    fprintf('    - 再現率: %.2f%%\n', classwise_cv.recall(j) * 100);
-                    fprintf('    - F1スコア: %.2f\n', classwise_cv.f1score(j));
-                end
-                
-            catch ME
-                fprintf('\n=== 交差検証中にエラーが発生 ===\n');
-                fprintf('エラーメッセージ: %s\n', ME.message);
-                fprintf('エラースタック:\n');
-                disp(getReport(ME, 'extended'));
-                
-                % 最小限の結果構造体を返す
-                results = struct('meanAccuracy', 0, 'stdAccuracy', 0);
-            end
-        end
-        
-        %% 結果構造体構築メソッド
-        function results = buildResultsStruct(obj, hybridModel, metrics, trainInfo, ...
-            crossValidation, normParams)
-            % 結果構造体の構築
-            %
-            % 入力:
-            %   hybridModel - 学習済みハイブリッドモデル
-            %   metrics - 評価指標
-            %   trainInfo - 学習情報
-            %   crossValidation - 交差検証結果
-            %   normParams - 正規化パラメータ
-            %
-            % 出力:
-            %   results - 結果構造体
-            
-            fprintf('\n=== 結果構造体の構築 ===\n');
-            
-            % CNNとLSTMの最良エポックを取得
-            cnnOptimalEpoch = 0;
-            cnnTotalEpochs = 0;
-            
-            if isfield(trainInfo, 'cnnHistory') && isfield(trainInfo.cnnHistory, 'ValidationAccuracy')
-                valAcc = trainInfo.cnnHistory.ValidationAccuracy;
-                valAcc = valAcc(~isnan(valAcc));
-                if ~isempty(valAcc)
-                    [~, cnnOptimalEpoch] = max(valAcc);
-                    cnnTotalEpochs = length(valAcc);
-                end
-            end
-            
-            lstmOptimalEpoch = 0;
-            lstmTotalEpochs = 0;
-            
-            if isfield(trainInfo, 'lstmHistory') && isfield(trainInfo.lstmHistory, 'ValidationAccuracy')
-                valAcc = trainInfo.lstmHistory.ValidationAccuracy;
-                valAcc = valAcc(~isnan(valAcc));
-                if ~isempty(valAcc)
-                    [~, lstmOptimalEpoch] = max(valAcc);
-                    lstmTotalEpochs = length(valAcc);
-                end
-            end
-            
-            % パラメータ抽出（HybridOptimizer用）
-            cnnParams = [];
-            lstmParams = [];
-            
-            if isfield(obj.params.classifier.hybrid.architecture.cnn, 'convLayers')
-                convFields = fieldnames(obj.params.classifier.hybrid.architecture.cnn.convLayers);
-                if ~isempty(convFields)
-                    firstConv = obj.params.classifier.hybrid.architecture.cnn.convLayers.(convFields{1});
-                    if isfield(firstConv, 'filters')
-                        cnnParams = firstConv.filters;
-                    end
-                end
-            end
-            
-            if isfield(obj.params.classifier.hybrid.architecture.lstm, 'lstmLayers')
-                lstmFields = fieldnames(obj.params.classifier.hybrid.architecture.lstm.lstmLayers);
-                if ~isempty(lstmFields)
-                    firstLstm = obj.params.classifier.hybrid.architecture.lstm.lstmLayers.(lstmFields{1});
-                    if isfield(firstLstm, 'numHiddenUnits')
-                        lstmParams = firstLstm.numHiddenUnits;
-                    end
-                end
-            end
-            
-            % 拡張情報の追加
-            trainingInfo = trainInfo;
-            trainingInfo.cnnOptimalEpoch = cnnOptimalEpoch;
-            trainingInfo.cnnTotalEpochs = cnnTotalEpochs;
-            trainingInfo.lstmOptimalEpoch = lstmOptimalEpoch;
-            trainingInfo.lstmTotalEpochs = lstmTotalEpochs;
-            
-            % パラメータ情報
-            paramsInfo = [
-                obj.params.classifier.hybrid.training.optimizer.learningRate, ...
-                obj.params.classifier.hybrid.training.miniBatchSize, ...
-                length(fieldnames(obj.params.classifier.hybrid.architecture.cnn.convLayers)), ...
-                cnnParams, ...
-                length(fieldnames(obj.params.classifier.hybrid.architecture.lstm.lstmLayers)), ...
-                lstmParams
-            ];
-            
-            % 結果構造体の構築
-            results = struct(...
-                'model', hybridModel, ...
-                'performance', metrics, ...
-                'crossValidation', crossValidation, ...
-                'trainInfo', trainingInfo, ...
-                'overfitting', obj.overfitMetrics, ...
-                'normParams', normParams, ...
-                'params', paramsInfo ... % HybridOptimizer用にパラメータを保存
-            );
-            
-            fprintf('結果構造体の構築完了\n');
         end
         
         %% 結果表示メソッド

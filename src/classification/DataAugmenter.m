@@ -318,7 +318,6 @@ classdef DataAugmenter < handle
             
             % 異常値（NaN, Inf）の除去
             if any(isnan(augmented(:))) || any(isinf(augmented(:)))
-                warning('拡張データに異常値が含まれています。置換します。');
                 augmented(isnan(augmented)) = 0;
                 augmented(isinf(augmented)) = 0;
             end
@@ -326,7 +325,6 @@ classdef DataAugmenter < handle
             % 振幅が極端に大きい場合はクリッピング
             maxAllowedAmplitude = 1000;  % 設定に応じて調整可能
             if max(abs(augmented(:))) > maxAllowedAmplitude
-                warning('極端に大きい振幅値を検出しました。クリッピングを適用します。');
                 augmented(augmented > maxAllowedAmplitude) = maxAllowedAmplitude;
                 augmented(augmented < -maxAllowedAmplitude) = -maxAllowedAmplitude;
             end

@@ -36,8 +36,11 @@ classdef EEGAnalyzer < handle
         svmClassifier
         ecocClassifier
         cnnClassifier
+        cnnOptimizer
         lstmClassifier 
+        lstmOptimizer
         hybridClassifier
+        hybridOptimizer
         
         % データ管理コンポーネント
         dataManager
@@ -186,8 +189,11 @@ classdef EEGAnalyzer < handle
             obj.svmClassifier = SVMClassifier(obj.params);
             obj.ecocClassifier = ECOCClassifier(obj.params);
             obj.cnnClassifier = CNNClassifier(obj.params);
+            obj.cnnOptimizer = CNNOptimizer(obj.params);
             obj.lstmClassifier = LSTMClassifier(obj.params);
+            obj.lstmOptimizer = LSTMOptimizer(obj.params);
             obj.hybridClassifier = HybridClassifier(obj.params);
+            obj.hybridOptimizer = HybridOptimizer(obj.params);
         end
         
         function initializeResults(obj)
@@ -316,7 +322,9 @@ classdef EEGAnalyzer < handle
         end
         
        function performClassification(obj)
-            try                    
+            try
+                fprintf('\n=== 分類処理を開始 ===\n');
+                
                 % SVM分類
                 if obj.params.classifier.svm.enable
                     obj.svm = obj.svmClassifier.trainSVM(obj.processedData, obj.processedLabel);
@@ -329,63 +337,287 @@ classdef EEGAnalyzer < handle
         
                 % CNN分類
                 if obj.params.classifier.cnn.enable
-                    if obj.params.classifier.cnn.optimize
-                        cnnOptimizer = CNNOptimizer(obj.params);
-                        obj.cnn = cnnOptimizer.optimize(obj.processedData, obj.processedLabel);
+                    if obj.params.classifier.cnn.training.validation.enable
+
+                        % モンテカルロ交差検証を実行
+                        numRepetitions = obj.params.classifier.cnn.training.validation.repetitions;  % 反復回数
+                        fprintf('\n=== CNN: モンテカルロ交差検証 (%d回反復) ===\n', numRepetitions);
+                        
+                        % 結果保存
+                        cnnModels = cell(1, numRepetitions);
+                        cnnAccuracies = zeros(1, numRepetitions);
+                        
+                        for rep = 1:numRepetitions
+                            try
+                                fprintf('\n--- CNN: 反復 %d/%d ---\n', rep, numRepetitions);
+                                if obj.params.classifier.cnn.optimize
+                                    % 最適化実行
+                                    result = obj.cnnOptimizer.optimize(obj.processedData, obj.processedLabel);
+                                else
+                                    % 通常のCNN学習
+                                    result = obj.cnnClassifier.trainCNN(obj.processedData, obj.processedLabel, baseSeed + rep);
+                                end
+                                
+                                % 結果保存
+                                cnnModels{rep} = result;
+                                
+                                % 精度記録
+                                if isfield(result, 'performance') && isfield(result.performance, 'accuracy')
+                                    cnnAccuracies(rep) = result.performance.accuracy;
+                                    fprintf('反復 %d の精度: %.2f%%\n', rep, cnnAccuracies(rep) * 100);
+                                end
+                                
+                                % GPUメモリの解放
+                                if obj.params.classifier.cnn.gpu
+                                    gpuDevice([]);
+                                end
+                                
+                            catch ME
+                                fprintf('反復 %d でエラー発生: %s\n', rep, ME.message);
+                                disp(getReport(ME, 'extended'));
+                            end
+                        end
+                        
+                        % 有効結果の統計
+                        validAccuracies = cnnAccuracies(cnnAccuracies > 0);
+                        
+                        if ~isempty(validAccuracies)
+                            % 統計情報の集計
+                            cvSummary = struct(...
+                                'iterations', numRepetitions, ...
+                                'cvAccuracy', validAccuracies, ...
+                                'meanAccuracy', mean(validAccuracies), ...
+                                'stdAccuracy', std(validAccuracies), ...
+                                'minAccuracy', min(validAccuracies), ...
+                                'maxAccuracy', max(validAccuracies), ...
+                                'validCount', length(validAccuracies) ...
+                            );
+                            
+                            fprintf('\n=== CNN交差検証結果サマリー ===\n');
+                            fprintf('平均精度: %.2f%% (±%.2f%%)\n', cvSummary.meanAccuracy * 100, cvSummary.stdAccuracy * 100);
+                            fprintf('精度範囲: %.2f%% - %.2f%%\n', cvSummary.minAccuracy * 100, cvSummary.maxAccuracy * 100);
+                            fprintf('有効反復数: %d/%d\n', cvSummary.validCount, numRepetitions);
+                            
+                            % 最良モデルを選択
+                            [~, bestIdx] = max(cnnAccuracies);
+                            obj.cnn = cnnModels{bestIdx};
+                            
+                            % 交差検証情報を追加
+                            obj.cnn.crossValidation = cvSummary;
+                            
+                            fprintf('最良モデル（反復 %d）を選択しました。精度: %.2f%%\n', bestIdx, cnnAccuracies(bestIdx) * 100);
+                        else
+                            fprintf('\n警告: 有効な結果が得られませんでした\n');
+                        end
                     else
-                        obj.cnn = obj.cnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
+                        % 通常の学習
+                        fprintf('\n=== CNN: 標準モードを使用 ===\n');
+                        if obj.params.classifier.cnn.optimize
+                            obj.cnn = obj.cnnOptimizer.optimize(obj.processedData, obj.processedLabel);
+                        else
+                            obj.cnn = obj.cnnClassifier.trainCNN(obj.processedData, obj.processedLabel);
+                        end
                     end
                 end
         
                 % LSTM分類
                 if obj.params.classifier.lstm.enable
-                    if obj.params.classifier.lstm.optimize
-                        lstmOptimizer = LSTMOptimizer(obj.params);
-                        obj.lstm = lstmOptimizer.optimize(obj.processedData, obj.processedLabel);
+                    if  obj.params.classifier.lstm.training.validation.enable
+                        
+                        % モンテカルロ交差検証を実行
+                        numRepetitions = obj.params.classifier.lstm.training.validation.repetitions;  % 反復回数
+                        fprintf('\n=== LSTM: モンテカルロ交差検証 (%d回反復) ===\n', numRepetitions);
+                        
+                        % 結果保存
+                        lstmModels = cell(1, numRepetitions);
+                        lstmAccuracies = zeros(1, numRepetitions);
+                        
+                        for rep = 1:numRepetitions
+                            try
+                                fprintf('\n--- LSTM: 反復 %d/%d ---\n', rep, numRepetitions);
+                                
+                                if obj.params.classifier.lstm.optimize
+                                    % 最適化実行
+                                    result = obj.lstmOptimizer.optimize(obj.processedData, obj.processedLabel);
+                                else
+                                    % 通常のLSTM学習
+                                    result = obj.lstmClassifier.trainLSTM(obj.processedData, obj.processedLabel, baseSeed + rep);
+                                end
+                                
+                                % 結果保存
+                                lstmModels{rep} = result;
+                                
+                                % 精度記録
+                                if isfield(result, 'performance') && isfield(result.performance, 'accuracy')
+                                    lstmAccuracies(rep) = result.performance.accuracy;
+                                    fprintf('反復 %d の精度: %.2f%%\n', rep, lstmAccuracies(rep) * 100);
+                                end
+                                
+                                % GPUメモリの解放
+                                if obj.params.classifier.lstm.gpu
+                                    gpuDevice([]);
+                                end
+                                
+                            catch ME
+                                fprintf('反復 %d でエラー発生: %s\n', rep, ME.message);
+                                disp(getReport(ME, 'extended'));
+                            end
+                        end
+                        
+                        % 有効結果の統計
+                        validAccuracies = lstmAccuracies(lstmAccuracies > 0);
+                        
+                        if ~isempty(validAccuracies)
+                            % 統計情報の集計
+                            cvSummary = struct(...
+                                'iterations', numRepetitions, ...
+                                'cvAccuracy', validAccuracies, ...
+                                'meanAccuracy', mean(validAccuracies), ...
+                                'stdAccuracy', std(validAccuracies), ...
+                                'minAccuracy', min(validAccuracies), ...
+                                'maxAccuracy', max(validAccuracies), ...
+                                'validCount', length(validAccuracies) ...
+                            );
+                            
+                            fprintf('\n=== LSTM交差検証結果サマリー ===\n');
+                            fprintf('平均精度: %.2f%% (±%.2f%%)\n', cvSummary.meanAccuracy * 100, cvSummary.stdAccuracy * 100);
+                            fprintf('精度範囲: %.2f%% - %.2f%%\n', cvSummary.minAccuracy * 100, cvSummary.maxAccuracy * 100);
+                            fprintf('有効反復数: %d/%d\n', cvSummary.validCount, numRepetitions);
+                            
+                            % 最良モデルを選択
+                            [~, bestIdx] = max(lstmAccuracies);
+                            obj.lstm = lstmModels{bestIdx};
+                            
+                            % 交差検証情報を追加
+                            obj.lstm.crossValidation = cvSummary;
+                            
+                            fprintf('最良モデル（反復 %d）を選択しました。精度: %.2f%%\n', bestIdx, lstmAccuracies(bestIdx) * 100);
+                        else
+                            fprintf('\n警告: 有効な結果が得られませんでした\n');
+                        end
                     else
-                        obj.lstm = obj.lstmClassifier.trainLSTM(obj.processedData, obj.processedLabel);
+                        % 通常の学習
+                        fprintf('\n=== LSTM: 標準モードを使用 ===\n');
+                        if obj.params.classifier.lstm.optimize
+                            obj.lstm = obj.lstmOptimizer.optimize(obj.processedData, obj.processedLabel);
+                        else
+                            obj.lstm = obj.lstmClassifier.trainLSTM(obj.processedData, obj.processedLabel);
+                        end
                     end
                 end
         
                 % Hybrid分類
                 if obj.params.classifier.hybrid.enable
-                    try
-                        fprintf('\n=== Hybridモデルの学習開始 ===\n');
+                    if  obj.params.classifier.hybrid.training.validation.enable
                         
-                        % ハイブリッド分類器の学習
-                        if obj.params.classifier.hybrid.optimize
-                            hybridOptimizer = HybridOptimizer(obj.params);
-                            obj.hybrid = hybridOptimizer.optimize(obj.processedData, obj.processedLabel);
-                        else
-                            % ハイブリッド分類器インスタンスの作成と学習
-                            hybridClassifier = HybridClassifier(obj.params);
-                            obj.hybrid = hybridClassifier.trainHybrid(obj.processedData, obj.processedLabel);
-                            
-                            % 結果構造体の正常性を確認
-                            if ~isstruct(obj.hybrid) || ~isfield(obj.hybrid, 'model') || ~isfield(obj.hybrid, 'performance')
-                                error('Hybridモデルから無効な結果が返されました');
-                            end
-                            
-                            % モデル構造の確認とデバッグ情報の出力
-                            fprintf('Hybridモデル構造を確認中...\n');
-                            fprintf('  - model フィールド: %s\n', mat2str(isfield(obj.hybrid, 'model')));
-                            if isfield(obj.hybrid, 'model')
-                                fprintf('  - featureExtractor: %s\n', mat2str(isfield(obj.hybrid.model, 'featureExtractor')));
-                                fprintf('  - adaBoostModel: %s\n', mat2str(isfield(obj.hybrid.model, 'adaBoostModel')));
+                        % モンテカルロ交差検証を実行
+                        numRepetitions = obj.params.classifier.hybrid.training.validation.repetitions;  % 反復回数
+                        fprintf('\n=== Hybrid: モンテカルロ交差検証 (%d回反復) ===\n', numRepetitions);
+                        
+                        % 結果保存
+                        hybridModels = cell(1, numRepetitions);
+                        hybridAccuracies = zeros(1, numRepetitions);
+                        
+                        for rep = 1:numRepetitions
+                            try
+                                fprintf('\n--- Hybrid: 反復 %d/%d ---\n', rep, numRepetitions);
+
+                                if obj.params.classifier.hybrid.optimize                                    
+                                    % 最適化実行
+                                    result = obj.hybridOptimizer.optimize(obj.processedData, obj.processedLabel);
+                                else
+                                    % 通常のHybrid学習
+                                    result = obj.hybridClassifier.trainHybrid(obj.processedData, obj.processedLabel, baseSeed + rep);
+                                end
+                                
+                                % 結果保存
+                                hybridModels{rep} = result;
+                                
+                                % 精度記録
+                                if isfield(result, 'performance') && isfield(result.performance, 'accuracy')
+                                    hybridAccuracies(rep) = result.performance.accuracy;
+                                    fprintf('反復 %d の精度: %.2f%%\n', rep, hybridAccuracies(rep) * 100);
+                                end
+                                
+                                % GPUメモリの解放
+                                if obj.params.classifier.hybrid.gpu
+                                    gpuDevice([]);
+                                end
+                                
+                            catch ME
+                                fprintf('反復 %d でエラー発生: %s\n', rep, ME.message);
+                                disp(getReport(ME, 'extended'));
                             end
                         end
                         
-                        fprintf('Hybridモデルの学習完了\n');
+                        % 有効結果の統計
+                        validAccuracies = hybridAccuracies(hybridAccuracies > 0);
                         
-                    catch ME
-                        fprintf('\n=== Hybridモデルの学習でエラーが発生 ===\n');
-                        fprintf('エラー詳細: %s\n', ME.message);
-                        fprintf('スタックトレース:\n');
-                        disp(getReport(ME, 'extended'));
+                        if ~isempty(validAccuracies)
+                            % 統計情報の集計
+                            cvSummary = struct(...
+                                'iterations', numRepetitions, ...
+                                'cvAccuracy', validAccuracies, ...
+                                'meanAccuracy', mean(validAccuracies), ...
+                                'stdAccuracy', std(validAccuracies), ...
+                                'minAccuracy', min(validAccuracies), ...
+                                'maxAccuracy', max(validAccuracies), ...
+                                'validCount', length(validAccuracies) ...
+                            );
+                            
+                            fprintf('\n=== Hybrid交差検証結果サマリー ===\n');
+                            fprintf('平均精度: %.2f%% (±%.2f%%)\n', cvSummary.meanAccuracy * 100, cvSummary.stdAccuracy * 100);
+                            fprintf('精度範囲: %.2f%% - %.2f%%\n', cvSummary.minAccuracy * 100, cvSummary.maxAccuracy * 100);
+                            fprintf('有効反復数: %d/%d\n', cvSummary.validCount, numRepetitions);
+                            
+                            % 最良モデルを選択
+                            [~, bestIdx] = max(hybridAccuracies);
+                            obj.hybrid = hybridModels{bestIdx};
+                            
+                            % 交差検証情報を追加
+                            obj.hybrid.crossValidation = cvSummary;
+                            
+                            fprintf('最良モデル（反復 %d）を選択しました。精度: %.2f%%\n', bestIdx, hybridAccuracies(bestIdx) * 100);
+                        else
+                            fprintf('\n警告: 有効な結果が得られませんでした\n');
+                        end
                         
-                        % エラー発生時でも処理を継続
-                        fprintf('分類はスキップして処理を継続します。\n');
-                        obj.hybrid = struct('model', [], 'performance', struct());
+                    else
+                        % 通常の学習（既存コード）
+                        try
+                            fprintf('\n=== Hybridモデルの学習開始 ===\n');
+                            
+                            if obj.params.classifier.hybrid.optimize
+                                obj.hybrid = obj.hybridOptimizer.optimize(obj.processedData, obj.processedLabel);
+                            else
+                                obj.hybrid = obj.hybridClassifier.trainHybrid(obj.processedData, obj.processedLabel);
+                                
+                                % 結果構造体の正常性を確認
+                                if ~isstruct(obj.hybrid) || ~isfield(obj.hybrid, 'model') || ~isfield(obj.hybrid, 'performance')
+                                    error('Hybridモデルから無効な結果が返されました');
+                                end
+                                
+                                % モデル構造の確認とデバッグ情報の出力
+                                fprintf('Hybridモデル構造を確認中...\n');
+                                fprintf('  - model フィールド: %s\n', mat2str(isfield(obj.hybrid, 'model')));
+                                if isfield(obj.hybrid, 'model')
+                                    fprintf('  - featureExtractor: %s\n', mat2str(isfield(obj.hybrid.model, 'featureExtractor')));
+                                    fprintf('  - adaBoostModel: %s\n', mat2str(isfield(obj.hybrid.model, 'adaBoostModel')));
+                                end
+                            end
+                            
+                            fprintf('Hybridモデルの学習完了\n');
+                            
+                        catch ME
+                            fprintf('\n=== Hybridモデルの学習でエラーが発生 ===\n');
+                            fprintf('エラー詳細: %s\n', ME.message);
+                            fprintf('スタックトレース:\n');
+                            disp(getReport(ME, 'extended'));
+                            
+                            % エラー発生時でも処理を継続
+                            fprintf('分類はスキップして処理を継続します。\n');
+                            obj.hybrid = struct('model', [], 'performance', struct());
+                        end
                     end
                 end
         
@@ -677,6 +909,9 @@ classdef EEGAnalyzer < handle
                         if isfield(obj.cnn, 'trainInfo')
                             saveData.classifier.cnn.trainInfo = obj.cnn.trainInfo;
                         end
+                        if isfield(obj.cnn, 'crossValidation')
+                            saveData.classifier.cnn.crossValidation = obj.cnn.crossValidation;
+                        end
                         if isfield(obj.cnn, 'overfitting')
                             saveData.classifier.cnn.overfitting = obj.cnn.overfitting;
                         end
@@ -699,6 +934,9 @@ classdef EEGAnalyzer < handle
                         if isfield(obj.lstm, 'trainInfo')
                             saveData.classifier.lstm.trainInfo = obj.lstm.trainInfo;
                         end
+                        if isfield(obj.lstm, 'crossValidation')
+                            saveData.classifier.lstm.crossValidation = obj.lstm.crossValidation;
+                        end
                         if isfield(obj.lstm, 'overfitting')
                             saveData.classifier.lstm.overfitting = obj.lstm.overfitting;
                         end
@@ -720,6 +958,9 @@ classdef EEGAnalyzer < handle
                         % フィールドの安全な追加
                         if isfield(obj.hybrid, 'trainInfo')
                             saveData.classifier.hybrid.trainInfo = obj.hybrid.trainInfo;
+                        end
+                        if isfield(obj.hybrid, 'crossValidation')
+                            saveData.classifier.hybrid.crossValidation = obj.hybrid.crossValidation;
                         end
                         if isfield(obj.hybrid, 'overfitting')
                             saveData.classifier.hybrid.overfitting = obj.hybrid.overfitting;
