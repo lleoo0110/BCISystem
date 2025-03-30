@@ -22,7 +22,6 @@ classdef HybridClassifier < handle
         params              % システム設定パラメータ
         netCNN              % 学習済みCNNネットワーク
         netLSTM             % 学習済みLSTMネットワーク
-        adaModel            % 学習済みAdaBoost統合分類器
         isEnabled           % 有効/無効フラグ
         isInitialized       % 初期化フラグ
         useGPU              % GPU使用の有無
@@ -648,7 +647,7 @@ classdef HybridClassifier < handle
                 error('データ分割でエラーが発生しました: %s', ME.message);
             end
         end
-        
+
         %% クラス分布確認メソッド
         function checkClassDistribution(~, setName, labels)
             % データセット内のクラス分布を解析して表示
@@ -947,14 +946,21 @@ classdef HybridClassifier < handle
                 % AdaBoost分類器のパラメータ設定
                 adaParams = obj.params.classifier.hybrid.adaBoost;
                 
-                % AdaBoost分類器の学習
-                adaBoostModel = fitcensemble(combinedFeatures, trainLabels, ...
-                    'Method', 'AdaBoostM1', ...
+                % クラス数を確認
+                uniqueLabels = unique(trainLabels);
+                numClasses = length(uniqueLabels);
+                
+                % クラス数に応じてアルゴリズムを選択
+                fprintf('%dクラス分類のために AdaBoostM2 を使用します\n', numClasses);
+                
+                % AdaBoostM2 分類器の学習
+                adaModel = fitcensemble(combinedFeatures, trainLabels, ...
+                    'Method', 'AdaBoostM2', ...
                     'NumLearningCycles', adaParams.numLearners, ...
                     'Learners', 'tree', ...
                     'LearnRate', adaParams.learnRate);
                 
-                fprintf('AdaBoost統合分類器の学習完了\n');
+                fprintf('AdaBoost 統合分類器の学習完了\n');
                 
                 % --- 検証データでのハイブリッドモデル全体の評価 ---
                 fprintf('\n--- 検証データでのハイブリッドモデル評価 ---\n');
@@ -980,7 +986,7 @@ classdef HybridClassifier < handle
                 combinedValFeatures = [cnnValFeatures, lstmValFeatures];
                 
                 % 検証データでの予測
-                [valPred, valScores] = predict(adaBoostModel, combinedValFeatures);
+                [valPred, valScores] = predict(adaModel, combinedValFeatures);
                 
                 % 検証精度の計算
                 hybridValAccuracy = mean(valPred == valLabels) * 100;  % パーセントに変換
@@ -1046,7 +1052,7 @@ classdef HybridClassifier < handle
                 hybridModel = struct(...
                     'netCNN', cnnModel, ...
                     'netLSTM', lstmModel, ...
-                    'adaModel', adaBoostModel, ...
+                    'adaModel', adaModel, ...
                     'lstmFeatureSize', lstmFeatureSize);
                 
                 % 学習履歴情報の構築
@@ -2025,6 +2031,48 @@ classdef HybridClassifier < handle
                 fprintf('結果表示でエラーが発生: %s\n', ME.message);
                 fprintf('エラー詳細:\n');
                 disp(getReport(ME, 'extended'));
+            end
+        end
+
+        %% 結果構造体構築メソッド
+        function results = buildResultsStruct(obj, hybridModel, metrics, trainInfo, normParams)
+            % 結果構造体の構築
+            %
+            % 入力:
+            %   hybridModel - 学習済みハイブリッドモデル
+            %   metrics - 評価メトリクス
+            %   trainInfo - 学習情報
+            %   normParams - 正規化パラメータ
+            %
+            % 出力:
+            %   results - 結果構造体
+            
+            try
+                % trainInfoの検証
+                obj.validateTrainInfo(trainInfo);
+                
+                % 結果構造体の構築
+                results = struct(...
+                    'model', hybridModel, ...
+                    'performance', metrics, ...
+                    'trainInfo', trainInfo, ...
+                    'overfitting', obj.overfitMetrics, ...
+                    'normParams', normParams ...
+                );
+                
+            catch ME
+                fprintf('結果構造体の構築中にエラーが発生: %s\n', ME.message);
+                fprintf('エラー詳細:\n');
+                disp(getReport(ME, 'extended'));
+                
+                % エラー時でも最低限の結果を返す
+                results = struct(...
+                    'model', hybridModel, ...
+                    'performance', metrics, ...
+                    'trainInfo', trainInfo, ...
+                    'overfitting', struct('severity', 'unknown'), ...
+                    'normParams', normParams ...
+                );
             end
         end
     end

@@ -1431,21 +1431,43 @@ classdef HybridOptimizer < handle
                 % 最適化履歴からパラメータと性能の相関分析
                 if ~isempty(obj.optimizationHistory) && length(obj.optimizationHistory) > 2
                     fprintf('\n各パラメータと性能の相関:\n');
+                    
+                    % scores を取得（列ベクトルに変換）
                     scores = [obj.optimizationHistory.score]';
                     
-                    for i = 1:length(paramNames)
-                        if length(paramMatrix) >= i
-                            correlation = corr(paramMatrix(:,i), scores);
-                            if abs(correlation) > 0.2
-                                direction = '';
-                                if correlation > 0
-                                    direction = '正の相関 (↑)';
-                                else
-                                    direction = '負の相関 (↓)';
+                    % パラメータ行列の構築（optimizationHistory から直接取得）
+                    paramHistoryMatrix = zeros(length(obj.optimizationHistory), length(paramNames));
+                    
+                    % 各エントリからパラメータを抽出
+                    for j = 1:length(obj.optimizationHistory)
+                        if isfield(obj.optimizationHistory(j), 'params') && ...
+                           length(obj.optimizationHistory(j).params) >= 9
+                            paramHistoryMatrix(j, :) = obj.optimizationHistory(j).params;
+                        end
+                    end
+                    
+                    % 次元の確認（デバッグ出力）
+                    fprintf('  - 相関分析: スコア配列サイズ = [%s], パラメータ行列サイズ = [%s]\n', ...
+                        num2str(size(scores)), num2str(size(paramHistoryMatrix)));
+                    
+                    % 有効なデータのみで相関分析
+                    if ~isempty(paramHistoryMatrix) && size(paramHistoryMatrix, 1) == length(scores)
+                        for i = 1:length(paramNames)
+                            if i <= size(paramHistoryMatrix, 2)  % 配列境界チェック
+                                correlation = corr(paramHistoryMatrix(:,i), scores);
+                                if abs(correlation) > 0.2
+                                    direction = '';
+                                    if correlation > 0
+                                        direction = '正の相関 (↑)';
+                                    else
+                                        direction = '負の相関 (↓)';
+                                    end
+                                    fprintf('  - %s: %.3f (%s)\n', paramNames{i}, correlation, direction);
                                 end
-                                fprintf('  - %s: %.3f (%s)\n', paramNames{i}, correlation, direction);
                             end
                         end
+                    else
+                        fprintf('  - 相関分析を実行できません: 有効なパラメータ数とスコア数が一致しません\n');
                     end
                 end
             end
