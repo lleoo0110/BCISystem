@@ -1,3 +1,4 @@
 /main/Experiment Data
 /LabStreamingLayer
-/eeglab
+/src/eeg_visualizer/eeglab_results
+/src/eeg_visualizer/*.mat

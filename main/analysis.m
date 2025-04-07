@@ -16,7 +16,7 @@ setupPaths(currentDir);
 
 
 %%  指定のパラメータで実行
-params = getConfig('epocflex', 'preset', 'magic');
+params = getConfig('epocflex', 'preset', 'masa_template');
 analyzer = EEGAnalyzer(params);     % アナライザーの初期化
 analyzer.analyze();                            % 解析の実行
 
@@ -37,6 +37,7 @@ function setupPaths(currentDir)
             'preprocessing'
             'utils'
             'visualization'
+            'eeg_visualizer'
         };
         
         % LSLとconfigのパス設定
