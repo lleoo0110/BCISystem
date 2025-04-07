@@ -58,69 +58,149 @@ classdef EEGAnalyzer < handle
             obj.dataLoader = DataLoader(params);
         end
         
-        function analyze(obj)
+        function analyze(obj, varargin)
             try
                 fprintf('\n=== 解析処理開始 ===\n');
-                fprintf('解析対象のデータファイルを選択してください．\n');
         
-                % 既に初期化されているDataLoaderを使用
-                [loadedData, fileInfo] = obj.dataLoader.loadDataBrowser();
-        
-                if isempty(loadedData)
-                    fprintf('データが選択されませんでした。\n');
-                    return;
+                % fullpath引数の処理
+                fullpath = '';
+                if ~isempty(varargin)
+                    fullpath = varargin{1};
                 end
         
-                fprintf('データ読み込み完了\n');
-                fprintf('読み込んだファイル:\n');
-                for i = 1:length(fileInfo.filenames)
-                    fprintf('%d: %s\n', i, fileInfo.filenames{i});
-                end
+                if ~isempty(fullpath)
+                    % fullpathが指定された場合
+                    fprintf('指定されたファイルを解析します: %s\n', fullpath);
         
-                % 保存先の設定
-                savePaths = cell(length(loadedData), 1);
-                batchSave = obj.params.acquisition.save.batchSave && length(loadedData) > 1;
-                
-                if batchSave
-                    % 一括保存モード: 共通の保存先フォルダを選択
-                    batchSavePath = uigetdir(fileInfo.filepath, '一括保存用のフォルダを選択してください');
-                    if isequal(batchSavePath, 0)
-                        fprintf('保存先の選択がキャンセルされました。処理を中止します。\n');
+                    % ファイルの存在チェック
+                    if ~isfile(fullpath)
+                        fprintf('エラー: 指定されたファイルが見つかりません: %s\n', fullpath);
                         return;
                     end
-                    
-                    fprintf('一括保存モード: 処理結果を %s に保存します。\n', batchSavePath);
-                    
-                    % 各ファイルの保存先パスを生成
-                    for i = 1:length(loadedData)
-                        if ~isempty(loadedData{i})
-                            [~, originalName, ~] = fileparts(fileInfo.filenames{i});
-                            timestamp = datestr(now, 'yyyymmdd_HHMMSS');
-                            defaultFileName = sprintf('%s_analysis_%s.mat', originalName, timestamp);
-                            savePaths{i} = fullfile(batchSavePath, defaultFileName);
+        
+                    % DataLoaderを使用してファイルをロード
+                    try
+                        [loadedData, fileInfo] = obj.dataLoader.loadData(fullpath);
+                    catch ME
+                        fprintf('エラー: ファイルのロードに失敗しました: %s\n', fullpath);
+                        fprintf('エラーメッセージ: %s\n', ME.message);
+                        return;
+                    end
+        
+                    if isempty(loadedData)
+                        fprintf('エラー: 指定されたファイルからデータがロードできませんでした。\n');
+                        return;
+                    end
+        
+                    fprintf('データ読み込み完了\n');
+                    fprintf('読み込んだファイル:\n');
+                    disp(fileInfo.filenames);
+                    fprintf('1: %s\n', fileInfo.filenames{1});
+        
+                    % 保存先の設定
+                    savePaths = cell(length(loadedData), 1);
+                    batchSave = obj.params.acquisition.save.batchSave && length(loadedData) > 1;
+        
+                    % 保存フォルダをanalyzedDataに設定 (fullpath指定時)
+                    if batchSave
+                        % 一括保存モード: 保存先フォルダをanalyzedDataに設定
+                        [filePath, ~, ~] = fileparts(fileInfo.filenames{1}); % 最初のファイルのパスを取得
+                        batchSavePath = fullfile(filePath, 'analyzedData');
+                        if ~exist(batchSavePath, 'dir')
+                            mkdir(batchSavePath);
+                        end
+        
+                        fprintf('一括保存モード: 処理結果を %s に保存します。\n', batchSavePath);
+        
+                        % 各ファイルの保存先パスを生成
+                        for i = 1:length(loadedData)
+                            if ~isempty(loadedData{i})
+                                [~, originalName, ~] = fileparts(fileInfo.filenames{i});
+                                timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+                                defaultFileName = sprintf('%s_analysis_%s.mat', originalName, timestamp);
+                                savePaths{i} = fullfile(batchSavePath, defaultFileName);
+                            end
+                        end
+                    else
+                        % 個別保存モード: 保存先フォルダをanalyzedDataに設定
+                        fprintf('\n各ファイルの保存先を analyzedData フォルダに保存します。\n');
+                        for i = 1:length(loadedData)
+                            if ~isempty(loadedData{i})
+                                [filePath, originalName, ~] = fileparts(fileInfo.filenames{i});
+                                saveDir = fullfile(filePath, 'analyzedData');
+                                if ~exist(saveDir, 'dir')
+                                    mkdir(saveDir);
+                                end
+                                timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+                                defaultFileName = sprintf('%s_analysis_%s.mat', originalName, timestamp);
+                                savePaths{i} = fullfile(saveDir, defaultFileName);
+                                fprintf('ファイル %s の保存先: %s\n', fileInfo.filenames{i}, savePaths{i});
+                            end
                         end
                     end
+        
                 else
-                    % 個別保存モード: 各ファイルの保存先を事前に選択
-                    fprintf('\n各ファイルの保存先を選択してください。\n');
-                    for i = 1:length(loadedData)
-                        if ~isempty(loadedData{i})
-                            [~, originalName, ~] = fileparts(fileInfo.filenames{i});
-                            timestamp = datestr(now, 'yyyymmdd_HHMMSS');
-                            defaultFileName = sprintf('%s_analysis_%s.mat', originalName, timestamp);
-                            
-                            [saveName, saveDir] = uiputfile('*.mat', ...
-                                sprintf('ファイル %s の保存先を選択してください (%d/%d)', ...
-                                fileInfo.filenames{i}, i, length(loadedData)), ...
-                                defaultFileName);
-                            
-                            if saveName == 0
-                                fprintf('ファイル %s の保存先選択がキャンセルされました。このファイルはスキップします。\n', ...
-                                    fileInfo.filenames{i});
-                                savePaths{i} = '';
-                            else
-                                savePaths{i} = fullfile(saveDir, saveName);
-                                fprintf('ファイル %s の保存先: %s\n', fileInfo.filenames{i}, savePaths{i});
+                    % fullpathが指定されていない場合は、ファイルブラウザを使用
+                    fprintf('解析対象のデータファイルを選択してください．\n');
+        
+                    % 既に初期化されているDataLoaderを使用
+                    [loadedData, fileInfo] = obj.dataLoader.loadDataBrowser(); % こちらはインスタンスメソッドを呼び出す想定のままにします
+                    if isempty(loadedData)
+                        fprintf('データが選択されませんでした。\n');
+                        return;
+                    end
+        
+                    fprintf('データ読み込み完了\n');
+                    fprintf('読み込んだファイル:\n');
+                    for i = 1:length(fileInfo.filenames)
+                        fprintf('%d: %s\n', i, fileInfo.filenames{i});
+                    end
+        
+                    % 保存先の設定
+                    savePaths = cell(length(loadedData), 1);
+                    batchSave = obj.params.acquisition.save.batchSave && length(loadedData) > 1;
+        
+                    if batchSave
+                        % 一括保存モード: 共通の保存先フォルダを選択
+                        batchSavePath = uigetdir(fileInfo.filepath, '一括保存用のフォルダを選択してください');
+                        if isequal(batchSavePath, 0)
+                            fprintf('保存先の選択がキャンセルされました。処理を中止します。\n');
+                            return;
+                        end
+        
+                        fprintf('一括保存モード: 処理結果を %s に保存します。\n', batchSavePath);
+        
+                        % 各ファイルの保存先パスを生成
+                        for i = 1:length(loadedData)
+                            if ~isempty(loadedData{i})
+                                [~, originalName, ~] = fileparts(fileInfo.filenames{i});
+                                timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+                                defaultFileName = sprintf('%s_analysis_%s.mat', originalName, timestamp);
+                                savePaths{i} = fullfile(batchSavePath, defaultFileName);
+                            end
+                        end
+                    else
+                        % 個別保存モード: 各ファイルの保存先を事前に選択
+                        fprintf('\n各ファイルの保存先を選択してください。\n');
+                        for i = 1:length(loadedData)
+                            if ~isempty(loadedData{i})
+                                [~, originalName, ~] = fileparts(fileInfo.filenames{i});
+                                timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+                                defaultFileName = sprintf('%s_analysis_%s.mat', originalName, timestamp);
+        
+                                [saveName, saveDir] = uiputfile('*.mat', ...
+                                    sprintf('ファイル %s の保存先を選択してください (%d/%d)', ...
+                                    fileInfo.filenames{i}, i, length(loadedData)), ...
+                                    defaultFileName);
+        
+                                if saveName == 0
+                                    fprintf('ファイル %s の保存先選択がキャンセルされました。このファイルはスキップします。\n', ...
+                                        fileInfo.filenames{i});
+                                    savePaths{i} = '';
+                                else
+                                    savePaths{i} = fullfile(saveDir, saveName);
+                                    fprintf('ファイル %s の保存先: %s\n', fileInfo.filenames{i}, savePaths{i});
+                                end
                             end
                         end
                     end
@@ -131,13 +211,13 @@ classdef EEGAnalyzer < handle
                     if ~isempty(loadedData{i}) && ~isempty(savePaths{i})
                         fprintf('\n=== データセット %d/%d (%s) の処理開始 ===\n', ...
                             i, length(loadedData), fileInfo.filenames{i});
-                        
+        
                         % データの処理
                         obj.setData(loadedData{i});
                         obj.executePreprocessingPipeline();
                         obj.extractFeatures();
                         obj.performClassification();
-                        
+        
                         % 結果の保存
                         obj.saveResults(savePaths{i});
                         fprintf('\n解析結果を保存しました: %s\n', savePaths{i});
