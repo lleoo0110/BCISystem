@@ -1,4 +1,4 @@
-function EEG = EEGLAB_Analyzer(processedData, labels, params)
+function EEG = EEGLAB_Analyzer(processedData, labels, params, fileName)
     % EEGLAB_Analyzer - GUIを使わずにEEGLABの解析を行う関数
     disp('--- EEGLAB_Analyzer 解析開始 ---');
     
@@ -84,10 +84,9 @@ function EEG = EEGLAB_Analyzer(processedData, labels, params)
     
     % EEGLABのデータ構造を作成
     EEG = eeg_emptyset;
-    EEG.setname = 'EEGLAB_Analyzer';
+    EEG.setname = fileName;
     EEG.srate = params.device.sampleRate;
     EEG.times = params.signal.window.timeRange{1}(1):1/EEG.srate:params.signal.window.timeRange{1}(2) - 1/EEG.srate;
-    disp(size(EEG.times));
     EEG.nbchan = size(processedData, 1);
     EEG.pnts = size(processedData, 2);
     EEG.trials = size(processedData, 3);
@@ -98,7 +97,6 @@ function EEG = EEGLAB_Analyzer(processedData, labels, params)
     % 5. イベント情報の追加
     for i = 1:length(labels)
         EEG.event(i).type   = num2str(labels(i).value);
-        disp(labels(i).sample);
         EEG.event(i).latency = (-EEG.xmin*EEG.srate + 1 )  + EEG.pnts * (i-1);
         EEG.event(i).urevent = i;
         EEG.event(i).epoch = i;
@@ -151,7 +149,8 @@ function EEG = EEGLAB_Analyzer(processedData, labels, params)
     end
 
     % EEGデータをsetファイルとして保存
-    parentDir = fullfile(params.analysis.outputDir, params.info.name);
+    parentDir = fullfile(params.analysis.outputDir, fileName);
+    disp(['親ディレクトリ: ' parentDir]);
     if ~exist(parentDir, 'dir')
         mkdir(parentDir);
         disp(['親ディレクトリを作成しました: ' parentDir]);
@@ -162,21 +161,20 @@ function EEG = EEGLAB_Analyzer(processedData, labels, params)
     
     % 各解析関数の呼び出し（進行状況ログ付き）
     if(params.analysis.ersp.enable)
-        % analyzeERSP(EEG,conditionData, params,conditions);
+        analyzeERSP(EEG,conditionData, params,conditions,parentDir);
     end
     if(params.analysis.erp.enable)
-        % analyzeERP(EEG,conditionData, params,conditions);
+        analyzeERP(EEG,conditionData, params,conditions,parentDir);
     end
     if(params.analysis.topography.enable)
-        % analyzeTopoplot(EEG,conditionData, params,conditions);
+        analyzeTopoplot(EEG,conditionData, params,conditions,parentDir);
     end
     disp('--- EEGLAB解析が完了しました ---');
 end
 
-function analyzeERP(EEG, conditionData, params, conditions)
+function analyzeERP(EEG, conditionData, params, conditions,parentDir)
     disp('--- ERP解析を実行開始 ---');
     
-    parentDir = fullfile(params.analysis.outputDir, params.info.name);
     if ~exist(parentDir, 'dir')
         mkdir(parentDir);
         disp(['親ディレクトリを作成しました: ' parentDir]);
@@ -279,10 +277,10 @@ function analyzeERP(EEG, conditionData, params, conditions)
     end
 end
 
-function analyzeERSP(EEG, conditionData, params, conditions)
+function analyzeERSP(EEG, conditionData, params, conditions,parentDir)
     disp('--- ERSP解析を実行開始 ---');
     
-    parentDir = fullfile(params.analysis.outputDir, params.info.name);
+    % parentDir = fullfile(params.analysis.outputDir, params.info.name);
     if ~exist(parentDir, 'dir')
         mkdir(parentDir);
         disp(['親ディレクトリを作成しました: ' parentDir]);
@@ -427,7 +425,7 @@ function openLargeERSPPlot(erspStruct, channelName)
         'verbose', 'off');
 end
 
-function analyzeTopoplot(EEG, conditionData, params, conditions)
+function analyzeTopoplot(EEG, conditionData, params, conditions,parentDir)
     disp('--- トポプロット解析を実行開始 ---');
     
     if ~isfield(EEG, 'chanlocs') || isempty(EEG.chanlocs)
@@ -435,7 +433,7 @@ function analyzeTopoplot(EEG, conditionData, params, conditions)
         return;
     end
     
-    parentDir = fullfile(params.analysis.outputDir, params.info.name);
+    % parentDir = fullfile(params.analysis.outputDir, params.info.name);
     if ~exist(parentDir, 'dir')
         mkdir(parentDir);
         disp(['親ディレクトリを作成しました: ' parentDir]);
