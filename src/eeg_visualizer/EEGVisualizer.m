@@ -1,3 +1,5 @@
+EEG = EEGLAB_Analyzer(processedData,labels,params);
+
 % パラメータ例：
 % params = getConfig('epocx');
 % params = getConfig('epocx', 'preset', 'character');
@@ -16,10 +18,11 @@ setupPaths(currentDir);
 
 
 %%  指定のパラメータで実行
-params = getConfig('epocflex', 'preset', 'magic');
-manager = EEGAcquisitionManager(params);      % データ計測
+params = getConfig('epocflex', 'preset', 'eeglab_template');
+analyzer = EEGAnalyzer(params);     % アナライザーの初期化
+analyzer.analyze();                            % 解析の実行
 
-
+%% パス設定補助関数
 function setupPaths(currentDir)
     try
         % BCISystemのルートディレクトリを取得
@@ -42,8 +45,7 @@ function setupPaths(currentDir)
         % LSLとconfigのパス設定
         lslDir = fullfile(rootDir, 'LabStreamingLayer');
         configDir = fullfile(rootDir, 'config');
-        
-        % パスの存在確認と追加
+
         % ソースディレクトリの各フォルダを追加
         for i = 1:length(mainDirs)
             dirPath = fullfile(srcDir, mainDirs{i});
@@ -67,8 +69,6 @@ function setupPaths(currentDir)
         else
             error('Configディレクトリが見つかりません: %s', configDir);
         end
-        
-        fprintf('\nパスの設定が完了しました\n');
         
     catch ME
         error('パス設定エラー: %s', ME.message);

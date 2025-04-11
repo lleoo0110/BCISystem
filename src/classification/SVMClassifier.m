@@ -55,6 +55,7 @@ classdef SVMClassifier < handle
                 obj.checkClassDistribution('検証', testLabels);
 
                 % モデルの学習（学習データのみを使用）
+                fprintf('\nSVMモデルの学習を開始...\n');
                 obj.trainModel(trainFeatures, trainLabels);
 
                 % 交差検証の実行（学習データのみを使用）
@@ -63,24 +64,20 @@ classdef SVMClassifier < handle
                 end
 
                 % テストデータでの評価
-                testPerformance = obj.evaluateOnTestData(testFeatures, testLabels);
+                testMetrics = obj.evaluateModel(testFeatures, testLabels);
                 
                 % 過学習の検出
-                [isOverfit, overfitMetrics] = obj.validateOverfitting(testPerformance.accuracy);
+                [isOverfit, overfitMetrics] = obj.validateOverfitting(testMetrics.accuracy);
                 
                 % 結果の構築
                 results = struct(...
                     'model', obj.svmModel, ...
-                    'performance', struct(...
-                        'testAccuracy', testPerformance.accuracy, ...
-                        'testScore', testPerformance.score, ...
-                        'testConfusionMat', testPerformance.confMat, ...
-                        'classLabels', testPerformance.classLabels, ...
-                        'isOverfit', isOverfit, ...
-                        'overfitMetrics', overfitMetrics), ...
+                    'performance', testMetrics, ...
+                    'overfitMetrics', overfitMetrics, ...
                     'cspFilters', filters, ...
                     'cspParameters', cspParameters, ...
-                    'normParams', normParams);
+                    'normParams', normParams ...
+                );
                 
                 % パフォーマンス情報を保存
                 obj.performance = results.performance;
@@ -379,7 +376,7 @@ classdef SVMClassifier < handle
                 obj.performance.cvMeanAccuracy, obj.performance.cvStdAccuracy);
         end
 
-        function testPerformance = evaluateOnTestData(obj, testFeatures, testLabels)
+        function metrics = evaluateModel(obj, testFeatures, testLabels)
             % テストデータでモデルの性能を評価する
             %
             % 入力:
@@ -387,38 +384,40 @@ classdef SVMClassifier < handle
             %   testLabels - 検証用ラベル
             %
             % 出力:
-            %   testPerformance - テストデータでの性能評価結果
+            %   metrics - テストデータでの性能評価結果
             
             fprintf('\n検証データでモデルを評価中...\n');
+            metrics = struct(...
+                'accuracy', [], ...
+                'score', [], ...
+                'confusionMat', [], ....
+                'roc', [], ...
+                'auc', [], ...
+                'classwise', [] ...
+            );
+
             [pred, score] = predict(obj.svmModel, testFeatures);
+            metrics.score = score;
             
             % 検証データでの精度と混同行列
-            testAccuracy = mean(pred == testLabels);
-            testConfMat = confusionmat(testLabels, pred);
+            metrics.accuracy = mean(pred == testLabels);
+            metrics.confusionMat = confusionmat(testLabels, pred);
             
             % クラスラベル
             classLabels = unique(testLabels);
             
-            % 結果を構造体に格納
-            testPerformance = struct(...
-                'accuracy', testAccuracy, ...
-                'confMat', testConfMat, ...
-                'classLabels', classLabels, ...
-                'prediction', pred, ...
-                'score', score);
-            
             % ROC曲線とAUCの計算（2クラス分類の場合）
             if length(classLabels) == 2
                 [X, Y, T, AUC] = perfcurve(testLabels, score(:,2), classLabels(2));
-                testPerformance.roc = struct('X', X, 'Y', Y, 'T', T);
-                testPerformance.auc = AUC;
-                obj.performance.testRoc = testPerformance.roc;
+                metrics.roc = struct('X', X, 'Y', Y, 'T', T);
+                metrics.auc = AUC;
+                obj.performance.testRoc = metrics.roc;
                 obj.performance.testAuc = AUC;
             end
             
             % クラスごとの性能評価
-            testPerformance.classwise = obj.calculateClassMetrics(testLabels, pred, classLabels);
-            obj.performance.testClasswise = testPerformance.classwise;
+            metrics.classwise = obj.calculateClassMetrics(testLabels, pred, classLabels);
+            obj.performance.testClasswise = metrics.classwise;
         end
 
         function metrics = calculateClassMetrics(~, trueLabels, predLabels, classLabels)

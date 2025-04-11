@@ -60,6 +60,49 @@ classdef DataLoader < handle
                 error('DataLoader:LoadError', 'データ読み込みエラー: %s', ME.message);
             end
         end
+
+        function [loadedData, fileInfo] = loadData(obj, fullpath)
+            try
+                % ファイルパスからファイル名とディレクトリを取得
+                [filepath, filename, ext] = fileparts(fullpath);
+                filenameWithExt = [filename, ext];
+
+                if isempty(filenameWithExt)
+                    loadedData = {};
+                    fileInfo = [];
+                    warning('DataLoader:InvalidPath', '指定されたパスが不正です: %s', fullpath);
+                    return;
+                end
+
+                % ファイル情報の構造体を作成
+                fileInfo = struct();
+                fileInfo.filenames = {filenameWithExt};
+                fileInfo.filepath = filepath;
+                fileInfo.fullpaths = {fullpath};
+
+                % データの読み込み
+                loadedData = cell(1, 1); % 単一ファイルなのでサイズは1
+
+                try
+                    currentData = obj.dataManager.loadDataset(fullpath);
+
+                    % 基本的な検証のみ実施
+                    if ~isfield(currentData, 'rawData')
+                        warning('DataLoader:NoRawData', 'ファイル %s に rawData がありません', filenameWithExt);
+                    end
+
+                    loadedData{1} = currentData;
+                    fprintf('読み込み完了: %s\n', filenameWithExt);
+
+                catch ME
+                    warning('DataLoader:LoadError', 'ファイル %s の読み込みエラー: %s', filenameWithExt, ME.message);
+                    loadedData{1} = [];
+                end
+
+            catch ME
+                error('DataLoader:LoadError', 'データ読み込みエラー: %s', ME.message);
+            end
+        end
         
         function success = saveData(obj, data)
             try

@@ -20,7 +20,13 @@ function EEG = create_eeglabset(rawData, labels, params,saveDir)
     % epocx_14ch.ced から chanlocs を読み込む
     try
         % ファイルの存在確認
-        ced_file = 'epocx_14ch.ced'; % またはフルパス
+        % ファイルの存在確認
+        if params.device.name == "EPOCX"
+            ced_file = 'epocx_14ch.ced';
+        elseif params.device.name == "EPOCFLEX"
+            ced_file = 'emotiv_flex32ch.ced';
+        end
+        % ced_file = 'epocx_14ch.ced'; % またはフルパス
         if ~exist(ced_file, 'file')
             error('ファイル "%s" が見つかりません。', ced_file);
         end
@@ -55,6 +61,7 @@ end
     %    labels構造体からイベント情報をEEG構造体に追加
     for i = 1:length(labels)
         EEG.event(i).type   = num2str(labels(i).value);   % イベントタイプ
+        disp(labels(i).sample);
         EEG.event(i).latency = labels(i).sample;  % レイテンシー (サンプル単位)
         EEG.event(i).urevent = i;                  % イベントのID
     end
@@ -68,20 +75,20 @@ end
     
     % 8. 前処理 (フィルタリング、リファレンスなど)
     % ハイパスフィルタ
-    EEG = pop_eegfiltnew( EEG, params.signal.frequency.min, params.signal.frequency.max, [], 0, [], 0);
+    % EEG = pop_eegfiltnew( EEG, params.signal.frequency.min, params.signal.frequency.max, [], 0, [], 0);
     % EEG = pop_eegfilt( EEG, 1, 0, [], [0]); % 1 Hz ハイパスフィルタ
     
     % リファレンス
-    EEG = pop_reref( EEG, []); % 平均リファレンス
+    % EEG = pop_reref( EEG, []); % 平均リファレンス
     
    
     % 9. エポックの作成
-    EEG = pop_epoch( EEG, arrayfun(@(x)num2str(x.value), labels, 'UniformOutput', false), [params.signal.window.stimulus(1) params.signal.window.stimulus(2)], 'epochinfo', 'yes');  % 例: -1秒から2秒のエポック
+    EEG = pop_epoch( EEG, arrayfun(@(x)num2str(x.value), labels, 'UniformOutput', false), [params.signal.window.timeRange{1}(1) params.signal.window.timeRange{1}(2)], 'epochinfo', 'yes');  % 例: -1秒から2秒のエポック
     
     % 10. ベースライン補正
-    basemin = params.signal.window.stimulus(1) + 1.0/EEG.srate;
-    disp(basemin);
-    EEG = pop_rmbase( EEG, [basemin 0]); % -1000msから0msをベースラインとして除去
+    % basemin = params.signal.window.stimulus(1) + 1.0/EEG.srate;
+    % disp(basemin);
+    % EEG = pop_rmbase( EEG, [basemin 0]); % -1000msから0msをベースラインとして除去
     
 
      % データセットの保存

@@ -58,7 +58,7 @@ classdef EEGAcquisitionManager < handle
     emgLabels          % 筋電図用マーカー情報
     classifiers        % 学習済み分類器モデル群
     results            % 解析結果保持用構造体
-    optimalThreshold   % 最適分類閾値
+    threshold   % 分類閾値
     
     % システム状態管理フラグ
     isRunning           % 実行中フラグ
@@ -100,6 +100,7 @@ end
             obj.isRunning = false;
             obj.isPaused = false;
             obj.isDestroying = false;
+            obj.threshold = params.classifier.threshold;
             
             % システムコンポーネントの初期化
             obj.initializeDataBuffers();    % バッファ初期化
@@ -1266,6 +1267,13 @@ end
                         % Hybrid分類の実行
                         [label, score] = obj.hybridClassifier.predictOnline(currentData, obj.classifiers.hybrid);
                 end
+
+                % 超簡易的な実装
+                if score(1) >= obj.threshold
+                    label = 2;
+                else
+                    label = 3;
+                end
         
                 % 予測結果の保存
                 if ~isempty(label)
@@ -1434,8 +1442,7 @@ end
                     case 'filter range'
                         obj.params.signal.filter.fir.frequency = value;
                     case 'threshold'
-                        obj.params.classifier.svm.threshold.rest = value;
-                        obj.optimalThreshold = value;
+                        obj.threshold = value;
                         fprintf('Threshold updated: %.3f\n', value);
                 end      
             catch ME

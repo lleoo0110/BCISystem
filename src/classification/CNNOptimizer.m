@@ -26,7 +26,9 @@ classdef CNNOptimizer < handle
         optimizationHistory % 最適化履歴
         useGPU              % GPU使用フラグ
         maxTrials           % 最大試行回数
-        earlyStopParams     % 早期停止パラメータ
+
+        % 評価重み
+        evaluationWeights   % 各評価指標の重みづけ
     end
     
     methods (Access = public)
@@ -44,13 +46,13 @@ classdef CNNOptimizer < handle
             obj.useGPU = params.classifier.cnn.gpu;
             obj.maxTrials = params.classifier.cnn.optimization.maxTrials;
             
-            % 早期停止パラメータの初期化
-            obj.earlyStopParams = struct(...
-                'enable', false, ...    % 早期停止を有効化
-                'patience', 5, ...     % 改善なしで待機する試行回数
-                'min_delta', 0.01, ...   % 有意な改善と見なす最小値
-                'best_score', -inf, ... % 最良スコア初期値
-                'counter', 0 ...       % 改善なしカウンター
+            % 評価重みの初期化
+            obj.evaluationWeights = struct(...
+                'test', 0.6, ...        % テスト精度の重み
+                'validation', 0.4, ...  % 検証精度の重み
+                'f1Score', 0.3, ...     % F1スコアの重み
+                'complexity', 0.1, ...  % 複雑性のペナルティ最大値
+                'overfitMax', 0.5 ...   % 過学習の最大ペナルティ値
             );
             
             % GPU利用可能性のチェック
@@ -129,16 +131,25 @@ classdef CNNOptimizer < handle
                             'normParams', trainResults.normParams ...
                         );
         
-                        fprintf('組み合わせ %d/%d: 精度 = %.4f\n', i, size(paramSets, 1), ...
-                            trainResults.performance.overallAccuracy);
+                        % モデル性能の総合スコアを計算（早期停止用）
+                        performance = trainResults.performance.accuracy;
                         
-                        % 早期停止チェック（コンストラクタで無効化設定にしている）
-                        if obj.checkEarlyStop(trainResults.performance.overallAccuracy)
-                            fprintf('\n早期停止: %d試行後に十分な改善なし\n', ...
-                                obj.earlyStopParams.patience);
-                            fprintf('最良スコア: %.4f\n', obj.earlyStopParams.best_score);
-                            break;
+                        % 検証精度データの取得
+                        valAccuracy = 0;
+                        if isfield(trainResults.trainInfo.History, 'ValidationAccuracy') && ...
+                           ~isempty(trainResults.trainInfo.History.ValidationAccuracy)
+                            valAcc = trainResults.trainInfo.History.ValidationAccuracy;
+                            valAccuracy = mean(valAcc(max(1, end-30):end)); % 最後の30エポックの平均
                         end
+                        
+                        % F1スコア計算
+                        f1Score = obj.calculateMeanF1Score(trainResults.performance);
+                        
+                        % 総合評価スコアの計算
+                        evaluationScore = obj.calculateTrialScore(performance, valAccuracy, f1Score, trainResults);
+        
+                        fprintf('組み合わせ %d/%d: テスト精度 = %.4f, 総合スコア = %.4f\n', ...
+                            i, size(paramSets, 1), performance, evaluationScore);
                         
                         % GPUメモリの解放
                         if obj.useGPU
@@ -149,7 +160,14 @@ classdef CNNOptimizer < handle
                         warning('組み合わせ%dでエラー発生: %s', i, ME.message);
                         fprintf('エラー詳細:\n');
                         disp(getReport(ME, 'extended'));
-                        trialResults{i} = [];
+                        
+                        % エラー発生時でも最低限のパラメータ情報は保存
+                        trialResults{i} = struct(...
+                            'params', paramSets(i,:), ...
+                            'error', true, ...
+                            'errorMessage', ME.message, ...
+                            'performance', struct('accuracy', 0) ...
+                        );
         
                         % GPUメモリの解放
                         if obj.useGPU
@@ -425,53 +443,110 @@ classdef CNNOptimizer < handle
             fprintf('  - 全結合層ユニット数: %d\n', paramSet(7));
         end
         
-        %% 早期停止チェックメソッド
-        %% 早期停止チェックメソッド
-        function shouldStop = checkEarlyStop(obj, currentScore)
-            % 早期停止条件をチェック
+        %% 平均F1スコア計算メソッド
+        function f1Score = calculateMeanF1Score(~, performance)
+            % 各クラスのF1スコアの平均を計算
+            f1Score = 0;
+            
+            if isfield(performance, 'classwise') && ~isempty(performance.classwise)
+                f1Scores = zeros(1, length(performance.classwise));
+                for i = 1:length(performance.classwise)
+                    f1Scores(i) = performance.classwise(i).f1score;
+                end
+                f1Score = mean(f1Scores);
+            end
+        end
+        
+        %% モデル評価スコア計算メソッド
+        function score = calculateTrialScore(obj, testAccuracy, valAccuracy, f1Score, results)
+            % モデルの総合評価スコアを計算
             %
             % 入力:
-            %   currentScore - 現在の評価スコア
+            %   testAccuracy - テスト精度
+            %   valAccuracy - 検証精度
+            %   f1Score - F1スコア
+            %   results - 評価結果全体（過学習情報含む）
             %
             % 出力:
-            %   shouldStop - 停止すべきかのフラグ
+            %   score - 総合評価スコア
             
-            shouldStop = false;
+            % 1. 基本精度スコアの計算
+            testWeight = obj.evaluationWeights.test;
+            valWeight = obj.evaluationWeights.validation;
             
-            % 早期停止が無効の場合はチェックしない
-            if ~obj.earlyStopParams.enable
-                return;
+            % 検証精度のスコア計算
+            validationScore = 0;
+            if valAccuracy > 0
+                validationScore = valAccuracy;
+            else
+                % なければテスト精度のみで評価
+                validationScore = testAccuracy;
+                valWeight = 0;
             end
             
-            % 十分な改善があったかチェック
-            if currentScore > obj.earlyStopParams.best_score + obj.earlyStopParams.min_delta
-                % 改善があった場合はカウンターをリセット
-                obj.earlyStopParams.best_score = currentScore;
-                obj.earlyStopParams.counter = 0;
-                fprintf('  - 新しい最良スコア: %.4f\n', currentScore);
+            % 基本スコアの計算
+            accuracyScore = (testWeight * testAccuracy + valWeight * validationScore) / (testWeight + valWeight);
+            
+            % 2. F1スコアの統合（クラス不均衡への対応）
+            if f1Score > 0
+                f1Weight = obj.evaluationWeights.f1Score;
+                combinedScore = (1 - f1Weight) * accuracyScore + f1Weight * f1Score;
             else
-                % 改善がない場合はカウンターを増加
-                obj.earlyStopParams.counter = obj.earlyStopParams.counter + 1;
-                fprintf('  - 十分な改善なし: カウンター %d/%d\n', ...
-                    obj.earlyStopParams.counter, obj.earlyStopParams.patience);
-                
-                % 忍耐回数を超えたら停止
-                if obj.earlyStopParams.counter >= obj.earlyStopParams.patience
-                    shouldStop = true;
+                combinedScore = accuracyScore;
+            end
+            
+            % 3. 過学習ペナルティの計算
+            overfitPenalty = 0;
+            if isfield(results, 'overfitting')
+                % 動的な過学習ペナルティ計算
+                if isfield(results.overfitting, 'performanceGap')
+                    % 検証-テスト間のギャップに基づく動的ペナルティ
+                    perfGap = results.overfitting.performanceGap / 100; % パーセントから小数に
+                    overfitPenalty = min(obj.evaluationWeights.overfitMax, perfGap);
+                else
+                    % 既存の重大度ベースのペナルティをフォールバックとして使用
+                    severity = results.overfitting.severity;
+                    switch severity
+                        case 'critical'
+                            overfitPenalty = 0.5;  % 50%ペナルティ
+                        case 'severe'
+                            overfitPenalty = 0.3;  % 30%ペナルティ
+                        case 'moderate'
+                            overfitPenalty = 0.2;  % 20%ペナルティ
+                        case 'mild'
+                            overfitPenalty = 0.1;  % 10%ペナルティ
+                        otherwise
+                            overfitPenalty = 0;    % ペナルティなし
+                    end
                 end
             end
+            
+            % 4. モデル複雑性ペナルティの計算
+            if isfield(results, 'params') && length(results.params) >= 7
+                numFilters = results.params(5);
+                fcUnits = results.params(7);
+                
+                % 探索空間の最大値を参照して相対的な複雑さを計算
+                maxFilters = obj.searchSpace.numFilters(2);
+                maxUnits = obj.searchSpace.fcUnits(2);
+                
+                complexityScore = 0.5 * (numFilters / maxFilters) + 0.5 * (fcUnits / maxUnits);
+                complexityPenalty = obj.evaluationWeights.complexity * complexityScore;
+            else
+                % paramsフィールドがない場合はデフォルト値を使用
+                fprintf('  注意: 結果の複雑性計算に必要なパラメータがありません。デフォルト値を使用します。\n');
+                complexityPenalty = 0.05; % デフォルトの中程度の複雑性ペナルティ
+            end
+            
+            % 5. 最終スコアの計算 (精度 - 過学習ペナルティ - 複雑性ペナルティ)
+            score = combinedScore * (1 - overfitPenalty - complexityPenalty);
+                
+            return;
         end
 
         %% 最終結果処理メソッド
         function [bestResults, summary] = processFinalResults(obj, results)
             % 全ての試行結果を処理し、最良のモデルを選択
-            %
-            % 入力:
-            %   results - 各試行の結果配列
-            %
-            % 出力:
-            %   bestResults - 最良の結果
-            %   summary - 最適化サマリー
             
             try
                 fprintf('\n=== パラメータ最適化の結果処理 ===\n');
@@ -489,11 +564,13 @@ classdef CNNOptimizer < handle
                     error('有効な結果がありません。全ての試行が失敗しました。');
                 end
                 
-                % 各試行の評価スコアを計算
-                modelScores = zeros(numResults, 1);
-                accuracyWeights = zeros(numResults, 1);
-                complexityPenalties = zeros(numResults, 1);
-                overfitPenalties = zeros(numResults, 1);
+                % 評価結果保存用の変数
+                modelScores = [];
+                testAccuracies = [];
+                valAccuracies = [];
+                f1Scores = [];
+                overfitPenalties = [];
+                complexityPenalties = [];
                 
                 % サマリー情報の初期化
                 summary = struct(...
@@ -501,7 +578,7 @@ classdef CNNOptimizer < handle
                     'valid_trials', numResults, ...
                     'overfit_models', 0, ...
                     'best_accuracy', 0, ...
-                    'worst_accuracy', inf, ...
+                    'worst_accuracy', 1, ...
                     'mean_accuracy', 0, ...
                     'learning_rates', [], ...
                     'batch_sizes', [], ...
@@ -510,109 +587,259 @@ classdef CNNOptimizer < handle
                     'dropout_rates', [], ...
                     'fc_units', []);
                 
+                % 有効な結果のインデックス
+                validIndices = [];
+                
                 fprintf('\n=== 各試行の詳細評価 ===\n');
                 for i = 1:numResults
                     result = validResults{i};
-                    if ~isempty(result.model) && ~isempty(result.performance)
-                        % 基本的な精度スコア
-                        accuracy = result.performance.overallAccuracy;
-                        accuracyWeights(i) = accuracy;
-                        
-                        % 過学習ペナルティ
-                        severity = result.overfitting.severity;
-                        switch severity
-                            case 'critical'
-                                overfitPenalty = 0.5;  % 50%ペナルティ
-                            case 'severe'
-                                overfitPenalty = 0.3;  % 30%ペナルティ
-                            case 'moderate'
-                                overfitPenalty = 0.2;  % 20%ペナルティ
-                            case 'mild'
-                                overfitPenalty = 0.1;  % 10%ペナルティ
-                            otherwise
-                                overfitPenalty = 0;    % ペナルティなし
+                    try
+                        if ~isempty(result) && ~isempty(result.model) && ~isempty(result.performance)
+                            % 基本的な精度スコア
+                            testAccuracy = result.performance.accuracy;
+                            
+                            % 検証精度の取得
+                            valAccuracy = 0;
+                            if isfield(result.trainInfo.History, 'ValidationAccuracy') && ...
+                               ~isempty(result.trainInfo.History.ValidationAccuracy)
+                                valAcc = result.trainInfo.History.ValidationAccuracy;
+                                valAccuracy = mean(valAcc(max(1, end-30):end)); % 最後の30エポックの平均
+                            end
+                            
+                            % F1スコアの計算
+                            f1Score = obj.calculateMeanF1Score(result.performance);
+                            
+                            % 過学習ペナルティ計算
+                            overfitPenalty = 0;
+                            if isfield(result, 'overfitting')
+                                % 動的な過学習ペナルティ計算
+                                if isfield(result.overfitting, 'performanceGap')
+                                    % 検証-テスト間のギャップに基づく動的ペナルティ
+                                    perfGap = result.overfitting.performanceGap / 100; % パーセントから小数に
+                                    overfitPenalty = min(obj.evaluationWeights.overfitMax, perfGap);
+                                else
+                                    % 既存の重大度ベースのペナルティをフォールバックとして使用
+                                    if isfield(result.overfitting, 'severity')
+                                        severity = result.overfitting.severity;
+                                        switch severity
+                                            case 'critical'
+                                                overfitPenalty = 0.5;  % 50%ペナルティ
+                                            case 'severe'
+                                                overfitPenalty = 0.3;  % 30%ペナルティ
+                                            case 'moderate'
+                                                overfitPenalty = 0.2;  % 20%ペナルティ
+                                            case 'mild'
+                                                overfitPenalty = 0.1;  % 10%ペナルティ
+                                            otherwise
+                                                overfitPenalty = 0;    % ペナルティなし
+                                        end
+                                    end
+                                end
+                            end
+                            
+                            % モデル複雑性ペナルティ
+                            complexityPenalty = 0.05; % デフォルト値
+                            if isfield(result, 'params') && length(result.params) >= 7
+                                numFilters = result.params(5);
+                                fcUnits = result.params(7);
+                                
+                                % 探索空間の最大値を参照して相対的な複雑さを計算
+                                maxFilters = obj.searchSpace.numFilters(2);
+                                maxUnits = obj.searchSpace.fcUnits(2);
+                                
+                                complexityScore = 0.5 * (numFilters / maxFilters) + 0.5 * (fcUnits / maxUnits);
+                                complexityPenalty = obj.evaluationWeights.complexity * complexityScore;
+                            else
+                                fprintf('  試行 %d: パラメータ情報がないため、デフォルトの複雑性ペナルティを適用します\n', i);
+                            end
+                            
+                            % 総合スコアの計算
+                            score = obj.calculateTrialScore(testAccuracy, valAccuracy, f1Score, result);
+                            
+                            % 配列に追加
+                            testAccuracies = [testAccuracies; testAccuracy];
+                            valAccuracies = [valAccuracies; valAccuracy];
+                            f1Scores = [f1Scores; f1Score];
+                            overfitPenalties = [overfitPenalties; overfitPenalty];
+                            complexityPenalties = [complexityPenalties; complexityPenalty];
+                            modelScores = [modelScores; score];
+                            validIndices = [validIndices; i];
+                            
+                            % 過学習フラグの設定
+                            severity = 'none';
+                            if isfield(result, 'overfitting') && isfield(result.overfitting, 'severity')
+                                severity = result.overfitting.severity;
+                            end
+                            isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
+                            if isOverfit
+                                summary.overfit_models = summary.overfit_models + 1;
+                            end
+                            
+                            % サマリー情報の更新
+                            if isfield(result, 'params') && length(result.params) >= 7
+                                summary.learning_rates = [summary.learning_rates, result.params(1)];
+                                summary.batch_sizes = [summary.batch_sizes, result.params(2)];
+                                summary.filter_sizes = [summary.filter_sizes, result.params(4)];
+                                summary.num_filters = [summary.num_filters, result.params(5)];
+                                summary.dropout_rates = [summary.dropout_rates, result.params(6)];
+                                summary.fc_units = [summary.fc_units, result.params(7)];
+                            end
+                            
+                            % 結果の詳細表示
+                            fprintf('\n--- パラメータセット %d/%d ---\n', i, numResults);
+                            fprintf('性能指標:\n');
+                            fprintf('  - テスト精度: %.4f\n', testAccuracy);
+                            
+                            if valAccuracy > 0
+                                fprintf('  - 検証精度: %.4f\n', valAccuracy);
+                            end
+                            
+                            if f1Score > 0
+                                fprintf('  - 平均F1スコア: %.4f\n', f1Score);
+                            end
+                            
+                            fprintf('  - 過学習判定: %s\n', string(isOverfit));
+                            fprintf('  - 重大度: %s\n', severity);
+                            
+                            fprintf('複合スコア:\n');
+                            fprintf('  - 過学習ペナルティ: %.2f\n', overfitPenalty);
+                            fprintf('  - 複雑性ペナルティ: %.2f\n', complexityPenalty);
+                            fprintf('  - 最終スコア: %.4f\n', score);
+                        else
+                            fprintf('\n--- パラメータセット %d/%d: 有効なモデルがありません ---\n', i, numResults);
                         end
-                        overfitPenalties(i) = overfitPenalty;
-                        
-                        % モデル複雑性ペナルティ（大きなモデルには小さなペナルティ）
-                        numFilters = result.params(5);
-                        fcUnits = result.params(7);
-                        
-                        % 複雑性スコアの計算 (0-1の範囲)
-                        % 空でない有効な結果のみを使用
-                        validCells = validResults(~cellfun('isempty', validResults));
-
-                        % cellfunを使って各要素のparamsフィールドから値を抽出
-                        maxFilters = max(cellfun(@(x) x.params(5), validCells));
-                        maxUnits = max(cellfun(@(x) x.params(7), validCells));
-                        
-                        complexityScore = 0.5 * (numFilters / max(maxFilters, 1)) + ...
-                            0.5 * (fcUnits / max(maxUnits, 1));
-                        complexityPenalty = 0.1 * complexityScore;  % 最大10%のペナルティ
-                        complexityPenalties(i) = complexityPenalty;
-                        
-                        % 最終スコアの計算 (精度 - 過学習ペナルティ - 複雑性ペナルティ)
-                        modelScores(i) = accuracy * (1 - overfitPenalty - complexityPenalty);
-                        
-                        % 過学習フラグの設定
-                        isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
-                        if isOverfit
-                            summary.overfit_models = summary.overfit_models + 1;
-                        end
-                        
-                        % サマリー情報の更新
-                        summary.learning_rates(end+1) = result.params(1);
-                        summary.batch_sizes(end+1) = result.params(2);
-                        summary.filter_sizes(end+1) = result.params(4);
-                        summary.num_filters(end+1) = result.params(5);
-                        summary.dropout_rates(end+1) = result.params(6);
-                        summary.fc_units(end+1) = result.params(7);
-                        
-                        % 結果の詳細表示
-                        fprintf('\n--- パラメータセット %d/%d ---\n', i, numResults);
-                        fprintf('性能指標:\n');
-                        fprintf('  - 精度: %.4f\n', accuracy);
-                        fprintf('  - 過学習判定: %s\n', string(isOverfit));
-                        fprintf('  - 重大度: %s\n', severity);
-                        
-                        if isfield(result.performance, 'crossValidation')
-                            fprintf('  - 交差検証精度: %.4f (±%.4f)\n', ...
-                                result.performance.crossValidation.accuracy, ...
-                                result.performance.crossValidation.std);
-                        end
-                        
-                        fprintf('複合スコア:\n');
-                        fprintf('  - 過学習ペナルティ: %.2f\n', overfitPenalty);
-                        fprintf('  - 複雑性ペナルティ: %.2f\n', complexityPenalty);
-                        fprintf('  - 最終スコア: %.4f\n', modelScores(i));
+                    catch ME
+                        fprintf('\n--- パラメータセット %d/%d の評価中にエラーが発生: %s ---\n', i, numResults, ME.message);
                     end
                 end
                 
+                % 有効な結果がない場合はエラーを返す
+                if isempty(modelScores)
+                    error('有効な評価結果がありません。詳細な解析ができません。');
+                end
+                
                 % 統計サマリーの計算
-                summary.best_accuracy = max(accuracyWeights);
-                summary.worst_accuracy = min(accuracyWeights);
-                summary.mean_accuracy = mean(accuracyWeights);
+                if ~isempty(testAccuracies)
+                    summary.best_accuracy = max(testAccuracies);
+                    summary.worst_accuracy = min(testAccuracies);
+                    summary.mean_accuracy = mean(testAccuracies);
+                end
+                
+                % モデル選択の詳細情報
+                fprintf('\n=== モデルスコアの分布 ===\n');
+                if ~isempty(modelScores)
+                    scorePercentiles = prctile(modelScores, [0, 25, 50, 75, 100]);
+                    fprintf('  - 最小値: %.4f\n', scorePercentiles(1));
+                    fprintf('  - 25パーセンタイル: %.4f\n', scorePercentiles(2));
+                    fprintf('  - 中央値: %.4f\n', scorePercentiles(3));
+                    fprintf('  - 75パーセンタイル: %.4f\n', scorePercentiles(4));
+                    fprintf('  - 最大値: %.4f\n', scorePercentiles(5));
+                end
                 
                 % 最良モデルの選択（最高スコア）
-                [bestScore, bestIdx] = max(modelScores);
-                bestResults = validResults{bestIdx};
-                
-                fprintf('\n最良モデル選択 (インデックス: %d)\n', bestIdx);
-                fprintf('  - 最終スコア: %.4f\n', bestScore);
-                fprintf('  - 精度: %.4f\n', accuracyWeights(bestIdx));
-                fprintf('  - 過学習ペナルティ: %.2f\n', overfitPenalties(bestIdx));
-                fprintf('  - 複雑性ペナルティ: %.2f\n', complexityPenalties(bestIdx));
-                
-                % 最良パラメータの保存
-                obj.bestParams = bestResults.params;
-                obj.bestPerformance = modelScores(bestIdx);
-                obj.optimizedModel = bestResults.model;
-
+                [bestScore, bestLocalIdx] = max(modelScores);
+                if ~isempty(bestLocalIdx) && bestLocalIdx <= length(validIndices)
+                    bestIdx = validIndices(bestLocalIdx);
+                    bestResults = validResults{bestIdx};
+                    
+                    fprintf('\n最良モデル選択 (インデックス: %d)\n', bestIdx);
+                    fprintf('  - 最終スコア: %.4f\n', bestScore);
+                    fprintf('  - テスト精度: %.4f\n', testAccuracies(bestLocalIdx));
+                    
+                    % 検証精度の表示部分を修正
+                    if bestLocalIdx <= length(valAccuracies)
+                        fprintf('  - 検証精度: %.4f\n', valAccuracies(bestLocalIdx)/100);
+                    end
+                    
+                    if bestLocalIdx <= length(f1Scores) && f1Scores(bestLocalIdx) > 0
+                        fprintf('  - 平均F1スコア: %.4f\n', f1Scores(bestLocalIdx));
+                    end
+                    
+                    if bestLocalIdx <= length(overfitPenalties)
+                        fprintf('  - 過学習ペナルティ: %.2f\n', overfitPenalties(bestLocalIdx));
+                    end
+                    
+                    if bestLocalIdx <= length(complexityPenalties)
+                        fprintf('  - 複雑性ペナルティ: %.2f\n', complexityPenalties(bestLocalIdx));
+                    end
+                    
+                    % 最良パラメータの保存
+                    if isfield(bestResults, 'params')
+                        obj.bestParams = bestResults.params;
+                        obj.bestPerformance = bestScore;
+                        obj.optimizedModel = bestResults.model;
+        
+                        % 上位モデルのパラメータ傾向分析
+                        topN = min(5, length(validIndices));
+                        if topN > 0
+                            [~, topLocalIndices] = sort(modelScores, 'descend');
+                            topLocalIndices = topLocalIndices(1:topN);
+                            topIndices = validIndices(topLocalIndices);
+                            
+                            % パラメータ情報のあるモデルを集計
+                            top_params = [];
+                            valid_top_count = 0;
+                            
+                            for j = 1:length(topIndices)
+                                if isfield(validResults{topIndices(j)}, 'params') && ...
+                                   length(validResults{topIndices(j)}.params) >= 7
+                                    valid_top_count = valid_top_count + 1;
+                                    top_params(valid_top_count, :) = validResults{topIndices(j)}.params;
+                                end
+                            end
+                            
+                            if valid_top_count > 0
+                                fprintf('\n上位%dモデルのパラメータ傾向:\n', valid_top_count);
+                                fprintf('  - 平均学習率: %.6f\n', mean(top_params(:, 1)));
+                                fprintf('  - 平均バッチサイズ: %.1f\n', mean(top_params(:, 2)));
+                                fprintf('  - 平均畳み込み層数: %.1f\n', mean(top_params(:, 3)));
+                                fprintf('  - 平均フィルタサイズ: %.1f\n', mean(top_params(:, 4)));
+                                fprintf('  - 平均フィルタ数: %.1f\n', mean(top_params(:, 5)));
+                                fprintf('  - 平均ドロップアウト率: %.2f\n', mean(top_params(:, 6)));
+                                fprintf('  - 平均FC層ユニット数: %.1f\n', mean(top_params(:, 7)));
+                            else
+                                fprintf('\n上位モデルに有効なパラメータ情報がありません\n');
+                            end
+                        else
+                            fprintf('\n上位モデル分析に十分な有効結果がありません\n');
+                        end
+                    else
+                        fprintf('\n最良モデルにパラメータ情報がありません\n');
+                    end
+                else
+                    fprintf('\n有効な最良モデルが見つかりませんでした。最初の有効なモデルを使用します。\n');
+                    bestResults = validResults{1};
+                end
+        
             catch ME
                 fprintf('結果処理中にエラーが発生: %s\n', ME.message);
                 fprintf('エラー詳細:\n');
                 disp(getReport(ME, 'extended'));
-                error('最終結果の処理に失敗しました: %s', ME.message);
+                
+                % 最低限の結果を返す
+                if ~isempty(validResults)
+                    bestResults = validResults{1};
+                else
+                    bestResults = struct(...
+                        'model', [], ...
+                        'performance', struct('accuracy', 0), ...
+                        'trainInfo', struct('History', struct('TrainingAccuracy', [], 'ValidationAccuracy', [])), ...
+                        'overfitting', struct('severity', 'unknown'), ...
+                        'normParams', [] ...
+                    );
+                end
+                
+                summary = struct(...
+                    'total_trials', length(results), ...
+                    'valid_trials', length(validResults), ...
+                    'overfit_models', 0, ...
+                    'best_accuracy', 0, ...
+                    'worst_accuracy', 0, ...
+                    'mean_accuracy', 0 ...
+                );
+                
+                % エラーを再スローせず、可能な限り処理を続行
+                fprintf('警告: エラーが発生しましたが、可能な限り処理を続行します。\n');
             end
         end
         
@@ -628,9 +855,27 @@ classdef CNNOptimizer < handle
                 for i = 1:length(validResults)
                     result = validResults{i};
                     if ~isempty(result.model) && ~isempty(result.performance)
+                        % テスト精度と検証精度の取得
+                        testAccuracy = result.performance.accuracy;
+                        
+                        valAccuracy = 0;
+                        if isfield(result.trainInfo.History, 'ValidationAccuracy') && ...
+                           ~isempty(result.trainInfo.History.ValidationAccuracy)
+                            valAcc = result.trainInfo.History.ValidationAccuracy;
+                            valAccuracy = mean(valAcc(max(1, end-5):end));
+                        end
+                        
+                        f1Score = obj.calculateMeanF1Score(result.performance);
+                        
+                        % 総合スコアの計算
+                        score = obj.calculateTrialScore(testAccuracy, valAccuracy, f1Score, result);
+                        
                         newEntry = struct(...
                             'params', result.params, ...
-                            'performance', result.performance.overallAccuracy, ...
+                            'testAccuracy', testAccuracy, ...
+                            'valAccuracy', valAccuracy, ...
+                            'f1Score', f1Score, ...
+                            'score', score, ...
                             'model', result.model);
                         
                         if isempty(obj.optimizationHistory)
@@ -641,9 +886,9 @@ classdef CNNOptimizer < handle
                     end
                 end
                 
-                % 性能値で降順にソート
+                % スコアで降順にソート
                 if ~isempty(obj.optimizationHistory)
-                    [~, sortIdx] = sort([obj.optimizationHistory.performance], 'descend');
+                    [~, sortIdx] = sort([obj.optimizationHistory.score], 'descend');
                     obj.optimizationHistory = obj.optimizationHistory(sortIdx);
                     
                     fprintf('\n最適化履歴を更新しました（計 %d 個のモデル）\n', ...
@@ -743,8 +988,8 @@ classdef CNNOptimizer < handle
             
             % 最適化の収束性評価
             if length(obj.optimizationHistory) > 1
-                performances = [obj.optimizationHistory.performance];
-                improvement = diff(performances);
+                scores = [obj.optimizationHistory.score];
+                improvement = diff(scores);
                 
                 if ~isempty(improvement)
                     positiveImprovement = improvement(improvement > 0);
@@ -776,7 +1021,7 @@ classdef CNNOptimizer < handle
                 fprintf('  - フィルタ数: %d\n', obj.bestParams(5));
                 fprintf('  - ドロップアウト率: %.2f\n', obj.bestParams(6));
                 fprintf('  - 全結合層ユニット数: %d\n', obj.bestParams(7));
-                fprintf('  - 達成精度: %.4f\n', obj.bestPerformance);
+                fprintf('  - 達成スコア: %.4f\n', obj.bestPerformance);
             end
         end
         
@@ -786,15 +1031,7 @@ classdef CNNOptimizer < handle
             
             results = struct(...
                 'model', [], ...
-                'performance', struct(...
-                    'overallAccuracy', 0, ...
-                    'crossValidation', struct('accuracy', 0, 'std', 0), ...
-                    'precision', 0, ...
-                    'recall', 0, ...
-                    'f1score', 0, ...
-                    'auc', 0, ...
-                    'confusionMatrix', [] ...
-                ), ...
+                'performance', [], ...
                 'trainInfo', [], ...
                 'overfitting', [], ...
                 'normParams', [] ...
