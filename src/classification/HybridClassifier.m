@@ -1,7 +1,7 @@
 classdef HybridClassifier < handle
     %% HybridClassifier - CNN+LSTM統合ハイブリッド分類器
     %
-    % このクラスはEEGデータに対してCNNとLSTMを組み合わせた
+    % のクラスはEEGデータに対してCNNとLSTMを組み合わせた
     % ハイブリッド深層学習モデルを実装します。時空間的特徴の両方を
     % 効果的に捉え、高精度な分類を実現します。
     %
@@ -67,18 +67,6 @@ classdef HybridClassifier < handle
             % コンポーネントの初期化
             obj.dataAugmenter = DataAugmenter(params);
             obj.normalizer = EEGNormalizer(params);
-            
-            % GPU利用可能性のチェック
-            if obj.useGPU
-                try
-                    gpuInfo = gpuDevice();
-                    fprintf('GPUが検出されました: %s (メモリ: %.2f GB)\n', ...
-                        gpuInfo.Name, gpuInfo.TotalMemory/1e9);
-                catch
-                    warning('GPU使用が指定されていますが、GPUが利用できません。CPUで実行します。');
-                    obj.useGPU = false;
-                end
-            end
         end
 
         %% ハイブリッドモデル学習メソッド
@@ -138,7 +126,7 @@ classdef HybridClassifier < handle
                 end
 
                 % 性能指標の更新
-                obj.updatePerformanceMetrics(testMetrics);
+                obj.performance = testMetrics;
                 
                 % 結果構造体の構築
                 results = obj.buildResultsStruct(hybridModel, testMetrics, trainInfo, normParams);
@@ -178,8 +166,6 @@ classdef HybridClassifier < handle
             %   isOverfit - 過学習の有無（論理値）
             %   metrics - 詳細な過学習メトリクス
             
-            fprintf('\n=== 過学習検証の実行 ===\n');
-            
             % 初期化
             isOverfit = false;
             metrics = struct();
@@ -205,18 +191,10 @@ classdef HybridClassifier < handle
                     
                     % CNN学習曲線の詳細分析
                     [cnnTrainTrend, cnnValTrend] = obj.analyzeLearningCurves(cnnTrainAcc, cnnValAcc);
-                    
-                    fprintf('\nCNN学習曲線の分析:\n');
-                    fprintf('  - 学習精度の平均変化率: %.4f/エポック\n', cnnTrainTrend.mean_change);
-                    fprintf('  - 学習精度の変動性: %.4f\n', cnnTrainTrend.volatility);
-                    fprintf('  - 検証精度の平均変化率: %.4f/エポック\n', cnnValTrend.mean_change);
-                    fprintf('  - 検証精度の変動性: %.4f\n', cnnValTrend.volatility);
-                    
+
                     % 収束エポック
                     if ~isempty(cnnValAcc)
                         [cnnOptimalEpoch, cnnTotalEpochs] = obj.findOptimalEpoch(cnnValAcc);
-                        fprintf('  - CNN最適エポック: %d/%d (%.1f%%)\n', ...
-                            cnnOptimalEpoch, cnnTotalEpochs, (cnnOptimalEpoch/cnnTotalEpochs)*100);
                     else
                         cnnOptimalEpoch = 0;
                         cnnTotalEpochs = 0;
@@ -247,17 +225,9 @@ classdef HybridClassifier < handle
                     % LSTM学習曲線の詳細分析
                     [lstmTrainTrend, lstmValTrend] = obj.analyzeLearningCurves(lstmTrainAcc, lstmValAcc);
                     
-                    fprintf('\nLSTM学習曲線の分析:\n');
-                    fprintf('  - 学習精度の平均変化率: %.4f/エポック\n', lstmTrainTrend.mean_change);
-                    fprintf('  - 学習精度の変動性: %.4f\n', lstmTrainTrend.volatility);
-                    fprintf('  - 検証精度の平均変化率: %.4f/エポック\n', lstmValTrend.mean_change);
-                    fprintf('  - 検証精度の変動性: %.4f\n', lstmValTrend.volatility);
-                    
                     % 収束エポック
                     if ~isempty(lstmValAcc)
                         [lstmOptimalEpoch, lstmTotalEpochs] = obj.findOptimalEpoch(lstmValAcc);
-                        fprintf('  - LSTM最適エポック: %d/%d (%.1f%%)\n', ...
-                            lstmOptimalEpoch, lstmTotalEpochs, (lstmOptimalEpoch/lstmTotalEpochs)*100);
                     else
                         lstmOptimalEpoch = 0;
                         lstmTotalEpochs = 0;
@@ -273,7 +243,7 @@ classdef HybridClassifier < handle
                 % --- ハイブリッドモデル全体の検証-テスト精度ギャップ分析 ---
                 if isfield(trainInfo, 'hybridValMetrics')
                     hybridValAcc = trainInfo.hybridValMetrics.accuracy * 100; % パーセントに変換
-                    testAcc = testMetrics.accuracy * 100;  % パーセントに変換
+                    testAcc = testMetrics.accuracy * 100; % パーセントに変換
                     
                     % データサイズの取得（混同行列のサイズから推定）
                     if isfield(testMetrics, 'confusionMat')
@@ -287,18 +257,18 @@ classdef HybridClassifier < handle
                 else
                     % CNN検証精度とLSTM検証精度を平均化
                     if ~isempty(cnnValAcc) && ~isempty(lstmValAcc)
-                        meanCnnValAcc = mean(cnnValAcc(max(1, end-5):end)) * 100; % 最後の5エポックの平均
-                        meanLstmValAcc = mean(lstmValAcc(max(1, end-5):end)) * 100;
+                        meanCnnValAcc = mean(cnnValAcc(max(1, end-30):end)) * 100; % 最後の30エポックの平均
+                        meanLstmValAcc = mean(lstmValAcc(max(1, end-30):end)) * 100;
                         hybridValAcc = (meanCnnValAcc + meanLstmValAcc) / 2;
                     elseif ~isempty(cnnValAcc)
-                        hybridValAcc = mean(cnnValAcc(max(1, end-5):end)) * 100;
+                        hybridValAcc = mean(cnnValAcc(max(1, end-30):end)) * 100;
                     elseif ~isempty(lstmValAcc)
-                        hybridValAcc = mean(lstmValAcc(max(1, end-5):end)) * 100;
+                        hybridValAcc = mean(lstmValAcc(max(1, end-30):end)) * 100;
                     else
                         hybridValAcc = 0;
                     end
                     
-                    testAcc = testMetrics.accuracy * 100;
+                    testAcc = testMetrics.accuracy * 100; % パーセントに変換
                     
                     % データサイズ
                     if isfield(testMetrics, 'confusionMat')
@@ -336,7 +306,10 @@ classdef HybridClassifier < handle
                     severity = gapMetrics.severity;
                 end
                 
-                % メトリクスの構築
+                % 過学習判定
+                isOverfit = gapOverfit || isCompletelyBiased || (~isLearningProgressing && severity ~= 'none');
+                
+                % メトリクスの構築 - isOverfit を追加
                 metrics = struct(...
                     'gapMetrics', gapMetrics, ...
                     'performanceGap', gapMetrics.rawGap, ...
@@ -352,11 +325,10 @@ classdef HybridClassifier < handle
                     'lstmOptimalEpoch', lstmOptimalEpoch, ...
                     'lstmTotalEpochs', lstmTotalEpochs, ...
                     'cnnEarlyStoppingEffect', cnnEarlyStoppingEffect, ...
-                    'lstmEarlyStoppingEffect', lstmEarlyStoppingEffect ...
+                    'lstmEarlyStoppingEffect', lstmEarlyStoppingEffect, ...
+                    'isOverfit', isOverfit ...  % 過学習フラグを明示的に保存
                 );
                 
-                % 過学習判定
-                isOverfit = gapOverfit || isCompletelyBiased || (~isLearningProgressing && severity ~= 'none');
                 fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
                 
             catch ME
@@ -367,6 +339,9 @@ classdef HybridClassifier < handle
                 % エラー時のフォールバック値を設定
                 metrics = obj.createFallbackOverfitMetrics();
                 isOverfit = true;
+                
+                % フォールバックメトリクスに isOverfit フラグを追加
+                metrics.isOverfit = isOverfit;
             end
         end
 
@@ -1359,10 +1334,10 @@ classdef HybridClassifier < handle
                 [pred, score] = predict(model.adaModel, combinedFeatures);
                 metrics.score = score;
                 
-                % テストラベルをcategorical型に変換 - ここを修正
+                % テストラベルをcategorical型に変換
                 testLabels_cat = categorical(testLabels);
                 
-                % 基本的な指標の計算 - ここを修正
+                % 基本的な指標の計算 
                 metrics.accuracy = mean(pred == testLabels_cat);
                 metrics.confusionMat = confusionmat(testLabels_cat, pred);
                 
@@ -1669,7 +1644,7 @@ classdef HybridClassifier < handle
                     'adjustedGap', NaN, ...
                     'meanValAcc', NaN, ...
                     'stdValAcc', NaN, ...
-                    'testAcc', testAcc*100, ...
+                    'testAcc', testAcc, ...
                     'severity', 'unknown' ...
                 );
                 isOverfit = true;
@@ -1688,7 +1663,7 @@ classdef HybridClassifier < handle
                         'adjustedGap', NaN, ...
                         'meanValAcc', NaN, ...
                         'stdValAcc', NaN, ...
-                        'testAcc', testAcc*100, ...
+                        'testAcc', testAcc, ...
                         'severity', 'unknown' ...
                     );
                     isOverfit = true;
@@ -1719,7 +1694,7 @@ classdef HybridClassifier < handle
             scaleFactor = min(1, sqrt(dataSize / 1000));  % データサイズに基づく調整
             
             % 正規化された差（z-スコア的アプローチ）
-            rawGap = abs(meanValAcc - testAcc*100);
+            rawGap = abs(meanValAcc - testAcc);
             normalizedGap = rawGap / max(stdValAcc, 1);
             
             % スケール調整されたギャップ
@@ -1745,19 +1720,11 @@ classdef HybridClassifier < handle
                 'adjustedGap', adjustedGap, ...
                 'meanValAcc', meanValAcc, ...
                 'stdValAcc', stdValAcc, ...
-                'testAcc', testAcc*100, ...
+                'testAcc', testAcc, ...
                 'severity', severity ...
             );
             
             isOverfit = ~strcmp(severity, 'none');
-            
-            % 結果の表示
-            fprintf('\n=== 検証-テスト精度ギャップ分析 ===\n');
-            fprintf('  平均検証精度: %.2f%% (±%.2f%%)\n', meanValAcc, stdValAcc);
-            fprintf('  テスト精度: %.2f%%\n', testAcc*100);
-            fprintf('  基本ギャップ: %.2f%%\n', metrics.rawGap);
-            fprintf('  正規化ギャップ: %.2f (スケーリング後: %.2f)\n', normalizedGap, adjustedGap);
-            fprintf('  判定結果: %s\n', severity);
         end
         
         %% トレーニング情報検証メソッド
@@ -1847,9 +1814,6 @@ classdef HybridClassifier < handle
                     obj.gpuMemory.used = usedMem;
                     obj.gpuMemory.peak = max(obj.gpuMemory.peak, usedMem);
                     
-                    fprintf('GPU使用状況: %.2f/%.2f GB (%.1f%%)\n', ...
-                        usedMem, totalMem, (usedMem/totalMem)*100);
-                    
                     % メモリ使用率が高い場合は警告と対応
                     if usedMem/totalMem > 0.8
                         warning('GPU使用率が80%%を超えています。パフォーマンスに影響する可能性があります。');
@@ -1893,32 +1857,6 @@ classdef HybridClassifier < handle
             end
         end
         
-        %% 性能メトリクス更新メソッド
-        function updatePerformanceMetrics(obj, testMetrics)
-            % 評価結果から性能メトリクスを更新
-            %
-            % 入力:
-            %   testMetrics - テストデータでの評価結果
-            
-            fprintf('\n=== 性能メトリクスの更新 ===\n');
-            
-            % メトリクスの更新
-            obj.performance = testMetrics;
-            
-            % 基本的な指標を表示
-            fprintf('更新された性能指標:\n');
-            fprintf('  - 全体精度: %.2f%%\n', testMetrics.accuracy * 100);
-            
-            if isfield(testMetrics, 'auc') && ~isempty(testMetrics.auc)
-                fprintf('  - AUC: %.3f\n', testMetrics.auc);
-            end
-            
-            % クラスごとの指標の表示
-            if isfield(testMetrics, 'classwise') && ~isempty(testMetrics.classwise)
-                fprintf('クラスごとの性能指標が更新されました\n');
-            end
-        end
-        
         %% 結果表示メソッド
         function displayResults(obj)
             % 総合的な結果サマリーの表示
@@ -1955,35 +1893,17 @@ classdef HybridClassifier < handle
                     end
                 end
 
-                % モデル構造情報
-                fprintf('\nモデル構造情報:\n');
-                fprintf('  - CNN部分: ');
-                if isfield(obj.params.classifier.hybrid.architecture.cnn, 'convLayers')
-                    numCnnLayers = length(fieldnames(obj.params.classifier.hybrid.architecture.cnn.convLayers));
-                    fprintf('%d層の畳み込みネットワーク\n', numCnnLayers);
-                else
-                    fprintf('情報なし\n');
-                end
-                
-                fprintf('  - LSTM部分: ');
-                if isfield(obj.params.classifier.hybrid.architecture.lstm, 'lstmLayers')
-                    numLstmLayers = length(fieldnames(obj.params.classifier.hybrid.architecture.lstm.lstmLayers));
-                    fprintf('%d層のリカレントネットワーク\n', numLstmLayers);
-                else
-                    fprintf('情報なし\n');
-                end
-
                 % 過学習分析結果の表示
                 if ~isempty(obj.overfitMetrics) && isstruct(obj.overfitMetrics)
                     fprintf('\n過学習分析:\n');
-                    fprintf('  - 性能ギャップ: %.2f%%\n', obj.overfitMetrics.performanceGap);
+                    fprintf('  - 検証-テスト精度ギャップ: %.2f%%\n', obj.overfitMetrics.performanceGap);
                     fprintf('  - 重大度: %s\n', obj.overfitMetrics.severity);
                     
                     if isfield(obj.overfitMetrics, 'isCompletelyBiased')
                         fprintf('  - バイアス検出: %s\n', string(obj.overfitMetrics.isCompletelyBiased));
                     end
                     
-                    fprintf('\n学習カーブ分析:\n');
+                    fprintf('\n学習曲線分析:\n');
                     
                     % CNN検証傾向
                     if isfield(obj.overfitMetrics, 'cnnValidationTrend')
@@ -2017,14 +1937,6 @@ classdef HybridClassifier < handle
                             (obj.overfitMetrics.lstmOptimalEpoch / ...
                              max(obj.overfitMetrics.lstmTotalEpochs, 1)) * 100);
                     end
-                end
-                
-                % GPU使用状況
-                if obj.useGPU && obj.gpuMemory.peak > 0
-                    fprintf('\nGPU使用状況:\n');
-                    fprintf('  - 最大使用メモリ: %.2f GB\n', obj.gpuMemory.peak);
-                    fprintf('  - 総メモリ: %.2f GB\n', obj.gpuMemory.total);
-                    fprintf('  - 使用率: %.1f%%\n', (obj.gpuMemory.peak / max(obj.gpuMemory.total, 1)) * 100);
                 end
 
             catch ME

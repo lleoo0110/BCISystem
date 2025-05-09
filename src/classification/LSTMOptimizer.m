@@ -30,18 +30,6 @@ classdef LSTMOptimizer < handle
                 'complexity', 0.1, ...  % 複雑性のペナルティ最大値
                 'overfitMax', 0.5 ...   % 過学習の最大ペナルティ値
             );
-            
-            % GPU利用可能性のチェック
-            if obj.useGPU
-                try
-                    gpuInfo = gpuDevice();
-                    fprintf('GPUが検出されました: %s (メモリ: %.2f GB)\n', ...
-                        gpuInfo.Name, gpuInfo.TotalMemory/1e9);
-                catch
-                    warning('GPU使用が指定されていますが、GPUが利用できません。CPUで実行します。');
-                    obj.useGPU = false;
-                end
-            end
         end
         
         function results = optimize(obj, data, labels)
@@ -185,14 +173,6 @@ classdef LSTMOptimizer < handle
                     'fcUnits', [64, 256] ...                % 全結合層ユニット数範囲
                 );
             end
-            
-            fprintf('\n探索空間の範囲 (LSTM):\n');
-            fprintf('  - 学習率: [%.6f, %.6f]\n', obj.searchSpace.learningRate);
-            fprintf('  - バッチサイズ: [%d, %d]\n', obj.searchSpace.miniBatchSize);
-            fprintf('  - LSTMユニット数: [%d, %d]\n', obj.searchSpace.lstmUnits);
-            fprintf('  - LSTM層数: [%d, %d]\n', obj.searchSpace.numLayers);
-            fprintf('  - ドロップアウト率: [%.2f, %.2f]\n', obj.searchSpace.dropoutRate);
-            fprintf('  - 全結合層ユニット数: [%d, %d]\n', obj.searchSpace.fcUnits);
         end
         
         function paramSets = generateParameterSets(obj, numTrials, algorithm)

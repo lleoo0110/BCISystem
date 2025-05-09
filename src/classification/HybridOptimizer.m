@@ -29,9 +29,6 @@ classdef HybridOptimizer < handle
         
         % 評価重み
         evaluationWeights   % 各評価指標の重みづけ
-        
-        % GPUメモリ監視
-        gpuMemory           % GPU使用メモリ監視
     end
     
     methods (Access = public)
@@ -57,26 +54,6 @@ classdef HybridOptimizer < handle
                 'complexity', 0.1, ...  % 複雑性のペナルティ最大値
                 'overfitMax', 0.5 ...   % 過学習の最大ペナルティ値
             );
-            
-            % GPUメモリ監視の初期化
-            obj.gpuMemory = struct('total', 0, 'used', 0, 'peak', 0);
-            
-            % GPU利用可能性のチェック
-            if obj.useGPU
-                try
-                    gpuInfo = gpuDevice();
-                    fprintf('GPUが検出されました: %s (メモリ: %.2f GB)\n', ...
-                        gpuInfo.Name, gpuInfo.TotalMemory/1e9);
-                    
-                    % GPU情報の初期化
-                    obj.gpuMemory.total = gpuInfo.TotalMemory/1e9;
-                    obj.gpuMemory.used = (gpuInfo.TotalMemory - gpuInfo.AvailableMemory)/1e9;
-                    obj.gpuMemory.peak = obj.gpuMemory.used;
-                catch
-                    warning('GPU使用が指定されていますが、GPUが利用できません。CPUで実行します。');
-                    obj.useGPU = false;
-                end
-            end
         end
         
         %% 最適化実行メソッド
@@ -124,11 +101,6 @@ classdef HybridOptimizer < handle
                         % 現在のパラメータ構成の表示
                         obj.displayCurrentParams(paramSets(i,:));
                         
-                        % GPUメモリの確認
-                        if obj.useGPU
-                            obj.checkGPUMemory();
-                        end
-                        
                         % パラメータの更新
                         localParams = baseParams;
                         localParams = obj.updateHybridParameters(localParams, paramSets(i,:));
@@ -164,13 +136,13 @@ classdef HybridOptimizer < handle
                             
                             % 両モデルの検証精度の平均を計算（利用可能な場合のみ）
                             if ~isempty(cnnValAcc) && ~isempty(lstmValAcc)
-                                meanCnnValAcc = mean(cnnValAcc(max(1, end-5):end)); % 最後の5エポックの平均
-                                meanLstmValAcc = mean(lstmValAcc(max(1, end-5):end));
+                                meanCnnValAcc = mean(cnnValAcc(max(1, end-30):end)); % 最後の30エポックの平均
+                                meanLstmValAcc = mean(lstmValAcc(max(1, end-30):end));
                                 valAccuracy = (meanCnnValAcc + meanLstmValAcc) / 2;
                             elseif ~isempty(cnnValAcc)
-                                valAccuracy = mean(cnnValAcc(max(1, end-5):end));
+                                valAccuracy = mean(cnnValAcc(max(1, end-30):end));
                             elseif ~isempty(lstmValAcc)
-                                valAccuracy = mean(lstmValAcc(max(1, end-5):end));
+                                valAccuracy = mean(lstmValAcc(max(1, end-30):end));
                             end
                         end
                         
@@ -182,11 +154,6 @@ classdef HybridOptimizer < handle
         
                         fprintf('組み合わせ %d/%d: テスト精度 = %.4f, 総合スコア = %.4f\n', ...
                             i, size(paramSets, 1), performance, evaluationScore);
-                        
-                        % GPUメモリの解放
-                        if obj.useGPU
-                            obj.resetGPUMemory();
-                        end
         
                     catch ME
                         warning('組み合わせ%dでエラー発生: %s', i, ME.message);
@@ -200,11 +167,6 @@ classdef HybridOptimizer < handle
                             'errorMessage', ME.message, ...
                             'performance', struct('accuracy', 0) ...
                         );
-        
-                        % GPUメモリの解放
-                        if obj.useGPU
-                            obj.resetGPUMemory();
-                        end
                     end
                 end
         
@@ -233,9 +195,6 @@ classdef HybridOptimizer < handle
                 fprintf('エラーメッセージ: %s\n', ME.message);
                 fprintf('エラースタック:\n');
                 disp(getReport(ME, 'extended'));
-                
-                % エラー回復処理
-                results = obj.handleOptimizationError(ME);
             end
         end
     end
@@ -262,22 +221,6 @@ classdef HybridOptimizer < handle
                     'fcUnits', [64, 256] ...               % 全結合層ユニット数範囲
                 );
             end
-            
-            % 探索空間の詳細表示
-            fprintf('\n探索空間の範囲 (ハイブリッドモデル):\n');
-            fprintf('  - 学習率: [%.6f, %.6f]\n', obj.searchSpace.learningRate(1), obj.searchSpace.learningRate(2));
-            fprintf('  - バッチサイズ: [%d, %d]\n', obj.searchSpace.miniBatchSize(1), obj.searchSpace.miniBatchSize(2));
-            fprintf('  - CNN層数: [%d, %d]\n', obj.searchSpace.numConvLayers(1), obj.searchSpace.numConvLayers(2));
-            fprintf('  - CNNフィルタ数: [%d, %d]\n', obj.searchSpace.cnnFilters(1), obj.searchSpace.cnnFilters(2));
-            fprintf('  - フィルタサイズ: [%d, %d]\n', obj.searchSpace.filterSize(1), obj.searchSpace.filterSize(2));
-            fprintf('  - LSTMユニット数: [%d, %d]\n', obj.searchSpace.lstmUnits(1), obj.searchSpace.lstmUnits(2));
-            fprintf('  - LSTM層数: [%d, %d]\n', obj.searchSpace.numLstmLayers(1), obj.searchSpace.numLstmLayers(2));
-            fprintf('  - ドロップアウト率: [%.2f, %.2f]\n', obj.searchSpace.dropoutRate(1), obj.searchSpace.dropoutRate(2));
-            fprintf('  - 全結合層ユニット数: [%d, %d]\n', obj.searchSpace.fcUnits(1), obj.searchSpace.fcUnits(2));
-            
-            % パラメータ空間のサイズ（9次元）
-            paramSpace = 9; % 9つのパラメータを最適化
-            fprintf('パラメータ空間: %d次元\n', paramSpace);
         end
         
         %% パラメータセット生成メソッド
@@ -871,16 +814,12 @@ classdef HybridOptimizer < handle
                                         switch severity
                                             case 'critical'
                                                 overfitPenalty = 0.5;  % 50%ペナルティ
-                                                isOverfitFlags(i) = true;
                                             case 'severe'
                                                 overfitPenalty = 0.3;  % 30%ペナルティ
-                                                isOverfitFlags(i) = true;
                                             case 'moderate'
                                                 overfitPenalty = 0.2;  % 20%ペナルティ
-                                                isOverfitFlags(i) = true;
                                             case 'mild'
                                                 overfitPenalty = 0.1;  % 10%ペナルティ
-                                                isOverfitFlags(i) = true;
                                             otherwise
                                                 overfitPenalty = 0;    % ペナルティなし
                                         end
@@ -935,7 +874,7 @@ classdef HybridOptimizer < handle
                             validIndices = [validIndices, i];
                             validScores = [validScores, score];
                             
-                            % 過学習フラグの設定
+                            % 過学習フラグの設定 - 修正: 直接 isOverfitFlags を使用
                             if isOverfitFlags(i)
                                 summary.overfit_models = summary.overfit_models + 1;
                             end
@@ -984,6 +923,8 @@ classdef HybridOptimizer < handle
                         end
                     catch ME
                         fprintf('\n--- パラメータセット %d/%d の評価中にエラーが発生: %s ---\n', i, numResults, ME.message);
+                        fprintf('スタックトレース:\n');
+                        disp(getReport(ME, 'extended'));
                     end
                 end
                 
@@ -1028,7 +969,7 @@ classdef HybridOptimizer < handle
                     fprintf('  - 最大値: %.4f\n', scorePercentiles(5));
                 end
                 
-                % 最良モデルの選択戦略
+                % 最良モデル選択戦略
                 fprintf('\n=== 最良モデル選択戦略 ===\n');
                 fprintf('過学習モデル数: %d/%d (%.1f%%)\n', ...
                     summary.overfit_models, numResults, (summary.overfit_models/max(numResults, 1))*100);
@@ -1041,7 +982,8 @@ classdef HybridOptimizer < handle
                 end
                 
                 % 過学習していないモデルがあるかをチェック
-                nonOverfitIndices = validIndices(~isOverfitFlags(validIndices));
+                nonOverfitIndices = find(~isOverfitFlags);
+                nonOverfitIndices = nonOverfitIndices(ismember(nonOverfitIndices, validIndices));
                 
                 % 選択方法の決定
                 if ~isempty(nonOverfitIndices) && length(nonOverfitIndices) >= 3
@@ -1059,10 +1001,9 @@ classdef HybridOptimizer < handle
                     end
                 else
                     fprintf('過学習していないモデルが不足しています。全モデルから最良を選択します。\n');
-                    [~, localIdx] = max(modelScores(validIndices));
-                    bestIdx = validIndices(localIdx);
+                    [~, bestIdx] = max(modelScores);
                     
-                    if bestIdx <= length(isOverfitFlags) && isOverfitFlags(bestIdx)
+                    if isOverfitFlags(bestIdx)
                         fprintf('警告: 選択された最良モデルは過学習の兆候があります\n');
                     end
                 end
@@ -1099,9 +1040,9 @@ classdef HybridOptimizer < handle
                     % 上位モデルのパラメータ傾向分析
                     topN = min(5, length(validIndices));
                     if topN > 0
-                        [~, sortedIdxList] = sort(modelScores(validIndices), 'descend');
+                        [~, sortedIdxList] = sort(modelScores, 'descend');
                         topLocalIndices = sortedIdxList(1:topN);
-                        topIndices = validIndices(topLocalIndices);
+                        topIndices = intersect(topLocalIndices, validIndices);
                         
                         % パラメータ情報のあるモデルを集計
                         top_params = [];
@@ -1497,14 +1438,6 @@ classdef HybridOptimizer < handle
                 end
             end
             
-            % GPU使用状況
-            if obj.useGPU && obj.gpuMemory.peak > 0
-                fprintf('\nGPU使用状況:\n');
-                fprintf('  - 最大使用メモリ: %.2f GB\n', obj.gpuMemory.peak);
-                fprintf('  - 総メモリ: %.2f GB\n', obj.gpuMemory.total);
-                fprintf('  - 使用率: %.1f%%\n', (obj.gpuMemory.peak / max(obj.gpuMemory.total, 1)) * 100);
-            end
-            
             % 最適パラメータの表示
             if ~isempty(obj.bestParams)
                 fprintf('\n=== 最適なパラメータ ===\n');
@@ -1520,75 +1453,7 @@ classdef HybridOptimizer < handle
                 fprintf('  - 達成スコア: %.4f\n', obj.bestPerformance);
             end
         end
-        
-        %% GPUメモリ確認メソッド
-        function checkGPUMemory(obj)
-            % GPU使用状況の確認とメモリ使用率の監視
-            
-            if obj.useGPU
-                try
-                    % GPUデバイス情報の取得
-                    gpuInfo = gpuDevice();
-                    totalMem = gpuInfo.TotalMemory / 1e9;  % GB
-                    availMem = gpuInfo.AvailableMemory / 1e9;  % GB
-                    usedMem = totalMem - availMem;
-                    
-                    % メモリ使用情報の更新
-                    obj.gpuMemory.total = totalMem;
-                    obj.gpuMemory.used = usedMem;
-                    obj.gpuMemory.peak = max(obj.gpuMemory.peak, usedMem);
-                    
-                    fprintf('GPU使用状況: %.2f/%.2f GB (%.1f%%)\n', ...
-                        usedMem, totalMem, (usedMem/totalMem)*100);
-                    
-                    % メモリ使用率が高い場合は警告と対応
-                    if usedMem/totalMem > 0.8
-                        warning('GPU使用率が80%%を超えています。パフォーマンスに影響する可能性があります。');
-                        
-                        % 適応的なバッチサイズ調整
-                        if obj.params.classifier.hybrid.training.miniBatchSize > 32
-                            newBatchSize = max(16, floor(obj.params.classifier.hybrid.training.miniBatchSize / 2));
-                            fprintf('高メモリ使用率のため、バッチサイズを%dから%dに削減します\n', ...
-                                obj.params.classifier.hybrid.training.miniBatchSize, newBatchSize);
-                            obj.params.classifier.hybrid.training.miniBatchSize = newBatchSize;
-                        end
-                        
-                        % GPUメモリの解放を試みる
-                        obj.resetGPUMemory();
-                    end
-                catch ME
-                    warning('GPUメモリチェックでエラー');
-                end
-            end
-        end
-        
-        %% GPUメモリ解放メソッド
-        function resetGPUMemory(obj)
-            % GPUメモリのリセットと解放
-            
-            if obj.useGPU
-                try
-                    % GPUデバイスのリセット
-                    currentDevice = gpuDevice();
-                    reset(currentDevice);
-                    
-                    % リセット後のメモリ状況
-                    availMem = currentDevice.AvailableMemory / 1e9;  % GB
-                    totalMem = currentDevice.TotalMemory / 1e9;  % GB
-                    fprintf('GPUメモリをリセットしました (利用可能: %.2f/%.2f GB)\n', ...
-                        availMem, totalMem);
-                        
-                    % 使用状況の更新
-                    obj.gpuMemory.used = totalMem - availMem;
-                    
-                catch ME
-                    fprintf('GPUメモリのリセットに失敗: %s\n', ME.message);
-                    fprintf('エラー詳細:\n');
-                    disp(getReport(ME, 'extended'));
-                end
-            end
-        end
-        
+
         %% デフォルト結果作成メソッド
         function results = createDefaultResults(obj)
             % 最適化無効時のデフォルト結果構造体を生成
@@ -1603,52 +1468,6 @@ classdef HybridOptimizer < handle
                 'overfitting', [], ...
                 'normParams', [] ...
             );
-            
-            return;
-        end
-        
-        %% 最適化エラーハンドリングメソッド
-        function results = handleOptimizationError(obj, errorObj)
-            % 最適化中のエラーを処理し、回復可能な結果を返す
-            %
-            % 入力:
-            %   errorObj - エラーオブジェクト
-            %
-            % 出力:
-            %   results - 回復された結果構造体
-            
-            fprintf('\n=== 最適化エラーからの回復を試行 ===\n');
-            
-            % 最適化履歴に有効な結果があるか確認
-            if ~isempty(obj.optimizationHistory)
-                fprintf('最適化履歴から最良の結果を回復します（%d件中）\n', length(obj.optimizationHistory));
-                
-                % 最良スコアの結果を使用
-                [~, bestIdx] = max([obj.optimizationHistory.score]);
-                bestEntry = obj.optimizationHistory(bestIdx);
-                
-                if isfield(bestEntry, 'model') && ~isempty(bestEntry.model)
-                    fprintf('履歴から最良モデルを回復しました（スコア: %.4f）\n', bestEntry.score);
-                    
-                    % 最低限の結果構造体を構築
-                    results = struct(...
-                        'model', bestEntry.model, ...
-                        'performance', struct('accuracy', bestEntry.testAccuracy), ...
-                        'trainInfo', struct(...
-                            'cnnHistory', struct('TrainingAccuracy', [], 'ValidationAccuracy', []), ...
-                            'lstmHistory', struct('TrainingAccuracy', [], 'ValidationAccuracy', []) ...
-                        ), ...
-                        'overfitting', struct('severity', 'unknown'), ...
-                        'normParams', [] ...
-                    );
-                    
-                    return;
-                end
-            end
-            
-            % 回復失敗時は空の結果を返す
-            fprintf('有効な結果を回復できませんでした。最小限の結果を返します。\n');
-            results = obj.createDefaultResults();
             
             return;
         end

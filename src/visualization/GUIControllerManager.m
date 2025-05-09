@@ -22,12 +22,6 @@ classdef GUIControllerManager < handle
         statusText
         timeDisplay
 
-        % スライダー
-        sliderFigure
-        slider
-        sliderValue
-        sliderText
-
         % 表示制御
         displayControls
 
@@ -61,11 +55,6 @@ classdef GUIControllerManager < handle
 
             % その他の初期化
             obj.setupTimers();
-            
-            % スライダーGUIの初期化（有効な場合のみ）
-            if obj.params.gui.slider.enable
-                obj.createSliderWindow();
-            end
         end
         
         function delete(obj)
@@ -84,10 +73,6 @@ classdef GUIControllerManager < handle
                     delete(obj.mainFigure);
                 end
 
-                % スライダーウィンドウの削除
-                if ~isempty(obj.sliderFigure) && isvalid(obj.sliderFigure)
-                    delete(obj.sliderFigure);
-                end
             catch ME
                 warning(ME.identifier, '%s', ME.message);
             end
@@ -167,11 +152,6 @@ classdef GUIControllerManager < handle
                     delete(obj.mainFigure);
                 end
 
-                % スライダーウィンドウの削除
-                if ~isempty(obj.sliderFigure) && isvalid(obj.sliderFigure)
-                    delete(obj.sliderFigure);
-                end
-
                 % プロットハンドルのリセット
                 if isfield(obj, 'plotHandles') && isstruct(obj.plotHandles)
                     fields = fieldnames(obj.plotHandles);
@@ -185,61 +165,6 @@ classdef GUIControllerManager < handle
 
             catch ME
                 warning(ME.identifier, 'Error in closeAllWindows: %s', ME.message);
-            end
-        end
-        
-        function createSliderWindow(obj)
-            if ~obj.params.gui.slider.enable || (~isempty(obj.sliderFigure))
-                return;  % すでにウィンドウが存在する場合は作成しない
-            end
-
-            % スライダーウィンドウの作成
-            obj.sliderFigure = figure('Name', obj.params.gui.slider.title, ...
-                'Position', obj.params.gui.slider.position, ...
-                'MenuBar', 'none', ...
-                'ToolBar', 'none', ...
-                'NumberTitle', 'off');
-
-            % スライダーの作成
-            stepSize = 1/(obj.params.gui.slider.steps-1);
-            obj.slider = uicontrol(obj.sliderFigure, ...
-                'Style', 'slider', ...
-                'Min', obj.params.gui.slider.minValue, ...
-                'Max', obj.params.gui.slider.maxValue, ...
-                'Value', obj.params.gui.slider.defaultValue, ...
-                'Position', [50 80 300 20], ...
-                'SliderStep', [stepSize stepSize], ...
-                'Callback', @obj.sliderCallback);
-
-            % スライダー値の表示テキスト
-            obj.sliderText = uicontrol(obj.sliderFigure, ...
-                'Style', 'text', ...
-                'Position', [150 120 100 30], ...
-                'String', num2str(obj.params.gui.slider.defaultValue));
-
-            % 「不快」のラベル（左端）
-            uicontrol(obj.sliderFigure, ...
-                'Style', 'text', ...
-                'Position', [20 80 30 20], ...
-                'String', '不快（非覚醒）', ...
-                'HorizontalAlignment', 'left');
-
-            % 「快」のラベル（右端）
-            uicontrol(obj.sliderFigure, ...
-                'Style', 'text', ...
-                'Position', [350 80 30 20], ...
-                'String', '快（覚醒）', ...
-                'HorizontalAlignment', 'right');
-
-            % スライダー値の初期化
-            obj.sliderValue = obj.params.gui.slider.defaultValue;
-        end
-
-        function value = getSliderValue(obj)
-            if obj.params.gui.slider.enable
-                value = round(obj.sliderValue);
-            else
-                value = [];  % スライダーが無効な場合は空を返す
             end
         end
     end
@@ -1023,19 +948,6 @@ classdef GUIControllerManager < handle
             end
             
             delete(obj.mainFigure);
-        end
-        
-        function sliderCallback(obj, src, ~)
-            if ~obj.params.gui.slider.enable
-                return;
-            end
-
-            % スライダー値を整数に丸める
-            value = round(get(src, 'Value'));
-            set(src, 'Value', value);
-            set(obj.sliderText, 'String', num2str(value));
-            obj.sliderValue = value;
-            drawnow;
         end
     end
 end

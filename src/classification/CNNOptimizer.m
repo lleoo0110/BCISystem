@@ -54,18 +54,6 @@ classdef CNNOptimizer < handle
                 'complexity', 0.1, ...  % 複雑性のペナルティ最大値
                 'overfitMax', 0.5 ...   % 過学習の最大ペナルティ値
             );
-            
-            % GPU利用可能性のチェック
-            if obj.useGPU
-                try
-                    gpuInfo = gpuDevice();
-                    fprintf('GPUが検出されました: %s (メモリ: %.2f GB)\n', ...
-                        gpuInfo.Name, gpuInfo.TotalMemory/1e9);
-                catch
-                    warning('GPU使用が指定されていますが、GPUが利用できません。CPUで実行します。');
-                    obj.useGPU = false;
-                end
-            end
         end
         
         %% 最適化実行メソッド
@@ -226,16 +214,6 @@ classdef CNNOptimizer < handle
                     'fcUnits', [64, 256] ...               % 全結合層ユニット数範囲
                 );
             end
-            
-            % 探索空間の詳細表示
-            fprintf('\n探索空間の範囲 (CNN):\n');
-            fprintf('  - 学習率: [%.6f, %.6f]\n', obj.searchSpace.learningRate);
-            fprintf('  - バッチサイズ: [%d, %d]\n', obj.searchSpace.miniBatchSize);
-            fprintf('  - 畳み込み層数: [%d, %d]\n', obj.searchSpace.numConvLayers);
-            fprintf('  - フィルタサイズ: [%d, %d]\n', obj.searchSpace.filterSize);
-            fprintf('  - フィルタ数: [%d, %d]\n', obj.searchSpace.numFilters);
-            fprintf('  - ドロップアウト率: [%.2f, %.2f]\n', obj.searchSpace.dropoutRate);
-            fprintf('  - 全結合層ユニット数: [%d, %d]\n', obj.searchSpace.fcUnits);
         end
         
         %% パラメータセット生成メソッド

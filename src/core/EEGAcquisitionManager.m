@@ -348,13 +348,6 @@ end
                                 obj.params.gui.display.visualization.enable.ersp])
                             obj.processGUI();
                         end
-
-                        % スライダー値の更新処理
-                        if obj.params.gui.slider.enable && ...
-                           ~obj.isPaused && ...
-                           size(obj.dataBuffer, 2) >= obj.slidingStep
-                            obj.updateSliderValue();
-                        end
                     end
                 end
             catch ME
@@ -1007,11 +1000,6 @@ end
                         obj.processOnline();
                     end
 
-                    % スライダー処理
-                    if obj.isRunning && ~obj.isPaused
-                        obj.updateSliderValue();
-                    end
-
                     % バッファの更新（古いデータの削除）
                     obj.dataBuffer = obj.dataBuffer(:, obj.slidingStep+1:end);
                 end
@@ -1411,23 +1399,6 @@ end
             catch ME
                 warning(ME.identifier, '%s', ME.message);
                 fprintf('Error in processGUI: %s\n', getReport(ME, 'extended'));
-            end
-        end
-
-        %% スライダー値更新メソッド
-        % GUIスライダーの値に基づくトリガー生成
-        function updateSliderValue(obj)
-            sliderValue = obj.guiController.getSliderValue();
-            if ~isempty(sliderValue)
-                currentTime = toc(obj.processingTimer)*1000;
-                obj.currentTotalSamples = obj.totalSampleCount + size(obj.rawData, 2);
-
-                % トリガー情報の生成
-                trigger = struct(...
-                    'value', sliderValue, ...
-                    'time', uint64(currentTime), ...
-                    'sample', obj.currentTotalSamples);
-                obj.labels = [obj.labels; trigger];
             end
         end
         

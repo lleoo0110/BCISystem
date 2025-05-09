@@ -78,8 +78,6 @@ function params = getConfig(deviceType, varargin)
 
         % 設定の整合性チェック
         validateConfig(params, deviceType);
-
-        fprintf('\n設定の整合性チェック完了\n');
         fprintf('=== 設定読み込み完了 ===\n');
 
     catch ME
@@ -218,7 +216,7 @@ function deviceConfig = getDeviceConfig(deviceType)
             deviceConfig = struct(...
                 'name', 'SELECT', ...
                 'channelCount', 6, ...     % 最大32チャンネルに対応
-                'channelNum', [1, 2, 6, 8, 27, 29], ...     % 1から32までのチャンネル番号
+                'channelNum', [1, 2, 6, 8, 27, 29], ...     % チャンネル番号
                 'channels',  {{'Cz', 'Fz', 'FC1', 'FC5', 'FC6', 'FC2'}}, ...
                 'sampleRate', 256, ...      % 256Hzのサンプリングレート
                 'resolution', 16, ...       % 16ビットの解像度

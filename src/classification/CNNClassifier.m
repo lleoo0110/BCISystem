@@ -108,23 +108,14 @@ classdef CNNClassifier < handle
                 testMetrics = obj.evaluateModel(cnnModel, prepTestData, testLabels);
                 
                 % 過学習の分析
-                [isOverfit, obj.overfitMetrics] = obj.validateOverfitting(trainInfo, testMetrics);
-                
-                if isOverfit
-                    fprintf('\n警告: モデルに過学習の兆候が検出されました (%s)\n', obj.overfitMetrics.severity);
-                end
+                obj.overfitMetrics = obj.validateOverfitting(trainInfo, testMetrics);
 
                 % 性能指標の更新
-                obj.updatePerformanceMetrics(testMetrics);
+                 obj.performance = testMetrics;
                 
                 % 結果構造体の構築
                 results = obj.buildResultsStruct(cnnModel, testMetrics, trainInfo, normParams);
-
-                % 結果のサマリー表示
-                obj.displayResults();
                 
-                % 使用リソースのクリーンアップ
-                obj.resetGPUMemory();
                 fprintf('\n=== CNN学習処理が完了しました ===\n');
 
             catch ME
@@ -137,14 +128,12 @@ classdef CNNClassifier < handle
                         ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
                 end
 
-                % クリーンアップ処理
-                obj.resetGPUMemory();
                 rethrow(ME);
             end
         end
 
         %% 過学習検証メソッド - モデルの過学習程度を評価
-        function [isOverfit, metrics] = validateOverfitting(obj, trainInfo, testMetrics)
+        function metrics = validateOverfitting(obj, trainInfo, testMetrics)
             % トレーニング結果とテスト結果から過学習を分析
             %
             % 入力:
@@ -170,7 +159,7 @@ classdef CNNClassifier < handle
                 valAcc = trainInfo.History.ValidationAccuracy;
                 
                 % テスト精度を取得
-                testAcc = testMetrics.accuracy;
+                testAcc = testMetrics.accuracy*100;
                 
                 % 検証-テスト精度ギャップ分析を実行
                 [gapOverfit, gapMetrics] = obj.validateTestValidationGap(valAcc, testAcc, size(testMetrics.confusionMat, 1));
@@ -186,8 +175,6 @@ classdef CNNClassifier < handle
                 
                 % 最適エポックの分析
                 [optimalEpoch, totalEpochs] = obj.findOptimalEpoch(valAcc);
-                fprintf('最適エポック: %d/%d (%.1f%%)\n', optimalEpoch, totalEpochs, ... 
-                    (optimalEpoch/totalEpochs)*100);
                 
                 % Early Stoppingの効果分析
                 earlyStoppingEffect = obj.analyzeEarlyStoppingEffect(trainInfo);
@@ -218,15 +205,15 @@ classdef CNNClassifier < handle
                 % 過学習判定
                 isOverfit = gapOverfit || isCompletelyBiased || (~isLearningProgressing && severity ~= 'none');
                 fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
+
+                if isOverfit
+                    fprintf('\n警告: モデルに過学習の兆候が検出されました (%s)\n', obj.overfitMetrics.severity);
+                end
                 
             catch ME
                 fprintf('過学習検証でエラーが発生: %s\n', ME.message);
                 fprintf('エラー詳細:\n');
                 disp(getReport(ME, 'extended'));
-                
-                % エラー時のフォールバック値を設定
-                metrics = obj.createFallbackOverfitMetrics();
-                isOverfit = true;
             end
         end
 
@@ -528,11 +515,7 @@ classdef CNNClassifier < handle
             %   trainInfo - 学習に関する情報
             
             try        
-                fprintf('\n=== CNNモデルの学習開始 ===\n');
-                
-                % GPUメモリの確認
-                obj.checkGPUMemory();
-                
+                fprintf('\n=== CNNモデルの学習開始 ===\n');                
                 % データの形状確認
                 if ndims(trainData) ~= 4
                     trainData = obj.prepareDataForCNN(trainData);
@@ -583,13 +566,10 @@ classdef CNNClassifier < handle
                     'ValidationFrequency', obj.params.classifier.cnn.training.frequency, ...
                     'ValidationPatience', obj.params.classifier.cnn.training.patience, ...
                     'GradientThreshold', obj.params.classifier.cnn.training.patience);
-        
-                % レイヤーの構築
-                fprintf('CNNアーキテクチャを構築中...\n');
+
                 layers = obj.buildCNNLayers(trainData);
                 
                 % モデルの学習
-                fprintf('CNNモデルの学習を開始...\n');
                 [cnnModel, trainHistory] = trainNetwork(trainData, trainLabels, layers, options);
         
                 % GPU使用時は、データをCPUに明示的に移動
@@ -608,9 +588,6 @@ classdef CNNClassifier < handle
                 trainInfo.History = trainHistory;
                 trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
         
-                % 学習情報の詳細ログ出力（デバッグ用）
-                obj.logTrainInfo(trainInfo);
-        
                 fprintf('学習完了: %d エポック\n', trainInfo.FinalEpoch);
                 fprintf('  - 最終学習損失: %.4f\n', trainHistory.TrainingLoss(end));
                 fprintf('  - 最終検証損失: %.4f\n', trainHistory.ValidationLoss(end));
@@ -621,12 +598,8 @@ classdef CNNClassifier < handle
                 [bestValAcc, bestEpoch] = max(trainHistory.ValidationAccuracy);
                 fprintf('  - 最良検証精度: %.2f%% (エポック %d)\n', bestValAcc, bestEpoch);
         
-                % GPUメモリ解放
-                obj.resetGPUMemory();
-        
             catch ME
                 fprintf('CNNモデル学習でエラーが発生: %s\n', ME.message);
-                obj.resetGPUMemory();
                 rethrow(ME);
             end
         end
@@ -654,13 +627,9 @@ classdef CNNClassifier < handle
                 % チャンネル数に応じたアーキテクチャの選択
                 if numChannels <= 10
                     layers = obj.buildCompactCNN(layerInputSize, arch);
-                    fprintf('CNNアーキテクチャ: コンパクト (チャンネル数: %d)\n', numChannels);
                 else
                     layers = obj.buildStandardCNN(layerInputSize, arch, numChannels);
-                    fprintf('CNNアーキテクチャ: 標準 (チャンネル数: %d)\n', numChannels);
                 end
-                
-                fprintf('CNNアーキテクチャ構築完了: %dレイヤー\n', length(layers));
                 
             catch ME
                 fprintf('CNNレイヤー構築でエラーが発生: %s\n', ME.message);
@@ -1017,7 +986,7 @@ classdef CNNClassifier < handle
                 % エポック数の取得
                 numEpochs = length(trainAcc);
                 
-                % 移動平均の計算（適応的なウィンドウサイズ）
+                % 移動平均の計算
                 windowSize = min(5, floor(numEpochs/3));
                 windowSize = max(windowSize, 1);  % 最小値を保証
                 
@@ -1051,21 +1020,6 @@ classdef CNNClassifier < handle
                     'oscillation_strength', obj.calculateOscillation(valDiff), ...
                     'convergence_epoch', obj.estimateConvergenceEpoch(valSmooth) ...
                 );
-                
-                % 詳細な分析結果の表示
-                fprintf('学習精度の傾向:\n');
-                fprintf('  - 平均変化率: %.4f/エポック\n', trainTrend.mean_change);
-                fprintf('  - 変動性: %.4f\n', trainTrend.volatility);
-                fprintf('  - 上昇率: %.1f%%\n', trainTrend.increasing_ratio*100);
-                fprintf('  - プラトー検出: %s\n', string(trainTrend.plateau_detected));
-                fprintf('  - 収束エポック: %d/%d\n', trainTrend.convergence_epoch, numEpochs);
-                
-                fprintf('検証精度の傾向:\n');
-                fprintf('  - 平均変化率: %.4f/エポック\n', valTrend.mean_change);
-                fprintf('  - 変動性: %.4f\n', valTrend.volatility);
-                fprintf('  - 上昇率: %.1f%%\n', valTrend.increasing_ratio*100);
-                fprintf('  - プラトー検出: %s\n', string(valTrend.plateau_detected));
-                fprintf('  - 収束エポック: %d/%d\n', valTrend.convergence_epoch, numEpochs);
                 
             catch ME
                 fprintf('学習曲線分析でエラーが発生: %s\n', ME.message);
@@ -1203,40 +1157,6 @@ classdef CNNClassifier < handle
             %   isOverfit - 過学習の有無（論理値）
             %   metrics - 詳細な評価メトリクス
 
-            % NaNチェックを追加
-            if isempty(valAccHistory) || all(isnan(valAccHistory))
-                fprintf('警告: 有効な検証精度履歴がありません\n');
-                metrics = struct(...
-                    'rawGap', NaN, ...
-                    'normalizedGap', NaN, ...
-                    'adjustedGap', NaN, ...
-                    'meanValAcc', NaN, ...
-                    'stdValAcc', NaN, ...
-                    'testAcc', testAcc*100, ...
-                    'severity', 'unknown' ...
-                );
-                isOverfit = true;
-                return;
-            end
-            
-            % NaNを除去
-            valAccHistory = valAccHistory(~isnan(valAccHistory));
-            
-            if isempty(valAccHistory)
-                fprintf('警告: NaN除去後に有効なデータがありません\n');
-                metrics = struct(...
-                    'rawGap', NaN, ...
-                    'normalizedGap', NaN, ...
-                    'adjustedGap', NaN, ...
-                    'meanValAcc', NaN, ...
-                    'stdValAcc', NaN, ...
-                    'testAcc', testAcc*100, ...
-                    'severity', 'unknown' ...
-                );
-                isOverfit = true;
-                return;
-            end
-
             % 安定区間の計算（最低5ポイント、または全データの30%のいずれか大きい方）
             minStablePoints = min(5, length(valAccHistory));
             stableIdx = max(1, length(valAccHistory) - minStablePoints + 1):length(valAccHistory);
@@ -1252,11 +1172,10 @@ classdef CNNClassifier < handle
             end
             
             % スケールされたギャップ計算（データサイズで調整）
-            % 小さいデータセットでは大きなギャップが生じやすい
             scaleFactor = min(1, sqrt(dataSize / 1000));  % データサイズに基づく調整
             
             % 正規化された差（z-スコア的アプローチ）
-            normalizedGap = abs(meanValAcc - testAcc*100) / max(stdValAcc, 1);
+            normalizedGap = abs(meanValAcc - testAcc) / max(stdValAcc, 1);
             
             % スケール調整されたギャップ
             adjustedGap = normalizedGap * scaleFactor;
@@ -1276,23 +1195,22 @@ classdef CNNClassifier < handle
             
             % 結果の格納
             metrics = struct(...
-                'rawGap', abs(meanValAcc - testAcc*100), ...
+                'rawGap', abs(meanValAcc - testAcc), ...
                 'normalizedGap', normalizedGap, ...
                 'adjustedGap', adjustedGap, ...
                 'meanValAcc', meanValAcc, ...
                 'stdValAcc', stdValAcc, ...
-                'testAcc', testAcc*100, ...
+                'testAcc', testAcc, ...
                 'severity', severity ...
             );
             
             isOverfit = ~strcmp(severity, 'none');
             
             % 結果の表示
-            fprintf('\n=== 検証-テスト精度ギャップ分析 ===\n');
-            fprintf('  平均検証精度: %.2f%% (±%.2f%%)\n', meanValAcc, stdValAcc);
-            fprintf('  テスト精度: %.2f%%\n', testAcc*100);
-            fprintf('  基本ギャップ: %.2f%%\n', metrics.rawGap);
-            fprintf('  正規化ギャップ: %.2f (スケーリング後: %.2f)\n', normalizedGap, adjustedGap);
+            fprintf('\n=== 検証-テスト精度差分析 ===\n');
+            fprintf('  検証精度: %.2f%% (±%.2f%%)\n', meanValAcc, stdValAcc);
+            fprintf('  テスト精度: %.2f%%\n', testAcc);
+            fprintf('  検証-テスト精度差: %.2f%%\n', metrics.rawGap);
             fprintf('  判定結果: %s\n', severity);
         end
         
@@ -1412,21 +1330,6 @@ classdef CNNClassifier < handle
                 'earlyStoppingEffect', earlyStoppingEffect);
         end
         
-        %% フォールバック過学習メトリクス作成メソッド
-        function metrics = createFallbackOverfitMetrics(obj)
-            % エラー発生時のフォールバックメトリクスを作成
-            
-            metrics = struct(...
-                'performanceGap', Inf, ...
-                'isCompletelyBiased', true, ...
-                'isLearningProgressing', false, ...
-                'validationTrend', struct('mean_change', 0, 'volatility', 0, 'increasing_ratio', 0), ...
-                'trainingTrend', struct('mean_change', 0, 'volatility', 0, 'increasing_ratio', 0), ...
-                'severity', 'error', ...
-                'optimalEpoch', 0, ...
-                'totalEpochs', 0);
-        end
-        
         %% トレーニング情報検証メソッド
         function validateTrainInfo(~, trainInfo)
             % trainInfo構造体の妥当性を検証
@@ -1464,61 +1367,7 @@ classdef CNNClassifier < handle
             end
         end
 
-        function logTrainInfo(~, trainInfo)
-            % trainInfoの内容を詳細にログ出力（デバッグ用）
-            
-            fprintf('\n=== 学習情報の詳細 ===\n');
-            
-            if ~isstruct(trainInfo)
-                fprintf('trainInfoが構造体ではありません\n');
-                return;
-            end
-            
-            % フィールド一覧の表示
-            fprintf('trainInfoのフィールド: %s\n', strjoin(fieldnames(trainInfo), ', '));
-            
-            % Historyフィールドの詳細
-            if isfield(trainInfo, 'History')
-                fprintf('Historyフィールドのサブフィールド: %s\n', strjoin(fieldnames(trainInfo.History), ', '));
-                
-                % 各履歴データのサイズと値
-                if isfield(trainInfo.History, 'TrainingLoss')
-                    loss = trainInfo.History.TrainingLoss;
-                    fprintf('TrainingLoss: %d要素, 範囲[%.4f, %.4f]\n', ...
-                        length(loss), min(loss), max(loss));
-                end
-                
-                if isfield(trainInfo.History, 'ValidationLoss')
-                    loss = trainInfo.History.ValidationLoss;
-                    fprintf('ValidationLoss: %d要素, 範囲[%.4f, %.4f]\n', ...
-                        length(loss), min(loss), max(loss));
-                end
-                
-                if isfield(trainInfo.History, 'TrainingAccuracy')
-                    acc = trainInfo.History.TrainingAccuracy;
-                    fprintf('TrainingAccuracy: %d要素, 範囲[%.2f%%, %.2f%%]\n', ...
-                        length(acc), min(acc), max(acc));
-                end
-                
-                if isfield(trainInfo.History, 'ValidationAccuracy')
-                    acc = trainInfo.History.ValidationAccuracy;
-                    fprintf('ValidationAccuracy: %d要素, 範囲[%.2f%%, %.2f%%]\n', ...
-                        length(acc), min(acc), max(acc));
-                end
-            else
-                fprintf('Historyフィールドがありません\n');
-            end
-            
-            % その他のフィールド
-            if isfield(trainInfo, 'FinalEpoch')
-                fprintf('FinalEpoch: %d\n', trainInfo.FinalEpoch);
-            else
-                fprintf('FinalEpochフィールドがありません\n');
-            end
-            
-            fprintf('=== 学習情報の詳細終了 ===\n\n');
-        end
-
+        %%
         function copy = createDeepCopy(obj, original)
             % 構造体のコピーを作成
             
@@ -1556,6 +1405,7 @@ classdef CNNClassifier < handle
             end
         end
 
+        %%
         function params = extractParams(obj)
             % CNNのパラメータを抽出して7要素の配列として返す
             
@@ -1615,6 +1465,7 @@ classdef CNNClassifier < handle
             end
         end
 
+        %%
         function validateResults(obj, results)
             % 結果構造体の妥当性を検証
             
@@ -1650,154 +1501,7 @@ classdef CNNClassifier < handle
                 end
             end
         end
-        
-        %% 性能メトリクス更新メソッド
-        function updatePerformanceMetrics(obj, testMetrics)
-            % 評価結果から性能メトリクスを更新
-            
-            % メトリクスの更新
-            obj.performance = testMetrics;
-        end
-        
-        %% GPU使用状況確認メソッド
-        function checkGPUMemory(obj)
-            % GPU使用状況の確認とメモリ使用率の監視
-            
-            if obj.useGPU
-                try
-                    device = gpuDevice();
-                    totalMem = device.TotalMemory / 1e9;  % GB
-                    availMem = device.AvailableMemory / 1e9;  % GB
-                    usedMem = totalMem - availMem;
-                    
-                    % メモリ使用情報の更新
-                    obj.gpuMemory.total = totalMem;
-                    obj.gpuMemory.used = usedMem;
-                    obj.gpuMemory.peak = max(obj.gpuMemory.peak, usedMem);
-                    
-                    fprintf('GPU使用状況: %.2f/%.2f GB (%.1f%%)\n', ...
-                        usedMem, totalMem, (usedMem/totalMem)*100);
-                    
-                    % メモリ使用率が高い場合は警告と対応
-                    if usedMem/totalMem > 0.8
-                        warning('GPU使用率が80%%を超えています。パフォーマンスに影響する可能性があります。');
-                        
-                        % 適応的なバッチサイズ調整
-                        if obj.params.classifier.cnn.training.miniBatchSize > 32
-                            newBatchSize = max(16, floor(obj.params.classifier.cnn.training.miniBatchSize / 2));
-                            fprintf('高メモリ使用率のため、バッチサイズを%dから%dに削減します\n', ...
-                                obj.params.classifier.cnn.training.miniBatchSize, newBatchSize);
-                            obj.params.classifier.cnn.training.miniBatchSize = newBatchSize;
-                        end
-                    end
-                catch ME
-                    fptintf('GPUメモリチェックでエラー: %s', ME.message);
-                end
-            end
-        end
-        
-        %% GPUメモリ解放メソッド
-        function resetGPUMemory(obj)
-            % GPUメモリのリセットと解放
-            
-            if obj.useGPU
-                try
-                    % GPUデバイスのリセット
-                    currentDevice = gpuDevice();
-                    reset(currentDevice);
-                    
-                    % リセット後のメモリ状況
-                    availMem = currentDevice.AvailableMemory / 1e9;  % GB
-                    totalMem = currentDevice.TotalMemory / 1e9;  % GB
-                    fprintf('GPUメモリをリセットしました (利用可能: %.2f/%.2f GB)\n', ...
-                        availMem, totalMem);
-                        
-                    % 使用状況の更新
-                    obj.gpuMemory.used = totalMem - availMem;
-                    
-                catch ME
-                    fprintf('GPUメモリのリセットに失敗: %s', ME.message);
-                end
-            end
-        end
-        
-        %% 結果表示メソッド
-        function displayResults(obj)
-            % 総合的な結果サマリーの表示
-            
-            try
-                fprintf('\n=== CNN分類結果サマリー ===\n');
-                
-                if ~isempty(obj.performance)
-                    % 精度情報
-                    fprintf('全体精度: %.2f%%\n', obj.performance.accuracy * 100);
 
-                    if isfield(obj.performance, 'auc')
-                        fprintf('AUC: %.3f\n', obj.performance.auc);
-                    end
-
-                    % 混同行列
-                    if ~isempty(obj.performance.confusionMat)
-                        fprintf('\n混同行列:\n');
-                        disp(obj.performance.confusionMat);
-                    end
-
-                    % クラスごとの性能
-                    if isfield(obj.performance, 'classwise') && ~isempty(obj.performance.classwise)
-                        fprintf('\nクラスごとの性能:\n');
-                        for i = 1:length(obj.performance.classwise)
-                            fprintf('クラス %d:\n', i);
-                            fprintf('  - 精度: %.2f%%\n', ...
-                                obj.performance.classwise(i).precision * 100);
-                            fprintf('  - 再現率: %.2f%%\n', ...
-                                obj.performance.classwise(i).recall * 100);
-                            fprintf('  - F1スコア: %.2f\n', ...
-                                obj.performance.classwise(i).f1score);
-                        end
-                    end
-                end
-
-                % 過学習分析結果の表示
-                if ~isempty(obj.overfitMetrics) && isstruct(obj.overfitMetrics)
-                    fprintf('\n過学習分析:\n');
-                    fprintf('  - 性能ギャップ: %.2f%%\n', obj.overfitMetrics.performanceGap);
-                    fprintf('  - 重大度: %s\n', obj.overfitMetrics.severity);
-                    
-                    fprintf('\n学習カーブ分析:\n');
-                    
-                    % 検証傾向
-                    if isfield(obj.overfitMetrics, 'validationTrend')
-                        trend = obj.overfitMetrics.validationTrend;
-                        fprintf('  - 検証平均変化率: %.4f\n', trend.mean_change);
-                        fprintf('  - 検証変動性: %.4f\n', trend.volatility);
-                        fprintf('  - 検証上昇率: %.2f%%\n', trend.increasing_ratio * 100);
-                    end
-                    
-                    % 最適エポック
-                    if isfield(obj.overfitMetrics, 'optimalEpoch') && ...
-                       isfield(obj.overfitMetrics, 'totalEpochs')
-                        fprintf('  - 最適エポック: %d/%d (%.2f%%)\n', ...
-                            obj.overfitMetrics.optimalEpoch, ...
-                            obj.overfitMetrics.totalEpochs, ...
-                            (obj.overfitMetrics.optimalEpoch / ...
-                             max(obj.overfitMetrics.totalEpochs, 1)) * 100);
-                    end
-                    
-                    % Early Stopping効果
-                    if isfield(obj.overfitMetrics, 'earlyStoppingEffect')
-                        effect = obj.overfitMetrics.earlyStoppingEffect;
-                        fprintf('  - Early Stopping効率: %.2f\n', effect.stopping_efficiency);
-                        if effect.potential_savings > 0
-                            fprintf('  - 潜在的エポック節約: %d\n', effect.potential_savings);
-                        end
-                    end
-                end
-
-            catch ME
-                fprintf('結果表示でエラーが発生: %s', ME.message);
-            end
-        end
-        
         %% 結果構造体構築メソッド
         function results = buildResultsStruct(obj, cnnModel, metrics, trainInfo, normParams)
             % 結果構造体の構築
