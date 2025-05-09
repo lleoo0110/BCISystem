@@ -13,12 +13,6 @@ classdef CNNClassifier < handle
     %   - 過学習の検出と詳細分析
     %   - 交差検証
     %   - オンライン予測
-    %
-    % 使用例:
-    %   params = getConfig('epocx');
-    %   cnn = CNNClassifier(params);
-    %   results = cnn.trainCNN(processedData, processedLabel);
-    %   [label, score] = cnn.predictOnline(newData, results.model);
     
     properties (Access = private)
         params              % システム設定パラメータ
@@ -83,8 +77,7 @@ classdef CNNClassifier < handle
                 fprintf('\n=== CNN学習処理を開始 ===\n');
                 
                 % データの次元を確認し、必要に応じて調整
-                [processedData, processInfo] = obj.validateAndPrepareData(processedData);
-                fprintf('データ検証: %s\n', processInfo);
+                [processedData, ~] = obj.validateAndPrepareData(processedData);
                 
                 % データを学習・検証・テストセットに分割
                 [trainData, trainLabels, valData, valLabels, testData, testLabels] = obj.splitDataset(processedData, processedLabel);
@@ -108,7 +101,7 @@ classdef CNNClassifier < handle
                 testMetrics = obj.evaluateModel(cnnModel, prepTestData, testLabels);
                 
                 % 過学習の分析
-                obj.overfitMetrics = obj.validateOverfitting(trainInfo, testMetrics);
+                [~, obj.overfitMetrics] = obj.validateOverfitting(trainInfo, testMetrics);
 
                 % 性能指標の更新
                  obj.performance = testMetrics;
@@ -133,7 +126,7 @@ classdef CNNClassifier < handle
         end
 
         %% 過学習検証メソッド - モデルの過学習程度を評価
-        function metrics = validateOverfitting(obj, trainInfo, testMetrics)
+        function [isOverfit, metrics] = validateOverfitting(obj, trainInfo, testMetrics)
             % トレーニング結果とテスト結果から過学習を分析
             %
             % 入力:
@@ -203,13 +196,14 @@ classdef CNNClassifier < handle
                 );
                 
                 % 過学習判定
-                isOverfit = gapOverfit || isCompletelyBiased || (~isLearningProgressing && severity ~= 'none');
+                isOverfit = gapOverfit || isCompletelyBiased || (~isLearningProgressing && ~strcmp(severity, 'none'));
                 fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
 
                 if isOverfit
-                    fprintf('\n警告: モデルに過学習の兆候が検出されました (%s)\n', obj.overfitMetrics.severity);
+                    fprintf('\n警告: モデルに過学習の兆候が検出されました (%s)\n', metrics.severity);
                 end
-                
+                obj.overfitMetrics = metrics;
+
             catch ME
                 fprintf('過学習検証でエラーが発生: %s\n', ME.message);
                 fprintf('エラー詳細:\n');
@@ -279,7 +273,6 @@ classdef CNNClassifier < handle
             % 入力データの検証と適切な形式への変換
             
             % データの次元と形状を確認
-            dataSize = size(data);
             dimCount = ndims(data);
             
             if dimCount > 3
@@ -379,6 +372,7 @@ classdef CNNClassifier < handle
             end
         end
         
+        %% データ分割（学習データ・検証データ・テストデータ）
         function [trainData, trainLabels, valData, valLabels, testData, testLabels] = splitDataset(obj, data, labels)
             % データを学習・検証・テストセットに分割（クラスバランスを維持）
             %
@@ -406,7 +400,7 @@ classdef CNNClassifier < handle
                 % 分割比率の計算
                 trainRatio = (k-1)/k;  % (k-1)/k
                 valRatio = 1/(2*k);    % 0.5/k
-                testRatio = 1/(2*k);   % 0.5/k
+                % testRatio = 1/(2*k);    % 0.5/k
         
                 % クラスバランスを維持するため、層別化サンプリングを使用
                 uniqueLabels = unique(labels);
@@ -421,11 +415,18 @@ classdef CNNClassifier < handle
                     fprintf('  - クラス %d: %d サンプル\n', uniqueLabels(i), length(classIndices{i}));
                 end
                 
-                % 各クラスごとに分割
-                trainIdx = [];
-                valIdx = [];
-                testIdx = [];
+                % クラスごとに分割するためのインデックス配列を事前に割り当て
+                totalSamples = sum(cellfun(@length, classIndices));
+                trainIdx = zeros(totalSamples, 1);
+                valIdx = zeros(totalSamples, 1);
+                testIdx = zeros(totalSamples, 1);
                 
+                % カウンタ初期化
+                trainCount = 0;
+                valCount = 0;
+                testCount = 0;
+                
+                % 各クラスごとに分割
                 for i = 1:numClasses
                     currentIndices = classIndices{i};
                     
@@ -436,12 +437,23 @@ classdef CNNClassifier < handle
                     % 分割数の計算
                     numTrain = round(length(shuffledIndices) * trainRatio);
                     numVal = round(length(shuffledIndices) * valRatio);
+                    numTest = length(shuffledIndices) - numTrain - numVal;
                     
-                    % インデックスの分割
-                    trainIdx = [trainIdx; shuffledIndices(1:numTrain)];
-                    valIdx = [valIdx; shuffledIndices(numTrain+1:numTrain+numVal)];
-                    testIdx = [testIdx; shuffledIndices(numTrain+numVal+1:end)];
+                    % インデックスを効率的に追加
+                    trainIdx(trainCount+1:trainCount+numTrain) = shuffledIndices(1:numTrain);
+                    valIdx(valCount+1:valCount+numVal) = shuffledIndices(numTrain+1:numTrain+numVal);
+                    testIdx(testCount+1:testCount+numTest) = shuffledIndices(numTrain+numVal+1:end);
+                    
+                    % カウンタを更新
+                    trainCount = trainCount + numTrain;
+                    valCount = valCount + numVal;
+                    testCount = testCount + numTest;
                 end
+                
+                % 実際に使用したサイズに切り詰める
+                trainIdx = trainIdx(1:trainCount);
+                valIdx = valIdx(1:valCount);
+                testIdx = testIdx(1:testCount);
         
                 % データの分割
                 trainData = data(:,:,trainIdx);
@@ -561,7 +573,7 @@ classdef CNNClassifier < handle
                     'Shuffle', obj.params.classifier.cnn.training.shuffle, ...
                     'ExecutionEnvironment', executionEnvironment, ...
                     'OutputNetwork', 'best-validation', ...
-                    'Verbose', true, ...
+                    'Verbose', false, ...
                     'ValidationData', valDS, ...
                     'ValidationFrequency', obj.params.classifier.cnn.training.frequency, ...
                     'ValidationPatience', obj.params.classifier.cnn.training.patience, ...
@@ -817,9 +829,6 @@ classdef CNNClassifier < handle
             %   preparedData - CNN用に整形されたデータ
             
             try
-                % データサイズ情報を取得
-                dataSize = size(data);
-                
                 % データの次元数に基づいて処理を分岐
                 if ndims(data) == 3
                     % 3次元データ（チャンネル x サンプル x エポック）の場合
@@ -840,8 +849,6 @@ classdef CNNClassifier < handle
                     % その他の次元数は対応外
                     error('対応していないデータ次元数: %d', ndims(data));
                 end
-                
-                prepSizeStr = num2str(size(preparedData));
                 
                 % NaN/Infチェック
                 if any(isnan(preparedData(:)))
@@ -1156,7 +1163,7 @@ classdef CNNClassifier < handle
             % 出力:
             %   isOverfit - 過学習の有無（論理値）
             %   metrics - 詳細な評価メトリクス
-
+        
             % 安定区間の計算（最低5ポイント、または全データの30%のいずれか大きい方）
             minStablePoints = min(5, length(valAccHistory));
             stableIdx = max(1, length(valAccHistory) - minStablePoints + 1):length(valAccHistory);
@@ -1180,38 +1187,88 @@ classdef CNNClassifier < handle
             % スケール調整されたギャップ
             adjustedGap = normalizedGap * scaleFactor;
             
-            % 過学習の判定（調整されたギャップに基づく）
+            % 絶対的な差の計算
+            rawGap = abs(meanValAcc - testAcc);
+            
+            % 絶対差に基づく過学習判定
+            % rawGapが0.15 (15%)より大きい場合は過学習と判断
+            absoluteOverfit = (rawGap > 15.0);
+            
+            % 統計的アプローチに基づく過学習判定
+            statisticalOverfit = false;
+            statSeverity = 'none';
+            
+            % 調整済みギャップに基づく重大度判定（統計的アプローチ）
             if adjustedGap > 3
-                severity = 'critical';      % 3標準偏差以上
+                statSeverity = 'critical';     % 3標準偏差以上
+                statisticalOverfit = true;
             elseif adjustedGap > 2
-                severity = 'severe';        % 2標準偏差以上
+                statSeverity = 'severe';       % 2標準偏差以上
+                statisticalOverfit = true;
             elseif adjustedGap > 1.5
-                severity = 'moderate';      % 1.5標準偏差以上
+                statSeverity = 'moderate';     % 1.5標準偏差以上
+                statisticalOverfit = true;
             elseif adjustedGap > 1
-                severity = 'mild';          % 1標準偏差以上
-            else
-                severity = 'none';
+                statSeverity = 'mild';         % 1標準偏差以上
+                statisticalOverfit = true;
             end
+            
+            % 絶対差に基づく重大度判定
+            absSeverity = 'none';
+            if rawGap > 20.0
+                absSeverity = 'critical';      % 20%以上の差は非常に深刻
+            elseif rawGap > 15.0
+                absSeverity = 'severe';        % 15%以上の差は深刻
+            elseif rawGap > 10.0
+                absSeverity = 'moderate';      % 10%以上の差は中程度
+            elseif rawGap > 5.0
+                absSeverity = 'mild';          % 5%以上の差は軽度
+            end
+            
+            % 最終的な重大度判定（より厳しい方を採用）
+            severityOrder = {'none', 'mild', 'moderate', 'severe', 'critical'};
+            statIdx = find(strcmp(severityOrder, statSeverity));
+            absIdx = find(strcmp(severityOrder, absSeverity));
+            
+            if isempty(statIdx)
+                statIdx = 1; % デフォルトは'none'
+            end
+            if isempty(absIdx)
+                absIdx = 1; % デフォルトは'none'
+            end
+            
+            if absIdx >= statIdx
+                severity = absSeverity;
+            else
+                severity = statSeverity;
+            end
+            
+            % 最終的な過学習判定（どちらかが過学習と判断すれば過学習）
+            isOverfit = statisticalOverfit || absoluteOverfit;
             
             % 結果の格納
             metrics = struct(...
-                'rawGap', abs(meanValAcc - testAcc), ...
+                'rawGap', rawGap, ...
                 'normalizedGap', normalizedGap, ...
                 'adjustedGap', adjustedGap, ...
                 'meanValAcc', meanValAcc, ...
                 'stdValAcc', stdValAcc, ...
                 'testAcc', testAcc, ...
-                'severity', severity ...
+                'severity', severity, ...
+                'statisticalOverfit', statisticalOverfit, ...
+                'absoluteOverfit', absoluteOverfit, ...
+                'statSeverity', statSeverity, ...
+                'absSeverity', absSeverity ...
             );
-            
-            isOverfit = ~strcmp(severity, 'none');
             
             % 結果の表示
             fprintf('\n=== 検証-テスト精度差分析 ===\n');
             fprintf('  検証精度: %.2f%% (±%.2f%%)\n', meanValAcc, stdValAcc);
             fprintf('  テスト精度: %.2f%%\n', testAcc);
-            fprintf('  検証-テスト精度差: %.2f%%\n', metrics.rawGap);
-            fprintf('  判定結果: %s\n', severity);
+            fprintf('  検証-テスト精度差: %.2f%%\n', rawGap);
+            fprintf('  統計的判定: %s (重大度: %s)\n', mat2str(statisticalOverfit), statSeverity);
+            fprintf('  絶対差判定: %s (重大度: %s)\n', mat2str(absoluteOverfit), absSeverity);
+            fprintf('  最終判定結果: %s (重大度: %s)\n', mat2str(isOverfit), severity);
         end
         
         %% 過学習重大度判定メソッド
@@ -1385,14 +1442,14 @@ classdef CNNClassifier < handle
                 field = fields{i};
                 if isstruct(original.(field))
                     % 構造体の場合は再帰的にコピー
-                    copy.(field) = obj.createDeepCopy(original.(field));
+                    copy.(field) = obj.createDeepCopy(original.(field));  % objを使用
                 elseif iscell(original.(field))
                     % セル配列の場合
                     cellArray = original.(field);
                     newCellArray = cell(size(cellArray));
                     for j = 1:numel(cellArray)
                         if isstruct(cellArray{j})
-                            newCellArray{j} = obj.createDeepCopy(cellArray{j});
+                            newCellArray{j} = obj.createDeepCopy(cellArray{j});  % objを使用
                         else
                             newCellArray{j} = cellArray{j};
                         end
@@ -1406,26 +1463,26 @@ classdef CNNClassifier < handle
         end
 
         %%
-        function params = extractParams(obj)
+        function extractedParams = extractParams(obj)
             % CNNのパラメータを抽出して7要素の配列として返す
             
             % デフォルト値で初期化
-            params = [0, 0, 0, 0, 0, 0, 0];
+            extractedParams = [0, 0, 0, 0, 0, 0, 0];
             
             try
                 % 1. 学習率
                 if isfield(obj.params.classifier.cnn.training.optimizer, 'learningRate')
-                    params(1) = obj.params.classifier.cnn.training.optimizer.learningRate;
+                    extractedParams(1) = obj.params.classifier.cnn.training.optimizer.learningRate;
                 end
                 
                 % 2. バッチサイズ
                 if isfield(obj.params.classifier.cnn.training, 'miniBatchSize')
-                    params(2) = obj.params.classifier.cnn.training.miniBatchSize;
+                    extractedParams(2) = obj.params.classifier.cnn.training.miniBatchSize;
                 end
                 
                 % 3. 畳み込み層数
                 if isfield(obj.params.classifier.cnn.architecture, 'convLayers')
-                    params(3) = length(fieldnames(obj.params.classifier.cnn.architecture.convLayers));
+                    extractedParams(3) = length(fieldnames(obj.params.classifier.cnn.architecture.convLayers));
                 end
                 
                 % 4. フィルタサイズと5. フィルタ数
@@ -1435,11 +1492,11 @@ classdef CNNClassifier < handle
                         firstConv = obj.params.classifier.cnn.architecture.convLayers.(convFields{1});
                         if isfield(firstConv, 'size')
                             if length(firstConv.size) >= 1
-                                params(4) = firstConv.size(1);
+                                extractedParams(4) = firstConv.size(1);
                             end
                         end
                         if isfield(firstConv, 'filters')
-                            params(5) = firstConv.filters;
+                            extractedParams(5) = firstConv.filters;
                         end
                     end
                 end
@@ -1449,7 +1506,7 @@ classdef CNNClassifier < handle
                     dropout = obj.params.classifier.cnn.architecture.dropoutLayers;
                     dropoutFields = fieldnames(dropout);
                     if ~isempty(dropoutFields)
-                        params(6) = dropout.(dropoutFields{1});
+                        extractedParams(6) = dropout.(dropoutFields{1});
                     end
                 end
                 
@@ -1457,7 +1514,7 @@ classdef CNNClassifier < handle
                 if isfield(obj.params.classifier.cnn.architecture, 'fullyConnected')
                     fc = obj.params.classifier.cnn.architecture.fullyConnected;
                     if ~isempty(fc)
-                        params(7) = fc(1);
+                        extractedParams(7) = fc(1);
                     end
                 end
             catch ME
@@ -1511,7 +1568,7 @@ classdef CNNClassifier < handle
             trainInfoCopy = obj.createDeepCopy(trainInfo);
             
             % パラメータ情報の抽出
-            params = obj.extractParams();
+            extractedParams = obj.extractParams();
             
             % 結果構造体の構築
             results = struct(...
@@ -1520,7 +1577,7 @@ classdef CNNClassifier < handle
                 'trainInfo', trainInfoCopy, ...
                 'overfitting', obj.overfitMetrics, ...
                 'normParams', normParams, ...
-                'params', params ...
+                'params', extractedParams ...
             );
             
             % 出力前に結果の検証
