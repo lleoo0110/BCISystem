@@ -19,6 +19,7 @@ classdef CNNClassifier < handle
         net                 % 学習済みCNNネットワーク
         isInitialized       % 初期化完了フラグ
         useGPU              % GPU使用フラグ
+        verbosity           % 出力詳細度 (0:最小限, 1:通常, 2:詳細, 3:デバッグ)
         
         % 学習進捗の追跡用
         trainingHistory     % 学習履歴データ
@@ -44,16 +45,24 @@ classdef CNNClassifier < handle
     
     methods (Access = public)
         %% コンストラクタ - 初期化処理
-        function obj = CNNClassifier(params)
+        function obj = CNNClassifier(params, verbosity)
             % CNNClassifierのインスタンスを初期化
             %
             % 入力:
             %   params - 設定パラメータ
+            %   verbosity - 出力詳細度 (0:最小限, 1:通常, 2:詳細, 3:デバッグ)
             
             % 基本パラメータの設定
             obj.params = params;
             obj.isInitialized = false;
             obj.useGPU = params.classifier.cnn.gpu;
+            
+            % verbosityレベルの設定（デフォルトは1）
+            if nargin < 2
+                obj.verbosity = 1;
+            else
+                obj.verbosity = verbosity;
+            end
             
             % プロパティの初期化
             obj.initializeProperties();
@@ -74,7 +83,7 @@ classdef CNNClassifier < handle
             % 出力:
             %   results - 学習結果を含む構造体（モデル、性能評価、正規化パラメータなど）
             try                
-                fprintf('\n=== CNN学習処理を開始 ===\n');
+                obj.logMessage(1, '\n=== CNN学習処理を開始 ===\n');
                 
                 % データの次元を確認し、必要に応じて調整
                 [processedData, ~] = obj.validateAndPrepareData(processedData);
@@ -109,15 +118,15 @@ classdef CNNClassifier < handle
                 % 結果構造体の構築
                 results = obj.buildResultsStruct(cnnModel, testMetrics, trainInfo, normParams);
                 
-                fprintf('\n=== CNN学習処理が完了しました ===\n');
+                obj.logMessage(1, '\n=== CNN学習処理が完了しました ===\n');
 
             catch ME
                 % エラー発生時の詳細情報出力
-                fprintf('\n=== CNN学習中にエラーが発生しました ===\n');
-                fprintf('エラーメッセージ: %s\n', ME.message);
-                fprintf('エラー発生場所:\n');
+                obj.logMessage(0, '\n=== CNN学習中にエラーが発生しました ===\n');
+                obj.logMessage(0, 'エラーメッセージ: %s\n', ME.message);
+                obj.logMessage(0, 'エラー発生場所:\n');
                 for i = 1:length(ME.stack)
-                    fprintf('  ファイル: %s\n  行: %d\n  関数: %s\n\n', ...
+                    obj.logMessage(0, '  ファイル: %s\n  行: %d\n  関数: %s\n\n', ...
                         ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
                 end
 
@@ -137,7 +146,7 @@ classdef CNNClassifier < handle
             %   isOverfit - 過学習の有無（論理値）
             %   metrics - 詳細な過学習メトリクス
             
-            fprintf('\n=== 過学習検証の実行 ===\n');
+            obj.logMessage(1, '\n=== 過学習検証の実行 ===\n');
             
             % 初期化
             isOverfit = false;
@@ -175,7 +184,7 @@ classdef CNNClassifier < handle
                 % 複合判定 - バイアス検出を優先
                 if isCompletelyBiased
                     severity = 'critical';  % 完全な偏りがある場合は最重度の過学習と判定
-                    fprintf('完全な分類バイアスが検出されたため、過学習を「%s」と判定\n', severity);
+                    obj.logMessage(1, '完全な分類バイアスが検出されたため、過学習を「%s」と判定\n', severity);
                 else
                     % 通常のギャップベース判定を使用
                     severity = gapMetrics.severity;
@@ -197,16 +206,16 @@ classdef CNNClassifier < handle
                 
                 % 過学習判定
                 isOverfit = gapOverfit || isCompletelyBiased || (~isLearningProgressing && ~strcmp(severity, 'none'));
-                fprintf('過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
+                obj.logMessage(1, '過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
 
                 if isOverfit
-                    fprintf('\n警告: モデルに過学習の兆候が検出されました (%s)\n', metrics.severity);
+                    obj.logMessage(1, '\n警告: モデルに過学習の兆候が検出されました (%s)\n', metrics.severity);
                 end
                 obj.overfitMetrics = metrics;
 
             catch ME
-                fprintf('過学習検証でエラーが発生: %s\n', ME.message);
-                fprintf('エラー詳細:\n');
+                obj.logMessage(1, '過学習検証でエラーが発生: %s\n', ME.message);
+                obj.logMessage(2, 'エラー詳細:\n');
                 disp(getReport(ME, 'extended'));
             end
         end
@@ -247,10 +256,24 @@ classdef CNNClassifier < handle
                 [label, score] = classify(cnn.model, prepData);
         
             catch ME
-                fprintf('Error in CNN online prediction: %s\n', ME.message);
-                fprintf('Error details:\n');
+                obj.logMessage(0, 'Error in CNN online prediction: %s\n', ME.message);
+                obj.logMessage(2, 'Error details:\n');
                 disp(getReport(ME, 'extended'));
                 rethrow(ME);
+            end
+        end
+        
+        %% ログ出力メソッド
+        function logMessage(obj, level, format, varargin)
+            % 指定されたverbosityレベル以上の場合にメッセージを出力
+            %
+            % 入力:
+            %   level - メッセージの重要度 (0:エラー, 1:警告/通常, 2:情報, 3:デバッグ)
+            %   format - fprintf形式の文字列
+            %   varargin - 追加パラメータ
+            
+            if obj.verbosity >= level
+                fprintf(format, varargin{:});
             end
         end
     end
@@ -269,7 +292,7 @@ classdef CNNClassifier < handle
         end
         
         %% データ検証と準備
-        function [validatedData, infoMsg] = validateAndPrepareData(~, data)
+        function [validatedData, infoMsg] = validateAndPrepareData(obj, data)
             % 入力データの検証と適切な形式への変換
             
             % データの次元と形状を確認
@@ -287,9 +310,11 @@ classdef CNNClassifier < handle
                 validatedData = reshape(data, [channels, samples, 1]);
                 infoMsg = sprintf('2次元データを3次元に変換 [%d×%d] → [%d×%d×1]', ...
                     channels, samples, channels, samples);
+                obj.logMessage(2, '%s\n', infoMsg);
             else
                 [channels, samples, epochs] = size(data);
                 infoMsg = sprintf('3次元データを検証 [%d×%d×%d]', channels, samples, epochs);
+                obj.logMessage(2, '%s\n', infoMsg);
             end
             
             % データの妥当性検証
@@ -309,10 +334,10 @@ classdef CNNClassifier < handle
             
             % データ拡張処理
             if obj.params.classifier.augmentation.enable
-                fprintf('\nデータ拡張を実行...\n');
+                obj.logMessage(1, '\nデータ拡張を実行...\n');
                 [procTrainData, procTrainLabels, ~] = obj.dataAugmenter.augmentData(trainData, trainLabels);
-                fprintf('  - 拡張前: %d サンプル\n', length(trainLabels));
-                fprintf('  - 拡張後: %d サンプル (%.1f倍)\n', length(procTrainLabels), ... 
+                obj.logMessage(1, '  - 拡張前: %d サンプル\n', length(trainLabels));
+                obj.logMessage(1, '  - 拡張後: %d サンプル (%.1f倍)\n', length(procTrainLabels), ... 
                     length(procTrainLabels)/length(trainLabels));
             end
             
@@ -328,7 +353,7 @@ classdef CNNClassifier < handle
         end
         
         %% 正規化パラメータの検証
-        function validateNormalizationParams(~, params)
+        function validateNormalizationParams(obj, params)
             % 正規化パラメータの妥当性を検証
             
             if ~isstruct(params)
@@ -344,7 +369,7 @@ classdef CNNClassifier < handle
                     end
                     
                     if any(params.std == 0)
-                        warning('標準偏差が0のチャンネルがあります。正規化で問題が発生する可能性があります');
+                        obj.logMessage(1, '警告: 標準偏差が0のチャンネルがあります。正規化で問題が発生する可能性があります\n');
                     end
                     
                 case 'minmax'
@@ -354,7 +379,7 @@ classdef CNNClassifier < handle
                     end
                     
                     if any(params.max - params.min < eps)
-                        warning('最大値と最小値がほぼ同じチャンネルがあります。正規化で問題が発生する可能性があります');
+                        obj.logMessage(1, '警告: 最大値と最小値がほぼ同じチャンネルがあります。正規化で問題が発生する可能性があります\n');
                     end
                     
                 case 'robust'
@@ -364,11 +389,11 @@ classdef CNNClassifier < handle
                     end
                     
                     if any(params.mad < eps)
-                        warning('MADが極めて小さいチャンネルがあります。正規化で問題が発生する可能性があります');
+                        obj.logMessage(1, '警告: MADが極めて小さいチャンネルがあります。正規化で問題が発生する可能性があります\n');
                     end
                     
                 otherwise
-                    warning('未知の正規化方法: %s', params.method);
+                    obj.logMessage(1, '警告: 未知の正規化方法: %s\n', params.method);
             end
         end
         
@@ -394,8 +419,8 @@ classdef CNNClassifier < handle
 
                 % データサイズの取得
                 [~, ~, numEpochs] = size(data);
-                fprintf('\nデータセット分割:\n');
-                fprintf('  - 総エポック数: %d\n', numEpochs);
+                obj.logMessage(1, '\nデータセット分割:\n');
+                obj.logMessage(1, '  - 総エポック数: %d\n', numEpochs);
 
                 % 分割比率の計算
                 trainRatio = (k-1)/k;  % (k-1)/k
@@ -406,13 +431,13 @@ classdef CNNClassifier < handle
                 uniqueLabels = unique(labels);
                 numClasses = length(uniqueLabels);
                 
-                fprintf('  - クラス数: %d\n', numClasses);
+                obj.logMessage(1, '  - クラス数: %d\n', numClasses);
                 
                 % クラスごとのインデックスを取得
                 classIndices = cell(numClasses, 1);
                 for i = 1:numClasses
                     classIndices{i} = find(labels == uniqueLabels(i));
-                    fprintf('  - クラス %d: %d サンプル\n', uniqueLabels(i), length(classIndices{i}));
+                    obj.logMessage(1, '  - クラス %d: %d サンプル\n', uniqueLabels(i), length(classIndices{i}));
                 end
                 
                 % クラスごとに分割するためのインデックス配列を事前に割り当て
@@ -466,11 +491,11 @@ classdef CNNClassifier < handle
                 testLabels = labels(testIdx);
         
                 % 分割結果のサマリー表示
-                fprintf('  - 学習データ: %d サンプル (%.1f%%)\n', ...
+                obj.logMessage(1, '  - 学習データ: %d サンプル (%.1f%%)\n', ...
                     length(trainIdx), (length(trainIdx)/numEpochs)*100);
-                fprintf('  - 検証データ: %d サンプル (%.1f%%)\n', ...
+                obj.logMessage(1, '  - 検証データ: %d サンプル (%.1f%%)\n', ...
                     length(valIdx), (length(valIdx)/numEpochs)*100);
-                fprintf('  - テストデータ: %d サンプル (%.1f%%)\n', ...
+                obj.logMessage(1, '  - テストデータ: %d サンプル (%.1f%%)\n', ...
                     length(testIdx), (length(testIdx)/numEpochs)*100);
         
                 % データの検証
@@ -489,15 +514,15 @@ classdef CNNClassifier < handle
         end
         
         %% クラス分布確認メソッド
-        function checkClassDistribution(~, setName, labels)
+        function checkClassDistribution(obj, setName, labels)
             % データセット内のクラス分布を解析して表示
             
             uniqueLabels = unique(labels);
-            fprintf('\n%sデータのクラス分布:\n', setName);
+            obj.logMessage(1, '\n%sデータのクラス分布:\n', setName);
             
             for i = 1:length(uniqueLabels)
                 count = sum(labels == uniqueLabels(i));
-                fprintf('  - クラス %d: %d サンプル (%.1f%%)\n', ...
+                obj.logMessage(1, '  - クラス %d: %d サンプル (%.1f%%)\n', ...
                     uniqueLabels(i), count, (count/length(labels))*100);
             end
             
@@ -507,7 +532,7 @@ classdef CNNClassifier < handle
             imbalanceRatio = maxCount / max(minCount, 1);
             
             if imbalanceRatio > 3
-                warning('%sデータセットのクラス不均衡が大きいです (比率: %.1f:1)', ...
+                obj.logMessage(1, '警告: %sデータセットのクラス不均衡が大きいです (比率: %.1f:1)\n', ...
                     setName, imbalanceRatio);
             end
         end
@@ -527,7 +552,7 @@ classdef CNNClassifier < handle
             %   trainInfo - 学習に関する情報
             
             try        
-                fprintf('\n=== CNNモデルの学習開始 ===\n');                
+                obj.logMessage(1, '\n=== CNNモデルの学習開始 ===\n');                
                 % データの形状確認
                 if ndims(trainData) ~= 4
                     trainData = obj.prepareDataForCNN(trainData);
@@ -592,7 +617,7 @@ classdef CNNClassifier < handle
                         trainHistory.TrainingAccuracy = gather(trainHistory.TrainingAccuracy);
                         trainHistory.ValidationAccuracy = gather(trainHistory.ValidationAccuracy);
                     catch ME
-                        warning('GPU上のデータをCPUに移動中にエラーが発生しました');
+                        obj.logMessage(1, '警告: GPU上のデータをCPUに移動中にエラーが発生しました\n');
                     end
                 end
         
@@ -600,18 +625,18 @@ classdef CNNClassifier < handle
                 trainInfo.History = trainHistory;
                 trainInfo.FinalEpoch = length(trainHistory.TrainingLoss);
         
-                fprintf('学習完了: %d エポック\n', trainInfo.FinalEpoch);
-                fprintf('  - 最終学習損失: %.4f\n', trainHistory.TrainingLoss(end));
-                fprintf('  - 最終検証損失: %.4f\n', trainHistory.ValidationLoss(end));
-                fprintf('  - 最終学習精度: %.2f%%\n', trainHistory.TrainingAccuracy(end));
-                fprintf('  - 最終検証精度: %.2f%%\n', trainHistory.ValidationAccuracy(end));
+                obj.logMessage(1, '学習完了: %d エポック\n', trainInfo.FinalEpoch);
+                obj.logMessage(1, '  - 最終学習損失: %.4f\n', trainHistory.TrainingLoss(end));
+                obj.logMessage(1, '  - 最終検証損失: %.4f\n', trainHistory.ValidationLoss(end));
+                obj.logMessage(1, '  - 最終学習精度: %.2f%%\n', trainHistory.TrainingAccuracy(end));
+                obj.logMessage(1, '  - 最終検証精度: %.2f%%\n', trainHistory.ValidationAccuracy(end));
                 
                 % 最良の検証精度
                 [bestValAcc, bestEpoch] = max(trainHistory.ValidationAccuracy);
-                fprintf('  - 最良検証精度: %.2f%% (エポック %d)\n', bestValAcc, bestEpoch);
+                obj.logMessage(1, '  - 最良検証精度: %.2f%% (エポック %d)\n', bestValAcc, bestEpoch);
         
             catch ME
-                fprintf('CNNモデル学習でエラーが発生: %s\n', ME.message);
+                obj.logMessage(0, 'CNNモデル学習でエラーが発生: %s\n', ME.message);
                 rethrow(ME);
             end
         end
@@ -635,24 +660,27 @@ classdef CNNClassifier < handle
                 if numChannels <= 8
                     % 少数チャンネル用コンパクトアーキテクチャ
                     layers = obj.buildCompactCNN(layerInputSize, arch);
+                    obj.logMessage(2, '少数チャンネル用コンパクトCNNアーキテクチャを構築\n');
                 elseif numChannels <= 16
                     % 中規模チャンネル用修正アーキテクチャ
                     layers = obj.buildMediumCNN(layerInputSize, arch, numChannels);
+                    obj.logMessage(2, '中規模チャンネル用CNNアーキテクチャを構築\n');
                 else
                     % 多数チャンネル用標準アーキテクチャ
                     layers = obj.buildStandardCNN(layerInputSize, arch, numChannels);
+                    obj.logMessage(2, '多数チャンネル用標準CNNアーキテクチャを構築\n');
                 end
                 
             catch ME
-                fprintf('CNNレイヤー構築でエラーが発生: %s\n', ME.message);
-                fprintf('エラー詳細:\n');
+                obj.logMessage(0, 'CNNレイヤー構築でエラーが発生: %s\n', ME.message);
+                obj.logMessage(2, 'エラー詳細:\n');
                 disp(getReport(ME, 'extended'));
                 rethrow(ME);
             end
         end
         
         %% 入力サイズ決定メソッド
-        function layerInputSize = determineInputSize(~, data)
+        function layerInputSize = determineInputSize(obj, data)
             % データの次元に基づいて入力サイズを決定
             % より堅牢なサイズ決定と詳細なログ出力を追加
             
@@ -664,14 +692,16 @@ classdef CNNClassifier < handle
                 % 4次元データ [サンプル x チャンネル x 1 x エポック]
                 % すでに適切な形式なのでそのまま使用
                 layerInputSize = [originalSize(1), originalSize(2), 1];
-
+                obj.logMessage(3, '4次元データの入力サイズ: [%d, %d, %d]\n', layerInputSize(1), layerInputSize(2), layerInputSize(3));
             elseif dimCount == 3
                 % 3次元データ [チャンネル x サンプル x エポック]
                 % 適切な入力サイズを計算
                 layerInputSize = [originalSize(2), originalSize(1), 1];
+                obj.logMessage(3, '3次元データの入力サイズ: [%d, %d, %d]\n', layerInputSize(1), layerInputSize(2), layerInputSize(3));
             elseif ismatrix(data)
                 % 2次元データ [チャンネル x サンプル]
                 layerInputSize = [originalSize(2), originalSize(1), 1];
+                obj.logMessage(3, '2次元データの入力サイズ: [%d, %d, %d]\n', layerInputSize(1), layerInputSize(2), layerInputSize(3));
             else
                 error('対応していないデータ次元数: %d', dimCount);
             end
@@ -685,8 +715,11 @@ classdef CNNClassifier < handle
         end
         
         %% コンパクトCNNアーキテクチャ構築
-        function layers = buildCompactCNN(~, layerInputSize, arch)
+        function layers = buildCompactCNN(obj, layerInputSize, arch)
             % チャンネル数が少ない場合の最適化されたCNN構造
+            
+            obj.logMessage(2, 'コンパクトCNNアーキテクチャの構築...\n');
+            obj.logMessage(3, '  入力サイズ: [%d, %d, %d]\n', layerInputSize(1), layerInputSize(2), layerInputSize(3));
             
             % 入力層
             layers = [
@@ -720,11 +753,16 @@ classdef CNNClassifier < handle
                 softmaxLayer('Name', 'softmax')
                 classificationLayer('Name', 'output')
             ];
+            
+            obj.logMessage(3, 'コンパクトCNNアーキテクチャの構築完了 (%d層)\n', numel(layers));
         end
 
-        function layers = buildMediumCNN(~, layerInputSize, arch, numChannels)
+        function layers = buildMediumCNN(obj, layerInputSize, arch, numChannels)
             % 中規模チャンネル数（9-16）向けに最適化されたCNNアーキテクチャ
             % EPOCXなどの14チャンネルデバイスに適したアーキテクチャ
+            
+            obj.logMessage(2, '中規模CNNアーキテクチャの構築 (チャンネル数: %d)...\n', numChannels);
+            obj.logMessage(3, '  入力サイズ: [%d, %d, %d]\n', layerInputSize(1), layerInputSize(2), layerInputSize(3));
             
             % 初期フィルタ数の決定 (チャンネル数によって調整)
             initialFilters = min(32, max(16, ceil(numChannels * 1.5)));
@@ -824,12 +862,17 @@ classdef CNNClassifier < handle
             % セル配列から層配列に変換
             layers = layers(~cellfun('isempty', layers));
             layers = cat(1, layers{:});
+            
+            obj.logMessage(3, '中規模CNNアーキテクチャの構築完了 (%d層)\n', numel(layers));
         end
         
         %% 標準CNNアーキテクチャ構築
-        function layers = buildStandardCNN(~, layerInputSize, arch, numChannels)
+        function layers = buildStandardCNN(obj, layerInputSize, arch, numChannels)
             % 標準的なCNNアーキテクチャ（チャンネル数が多い場合）  
             % 初期フィルタ数とプーリングサイズの決定を改善
+            
+            obj.logMessage(2, '標準CNNアーキテクチャの構築 (チャンネル数: %d)...\n', numChannels);
+            obj.logMessage(3, '  入力サイズ: [%d, %d, %d]\n', layerInputSize(1), layerInputSize(2), layerInputSize(3));
             
             % 初期フィルタ数の決定 (チャンネル数によって調整)
             initialFilters = min(32, max(16, ceil(numChannels * 1.2)));
@@ -948,10 +991,12 @@ classdef CNNClassifier < handle
             % セル配列を層配列に変換
             layers = layers(~cellfun('isempty', layers));
             layers = cat(1, layers{:});
+            
+            obj.logMessage(3, '標準CNNアーキテクチャの構築完了 (%d層)\n', numel(layers));
         end
 
         %% データのCNN形式への変換
-        function preparedData = prepareDataForCNN(~, data)
+        function preparedData = prepareDataForCNN(obj, data)
             % データをCNNに適した形式に変換
             % より堅牢な変換処理と詳細なエラーチェックを追加
             
@@ -973,6 +1018,9 @@ classdef CNNClassifier < handle
                         % 転置して次元を入れ替える
                         preparedData(:,:,1,i) = data(:,:,i)';
                     end
+                    
+                    obj.logMessage(3, 'データ形式変換: 3次元→4次元 [%d×%d×%d] → [%d×%d×1×%d]\n', ...
+                        channels, samples, epochs, samples, channels, epochs);
                         
                 elseif ismatrix(data)
                     % 2次元データ（チャンネル x サンプル）の場合
@@ -981,10 +1029,15 @@ classdef CNNClassifier < handle
                     % 転置して次元を入れ替え、4次元データに変換
                     preparedData = permute(data, [2, 1, 3]);
                     preparedData = reshape(preparedData, [samples, channels, 1, 1]);
+                    
+                    obj.logMessage(3, 'データ形式変換: 2次元→4次元 [%d×%d] → [%d×%d×1×1]\n', ...
+                        channels, samples, samples, channels);
                         
                 elseif dimCount == 4
                     % すでに4次元の場合はそのまま使用
                     preparedData = data;
+                    obj.logMessage(3, 'データ形式: すでに4次元形式のため変換なし [%d×%d×%d×%d]\n', ...
+                        size(data,1), size(data,2), size(data,3), size(data,4));
                     
                 else
                     % その他の次元数は対応外
@@ -1001,16 +1054,16 @@ classdef CNNClassifier < handle
                 end
                 
             catch ME
-                fprintf('データ形式変換でエラーが発生: %s\n', ME.message);
-                fprintf('入力データサイズ: [%s]\n', num2str(size(data)));
-                fprintf('エラー詳細:\n');
+                obj.logMessage(0, 'データ形式変換でエラーが発生: %s\n', ME.message);
+                obj.logMessage(0, '入力データサイズ: [%s]\n', num2str(size(data)));
+                obj.logMessage(2, 'エラー詳細:\n');
                 disp(getReport(ME, 'extended'));
                 rethrow(ME);
             end
         end
 
         %% モデル評価メソッド
-        function metrics = evaluateModel(~, model, testData, testLabels)
+        function metrics = evaluateModel(obj, model, testData, testLabels)
             % 学習済みモデルの性能を評価
             %
             % 入力:
@@ -1021,7 +1074,7 @@ classdef CNNClassifier < handle
             % 出力:
             %   metrics - 詳細な評価メトリクス
             
-            fprintf('\n=== モデル評価を実行 ===\n');
+            obj.logMessage(1, '\n=== モデル評価を実行 ===\n');
             metrics = struct(...
                 'accuracy', [], ...
                 'score', [], ...
@@ -1043,7 +1096,7 @@ classdef CNNClassifier < handle
            metrics.accuracy = mean(pred == testLabels);
            metrics.confusionMat = confusionmat(testLabels, pred);
            
-           fprintf('テスト精度: %.2f%%\n', metrics.accuracy * 100);
+           obj.logMessage(1, 'テスト精度: %.2f%%\n', metrics.accuracy * 100);
 
            % クラスごとの性能評価
            classes = unique(testLabels);
@@ -1051,7 +1104,7 @@ classdef CNNClassifier < handle
                                       'recall', zeros(1,length(classes)), ...
                                       'f1score', zeros(1,length(classes)));
 
-           fprintf('\nクラスごとの評価:\n');
+           obj.logMessage(1, '\nクラスごとの評価:\n');
            for i = 1:length(classes)
                className = classes(i);
                classIdx = (testLabels == className);
@@ -1084,10 +1137,10 @@ classdef CNNClassifier < handle
                metrics.classwise(i).recall = recall;
                metrics.classwise(i).f1score = f1;
                
-               fprintf('  - クラス %d:\n', i);
-               fprintf('    - 精度 (Precision): %.2f%%\n', precision * 100);
-               fprintf('    - 再現率 (Recall): %.2f%%\n', recall * 100);
-               fprintf('    - F1スコア: %.2f\n', f1);
+               obj.logMessage(1, '  - クラス %d:\n', i);
+               obj.logMessage(1, '    - 精度 (Precision): %.2f%%\n', precision * 100);
+               obj.logMessage(1, '    - 再現率 (Recall): %.2f%%\n', recall * 100);
+               obj.logMessage(1, '    - F1スコア: %.2f\n', f1);
            end
 
            % ROC曲線とAUC（2クラス分類の場合）
@@ -1095,11 +1148,11 @@ classdef CNNClassifier < handle
                [X, Y, T, AUC] = perfcurve(testLabels, score(:,2), classes(2));
                metrics.roc = struct('X', X, 'Y', Y, 'T', T);
                metrics.auc = AUC;
-               fprintf('\nAUC: %.3f\n', AUC);
+               obj.logMessage(1, '\nAUC: %.3f\n', AUC);
            end
            
            % 混同行列の表示
-           fprintf('\n混同行列:\n');
+           obj.logMessage(1, '\n混同行列:\n');
            disp(metrics.confusionMat);
         end
         
@@ -1115,7 +1168,7 @@ classdef CNNClassifier < handle
             %   trainTrend - 学習精度の傾向分析結果
             %   valTrend - 検証精度の傾向分析結果
             
-            fprintf('\n=== 学習曲線の分析 ===\n');
+            obj.logMessage(2, '\n=== 学習曲線の分析 ===\n');
             
             try
                 % データの検証
@@ -1169,8 +1222,16 @@ classdef CNNClassifier < handle
                     'convergence_epoch', obj.estimateConvergenceEpoch(valSmooth) ...
                 );
                 
+                obj.logMessage(2, '学習曲線分析結果:\n');
+                obj.logMessage(2, '  - 学習曲線平均変化率: %.5f\n', trainTrend.mean_change);
+                obj.logMessage(2, '  - 検証曲線平均変化率: %.5f\n', valTrend.mean_change);
+                obj.logMessage(2, '  - 学習曲線変動性: %.5f\n', trainTrend.volatility);
+                obj.logMessage(2, '  - 検証曲線変動性: %.5f\n', valTrend.volatility);
+                obj.logMessage(2, '  - 学習プラトー検出: %s\n', mat2str(trainTrend.plateau_detected));
+                obj.logMessage(2, '  - 検証プラトー検出: %s\n', mat2str(valTrend.plateau_detected));
+                
             catch ME
-                fprintf('学習曲線分析でエラーが発生: %s\n', ME.message);
+                obj.logMessage(1, '学習曲線分析でエラーが発生: %s\n', ME.message);
                 
                 % エラー時のフォールバック値を設定
                 trainTrend = struct('mean_change', 0, 'volatility', 0, 'increasing_ratio', 0, ...
@@ -1181,7 +1242,7 @@ classdef CNNClassifier < handle
         end
         
         %% プラトー検出メソッド
-        function isPlateau = detectPlateau(~, smoothedCurve)
+        function isPlateau = detectPlateau(obj, smoothedCurve)
             % 学習曲線でのプラトー（停滞）状態を検出
             %
             % 入力:
@@ -1203,10 +1264,13 @@ classdef CNNClassifier < handle
             
             % 変化が非常に小さい場合はプラトーと見なす
             isPlateau = mean(abs(segmentDiff)) < 0.001;
+            
+            obj.logMessage(3, '後半部分の平均変化率: %.6f (プラトー判定: %s)\n', ...
+                mean(abs(segmentDiff)), mat2str(isPlateau));
         end
 
         %% 振動強度計算メソッド
-        function oscillation = calculateOscillation(~, diffValues)
+        function oscillation = calculateOscillation(obj, diffValues)
             % 学習曲線の振動強度を計算
             %
             % 入力:
@@ -1224,10 +1288,13 @@ classdef CNNClassifier < handle
             % 符号変化の数をカウント（振動の指標）
             signChanges = sum(diff(sign(diffValues)) ~= 0);
             oscillation = signChanges / (length(diffValues) - 1);  % 正規化
+            
+            obj.logMessage(3, '振動強度: %.3f (符号変化: %d/%d)\n', ...
+                oscillation, signChanges, length(diffValues) - 1);
         end
 
         %% 収束エポック推定メソッド
-        function convergenceEpoch = estimateConvergenceEpoch(~, smoothedCurve)
+        function convergenceEpoch = estimateConvergenceEpoch(obj, smoothedCurve)
             % 学習が収束したエポックを推定
             %
             % 入力:
@@ -1256,10 +1323,12 @@ classdef CNNClassifier < handle
                 % 収束点が見つからない場合は終点を返す
                 convergenceEpoch = length(smoothedCurve);
             end
+            
+            obj.logMessage(3, '収束エポック推定: %d/%d\n', convergenceEpoch, length(smoothedCurve));
         end
         
         %% Early Stopping効果分析メソッド
-        function effect = analyzeEarlyStoppingEffect(~, trainInfo)
+        function effect = analyzeEarlyStoppingEffect(obj, trainInfo)
             % Early Stoppingの効果を分析
             %
             % 入力:
@@ -1283,17 +1352,17 @@ classdef CNNClassifier < handle
                 'potential_savings', totalEpochs - minLossEpoch ...
             );
             
-            fprintf('Early Stopping分析:\n');
-            fprintf('  - 最適エポック: %d/%d (%.1f%%)\n', ...
+            obj.logMessage(1, 'Early Stopping分析:\n');
+            obj.logMessage(1, '  - 最適エポック: %d/%d (%.1f%%)\n', ...
                 effect.optimal_epoch, effect.total_epochs, effect.stopping_efficiency*100);
             
             if effect.potential_savings > 0
-                fprintf('  - 潜在的節約: %dエポック\n', effect.potential_savings);
+                obj.logMessage(1, '  - 潜在的節約: %dエポック\n', effect.potential_savings);
             end
         end
         
         %% 検証-テスト精度ギャップ分析メソッド
-        function [isOverfit, metrics] = validateTestValidationGap(~, valAccHistory, testAcc, dataSize)
+        function [isOverfit, metrics] = validateTestValidationGap(obj, valAccHistory, testAcc, dataSize)
             % 検証精度とテスト精度の差を統計的に評価
             %
             % 入力:
@@ -1403,17 +1472,17 @@ classdef CNNClassifier < handle
             );
             
             % 結果の表示
-            fprintf('\n=== 検証-テスト精度差分析 ===\n');
-            fprintf('  検証精度: %.2f%% (±%.2f%%)\n', meanValAcc, stdValAcc);
-            fprintf('  テスト精度: %.2f%%\n', testAcc);
-            fprintf('  検証-テスト精度差: %.2f%%\n', rawGap);
-            fprintf('  統計的判定: %s (重大度: %s)\n', mat2str(statisticalOverfit), statSeverity);
-            fprintf('  絶対差判定: %s (重大度: %s)\n', mat2str(absoluteOverfit), absSeverity);
-            fprintf('  最終判定結果: %s (重大度: %s)\n', mat2str(isOverfit), severity);
+            obj.logMessage(1, '\n=== 検証-テスト精度差分析 ===\n');
+            obj.logMessage(1, '  検証精度: %.2f%% (±%.2f%%)\n', meanValAcc, stdValAcc);
+            obj.logMessage(1, '  テスト精度: %.2f%%\n', testAcc);
+            obj.logMessage(1, '  検証-テスト精度差: %.2f%%\n', rawGap);
+            obj.logMessage(1, '  統計的判定: %s (重大度: %s)\n', mat2str(statisticalOverfit), statSeverity);
+            obj.logMessage(1, '  絶対差判定: %s (重大度: %s)\n', mat2str(absoluteOverfit), absSeverity);
+            obj.logMessage(1, '  最終判定結果: %s (重大度: %s)\n', mat2str(isOverfit), severity);
         end
         
         %% 過学習重大度判定メソッド
-        function severity = determineOverfittingSeverity(~, perfGap, isCompletelyBiased, ... 
+        function severity = determineOverfittingSeverity(obj, perfGap, isCompletelyBiased, ... 
             isLearningProgressing, params)
             % 過学習の重大度を判定
             %
@@ -1441,10 +1510,12 @@ classdef CNNClassifier < handle
             else
                 severity = 'none';      % 過学習は検出されない
             end
+            
+            obj.logMessage(2, '過学習重大度判定: %s\n', severity);
         end
         
         %% 分類バイアス検出メソッド
-        function isCompletelyBiased = detectClassificationBias(~, testMetrics)
+        function isCompletelyBiased = detectClassificationBias(obj, testMetrics)
             % 混同行列から分類バイアスを検出
             %
             % 入力:
@@ -1473,19 +1544,19 @@ classdef CNNClassifier < handle
                 isCompletelyBiased = missingActual || missingPredicted || predictedClassCount <= 1;
                 
                 if isCompletelyBiased
-                    fprintf('\n警告: 分類に完全な偏りが検出されました\n');
-                    fprintf('  - 分類された実際のクラス数: %d / %d\n', sum(rowSums > 0), size(cm, 1));
-                    fprintf('  - 予測されたクラス数: %d / %d\n', predictedClassCount, size(cm, 2));
+                    obj.logMessage(1, '\n警告: 分類に完全な偏りが検出されました\n');
+                    obj.logMessage(1, '  - 分類された実際のクラス数: %d / %d\n', sum(rowSums > 0), size(cm, 1));
+                    obj.logMessage(1, '  - 予測されたクラス数: %d / %d\n', predictedClassCount, size(cm, 2));
                     
                     % 混同行列の出力
-                    fprintf('  混同行列:\n');
+                    obj.logMessage(2, '  混同行列:\n');
                     disp(cm);
                 end
             end
         end
         
         %% 最適エポック検出メソッド
-        function [optimalEpoch, totalEpochs] = findOptimalEpoch(~, valAcc)
+        function [optimalEpoch, totalEpochs] = findOptimalEpoch(obj, valAcc)
             % 検証精度に基づいて最適なエポックを特定
             %
             % 入力:
@@ -1499,20 +1570,22 @@ classdef CNNClassifier < handle
                 totalEpochs = length(valAcc);
                 [~, optimalEpoch] = max(valAcc);
                 
+                obj.logMessage(2, '最適エポック: %d / %d\n', optimalEpoch, totalEpochs);
+                
                 % 最適エポックが最後のエポックの場合、改善の余地がある可能性
                 if optimalEpoch == totalEpochs
-                    fprintf('警告: 最適エポックが最終エポックと一致。より長い学習が有益かもしれません。\n');
+                    obj.logMessage(1, '警告: 最適エポックが最終エポックと一致。より長い学習が有益かもしれません。\n');
                 end
         
             catch ME
-                fprintf('最適エポック検出でエラーが発生: %s\n', ME.message);
+                obj.logMessage(1, '最適エポック検出でエラーが発生: %s\n', ME.message);
                 optimalEpoch = 0;
                 totalEpochs = 0;
             end
         end
         
         %% 過学習メトリクス構築メソッド
-        function metrics = buildOverfitMetrics(~, perfGap, isCompletelyBiased, isLearningProgressing, ...
+        function metrics = buildOverfitMetrics(obj, perfGap, isCompletelyBiased, isLearningProgressing, ...
             trainTrend, valTrend, severity, optimalEpoch, totalEpochs, earlyStoppingEffect)
             % 過学習分析の詳細メトリクスを構築
             
@@ -1526,14 +1599,16 @@ classdef CNNClassifier < handle
                 'optimalEpoch', optimalEpoch, ...
                 'totalEpochs', totalEpochs, ...
                 'earlyStoppingEffect', earlyStoppingEffect);
+                
+            obj.logMessage(3, '過学習メトリクス構築完了\n');
         end
         
         %% トレーニング情報検証メソッド
-        function validateTrainInfo(~, trainInfo)
+        function validateTrainInfo(obj, trainInfo)
             % trainInfo構造体の妥当性を検証
             
             if ~isstruct(trainInfo)
-                warning('trainInfoが構造体ではありません');
+                obj.logMessage(1, '警告: trainInfoが構造体ではありません\n');
                 return;
             end
             
@@ -1541,7 +1616,7 @@ classdef CNNClassifier < handle
             requiredFields = {'History', 'FinalEpoch'};
             for i = 1:length(requiredFields)
                 if ~isfield(trainInfo, requiredFields{i})
-                    warning('trainInfoに必須フィールド「%s」がありません', requiredFields{i});
+                    obj.logMessage(1, '警告: trainInfoに必須フィールド「%s」がありません\n', requiredFields{i});
                 end
             end
             
@@ -1550,9 +1625,9 @@ classdef CNNClassifier < handle
                 historyFields = {'TrainingLoss', 'ValidationLoss', 'TrainingAccuracy', 'ValidationAccuracy'};
                 for i = 1:length(historyFields)
                     if ~isfield(trainInfo.History, historyFields{i})
-                        warning('History構造体に「%s」フィールドがありません', historyFields{i});
+                        obj.logMessage(1, '警告: History構造体に「%s」フィールドがありません\n', historyFields{i});
                     elseif isempty(trainInfo.History.(historyFields{i}))
-                        warning('History構造体の「%s」フィールドが空です', historyFields{i});
+                        obj.logMessage(1, '警告: History構造体の「%s」フィールドが空です\n', historyFields{i});
                     end
                 end
             end
@@ -1560,7 +1635,7 @@ classdef CNNClassifier < handle
             % FinalEpochの妥当性検証
             if isfield(trainInfo, 'FinalEpoch')
                 if trainInfo.FinalEpoch <= 0
-                    warning('FinalEpochが0以下です: %d', trainInfo.FinalEpoch);
+                    obj.logMessage(1, '警告: FinalEpochが0以下です: %d\n', trainInfo.FinalEpoch);
                 end
             end
         end
@@ -1659,7 +1734,7 @@ classdef CNNClassifier < handle
                     end
                 end
             catch ME
-                warning('パラメータ抽出中にエラーが発生');
+                obj.logMessage(1, '警告: パラメータ抽出中にエラーが発生\n');
             end
         end
 
@@ -1668,7 +1743,7 @@ classdef CNNClassifier < handle
             % 結果構造体の妥当性を検証
             
             if ~isstruct(results)
-                warning('結果が構造体ではありません');
+                obj.logMessage(1, '警告: 結果が構造体ではありません\n');
                 return;
             end
             
@@ -1676,14 +1751,14 @@ classdef CNNClassifier < handle
             requiredFields = {'model', 'performance', 'trainInfo', 'params'};
             for i = 1:length(requiredFields)
                 if ~isfield(results, requiredFields{i})
-                    warning('結果構造体に必須フィールド「%s」がありません', requiredFields{i});
+                    obj.logMessage(1, '警告: 結果構造体に必須フィールド「%s」がありません\n', requiredFields{i});
                 end
             end
             
             % paramsフィールドのチェック
             if isfield(results, 'params')
                 if length(results.params) ~= 7
-                    warning('paramsフィールドの長さが期待値と異なります: %d (期待値: 7)', length(results.params));
+                    obj.logMessage(1, '警告: paramsフィールドの長さが期待値と異なります: %d (期待値: 7)\n', length(results.params));
                 end
             end
             
@@ -1695,7 +1770,7 @@ classdef CNNClassifier < handle
             % パフォーマンスフィールドのチェック
             if isfield(results, 'performance')
                 if ~isfield(results.performance, 'accuracy')
-                    warning('performance構造体にaccuracyフィールドがありません');
+                    obj.logMessage(1, '警告: performance構造体にaccuracyフィールドがありません\n');
                 end
             end
         end
@@ -1723,6 +1798,8 @@ classdef CNNClassifier < handle
             
             % 出力前に結果の検証
             obj.validateResults(results);
+            
+            obj.logMessage(2, '結果構造体の構築完了\n');
         end
     end
 end
