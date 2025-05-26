@@ -7,14 +7,14 @@ classdef HybridOptimizer < handle
     %
     % 主な機能:
     %   - Latin Hypercube Sampling, ランダム探索, グリッド探索などの実装
-    %   - 複数のパラメータ組み合わせの評価
+    %   - 複数のパラメータ組み合わせの並列評価
     %   - 過学習と複雑性を考慮した包括的な評価メトリクス
     %   - 早期停止による効率的な探索
     %   - 詳細な最適化結果の分析と可視化
     %
     % 使用例:
     %   params = getConfig('epocx', 'preset', 'template');
-    %   optimizer = HybridOptimizer(params);
+    %   optimizer = HybridOptimizer(params, 1);  % verbosity=1
     %   results = optimizer.optimize(processedData, processedLabel);
     
     properties (Access = private)
@@ -26,25 +26,45 @@ classdef HybridOptimizer < handle
         optimizationHistory % 最適化履歴
         useGPU              % GPU使用フラグ
         maxTrials           % 最大試行回数
-        
+        verbosity           % 出力詳細度 (0:最小限, 1:通常, 2:詳細, 3:デバッグ)
+
         % 評価重み
         evaluationWeights   % 各評価指標の重みづけ
+        
+        % パフォーマンス監視
+        gpuMemory           % GPU使用メモリ監視
+    end
+    
+    properties (Access = public)
+        performance         % 評価メトリクス (精度・確率など)
     end
     
     methods (Access = public)
         %% コンストラクタ - 初期化処理
-        function obj = HybridOptimizer(params)
+        function obj = HybridOptimizer(params, verbosity)
             % HybridOptimizerのインスタンスを初期化
             %
             % 入力:
             %   params - 設定パラメータ（getConfig関数から取得）
+            %   verbosity - 出力詳細度 (0:最小限, 1:通常, 2:詳細, 3:デバッグ)
             
+            % 基本パラメータの設定
             obj.params = params;
             obj.initializeSearchSpace();
             obj.bestPerformance = -inf;
             obj.optimizationHistory = struct('params', {}, 'performance', {}, 'model', {});
             obj.useGPU = params.classifier.hybrid.gpu;
             obj.maxTrials = params.classifier.hybrid.optimization.maxTrials;
+            
+            % verbosityレベルの設定（デフォルトは1）
+            if nargin < 2
+                obj.verbosity = 1;
+            else
+                obj.verbosity = verbosity;
+            end
+            
+            % プロパティの初期化
+            obj.initializeProperties();
             
             % 評価重みの初期化
             obj.evaluationWeights = struct(...
@@ -70,33 +90,36 @@ classdef HybridOptimizer < handle
             try
                 % 最適化が有効かチェック
                 if ~obj.params.classifier.hybrid.optimize
-                    fprintf('ハイブリッドモデル最適化は設定で無効化されています。デフォルトパラメータを使用します。\n');
+                    obj.logMessage(1, 'ハイブリッドモデル最適化は設定で無効化されています。デフォルトパラメータを使用します。\n');
                     results = obj.createDefaultResults();
                     return;
                 end
         
-                fprintf('\n=== ハイブリッドモデルのハイパーパラメータ最適化を開始 ===\n');
+                obj.logMessage(1, '\n=== ハイブリッドモデルのハイパーパラメータ最適化を開始 ===\n');
                 
                 % 探索アルゴリズムの選択
                 searchAlgorithm = 'lhs';  % デフォルト: Latin Hypercube Sampling
                 if isfield(obj.params.classifier.hybrid.optimization, 'searchAlgorithm')
                     searchAlgorithm = obj.params.classifier.hybrid.optimization.searchAlgorithm;
                 end
-                fprintf('探索アルゴリズム: %s\n', searchAlgorithm);
+                obj.logMessage(1, '探索アルゴリズム: %s\n', searchAlgorithm);
                 
                 % パラメータセットの生成
-                fprintf('パラメータ探索空間を設定中...\n');
+                obj.logMessage(2, 'パラメータ探索空間を設定中...\n');
                 paramSets = obj.generateParameterSets(obj.maxTrials, searchAlgorithm);
-                fprintf('パラメータ%dセットで最適化を開始します\n', size(paramSets, 1));
+                obj.logMessage(1, 'パラメータ%dセットで最適化を開始します\n', size(paramSets, 1));
         
                 % 結果保存用配列
                 trialResults = cell(size(paramSets, 1), 1);
-                baseParams = obj.params;
+                baseParams = obj.params; % この変数は後で使用される
+                
+                % 有効な評価結果カウンタ
+                validResultsCount = 0;
         
                 % 各パラメータセットで評価
                 for i = 1:size(paramSets, 1)
                     try
-                        fprintf('\n--- パラメータセット %d/%d の評価 ---\n', i, size(paramSets, 1));
+                        obj.logMessage(1, '\n--- パラメータセット %d/%d の評価 ---\n', i, size(paramSets, 1));
                         
                         % 現在のパラメータ構成の表示
                         obj.displayCurrentParams(paramSets(i,:));
@@ -116,19 +139,22 @@ classdef HybridOptimizer < handle
                             'performance', trainResults.performance, ...
                             'trainInfo', trainResults.trainInfo, ...
                             'overfitting', trainResults.overfitting, ...
-                            'normParams', trainResults.normParams ...
+                            'normParams', trainResults.normParams, ...
+                            'error', false ...  % エラーフラグ：正常
                         );
+                        validResultsCount = validResultsCount + 1;
         
-                        % モデル性能の総合スコアを計算
-                        performance = trainResults.performance.accuracy;
+                        % モデル性能の総合スコアを計算（早期停止用）
+                        testAccuracy = trainResults.performance.accuracy;
                         
                         % 検証精度データの取得
                         valAccuracy = 0;
                         if isfield(trainResults.trainInfo, 'hybridValMetrics') && ...
                            isfield(trainResults.trainInfo.hybridValMetrics, 'accuracy')
                             valAccuracy = trainResults.trainInfo.hybridValMetrics.accuracy;
-                        elseif isfield(trainResults.trainInfo.cnnHistory, 'ValidationAccuracy') && ...
-                           ~isempty(trainResults.trainInfo.cnnHistory.ValidationAccuracy)
+                        elseif isfield(trainResults.trainInfo, 'cnnHistory') && ...
+                               isfield(trainResults.trainInfo.cnnHistory, 'ValidationAccuracy') && ...
+                               ~isempty(trainResults.trainInfo.cnnHistory.ValidationAccuracy)
                             cnnValAcc = trainResults.trainInfo.cnnHistory.ValidationAccuracy;
                             lstmValAcc = trainResults.trainInfo.lstmHistory.ValidationAccuracy;
                             cnnValAcc = cnnValAcc(~isnan(cnnValAcc));
@@ -150,15 +176,23 @@ classdef HybridOptimizer < handle
                         f1Score = obj.calculateMeanF1Score(trainResults.performance);
                         
                         % 総合評価スコアの計算
-                        evaluationScore = obj.calculateTrialScore(performance, valAccuracy, f1Score, trainResults);
+                        evaluationScore = obj.calculateTrialScore(testAccuracy, valAccuracy, f1Score, trainResults);
         
-                        fprintf('組み合わせ %d/%d: テスト精度 = %.4f, 総合スコア = %.4f\n', ...
-                            i, size(paramSets, 1), performance, evaluationScore);
+                        obj.logMessage(1, '組み合わせ %d/%d: テスト精度 = %.4f, 総合スコア = %.4f\n', ...
+                            i, size(paramSets, 1), testAccuracy, evaluationScore);
+                        
+                        % GPUメモリの解放
+                        if obj.useGPU
+                            gpuDevice([]);
+                        end
         
                     catch ME
-                        warning('組み合わせ%dでエラー発生: %s', i, ME.message);
-                        fprintf('エラー詳細:\n');
-                        disp(getReport(ME, 'extended'));
+                        obj.logMessage(0, '組み合わせ%dでエラー発生: %s\n', i, ME.message);
+                        obj.logMessage(2, 'エラー詳細:\n');
+                        
+                        if obj.verbosity >= 2
+                            disp(getReport(ME, 'extended'));
+                        end
                         
                         % エラー発生時でも最低限のパラメータ情報は保存
                         trialResults{i} = struct(...
@@ -167,7 +201,26 @@ classdef HybridOptimizer < handle
                             'errorMessage', ME.message, ...
                             'performance', struct('accuracy', 0) ...
                         );
+        
+                        % GPUメモリの解放
+                        if obj.useGPU
+                            gpuDevice([]);
+                        end
                     end
+                end
+                
+                % 有効な結果がない場合のチェック
+                if validResultsCount == 0
+                    obj.logMessage(0, '\n警告: 有効な最適化結果がありません。すべての試行が失敗しました。\n');
+                    obj.logMessage(0, 'デフォルト設定を使用してハイブリッドモデルを生成します。\n');
+                    
+                    % デフォルト結果を生成して返す
+                    results = obj.createDefaultResults();
+                    results.isValid = false;  % これは有効な最適化結果ではないフラグ
+                    
+                    % 警告を出力して戻る
+                    warning('HybridOptimizer:NoValidResults', '有効な最適化結果がありません');
+                    return;
                 end
         
                 % 最良の結果を選択
@@ -185,21 +238,55 @@ classdef HybridOptimizer < handle
                     'performance', bestResults.performance, ...
                     'trainInfo', bestResults.trainInfo, ...
                     'overfitting', bestResults.overfitting, ...
-                    'normParams', bestResults.normParams ...
+                    'normParams', bestResults.normParams, ...
+                    'isValid', true ...  % これは正常な最適化結果フラグ
                 );
                 
-                fprintf('\n=== ハイブリッドモデル最適化が完了しました ===\n');
+                obj.logMessage(1, '\n=== ハイブリッドモデル最適化が完了しました ===\n');
         
             catch ME
-                fprintf('\n=== ハイブリッドモデル最適化中にエラーが発生しました ===\n');
-                fprintf('エラーメッセージ: %s\n', ME.message);
-                fprintf('エラースタック:\n');
-                disp(getReport(ME, 'extended'));
+                obj.logMessage(0, '\n=== ハイブリッドモデル最適化中にエラーが発生しました ===\n');
+                obj.logMessage(0, 'エラーメッセージ: %s\n', ME.message);
+                obj.logMessage(2, 'エラースタック:\n');
+                
+                if obj.verbosity >= 2
+                    disp(getReport(ME, 'extended'));
+                end
+                
+                % 致命的なエラーでもデフォルト結果を返す
+                obj.logMessage(0, '致命的なエラーが発生しました。デフォルト設定を使用します。\n');
+                results = obj.createDefaultResults();
+                results.isValid = false;  % 無効な結果フラグ
+                results.error = true;
+                results.errorMessage = ME.message;
+                
+                % エラーを再スローしない
+                warning('HybridOptimizer:OptimizationFailed', 'ハイブリッドモデル最適化に失敗: %s', ME.message);
+            end
+        end
+        
+        %% ログ出力メソッド
+        function logMessage(obj, level, format, varargin)
+            % 指定されたverbosityレベル以上の場合にメッセージを出力
+            %
+            % 入力:
+            %   level - メッセージの重要度 (0:エラー, 1:警告/通常, 2:情報, 3:デバッグ)
+            %   format - fprintf形式の文字列
+            %   varargin - 追加パラメータ
+            
+            if obj.verbosity >= level
+                fprintf(format, varargin{:});
             end
         end
     end
     
     methods (Access = private)
+        %% プロパティ初期化メソッド
+        function initializeProperties(obj)
+            % クラスプロパティの初期化
+            obj.gpuMemory = struct('total', 0, 'used', 0, 'peak', 0);
+        end
+        
         %% 探索空間初期化メソッド
         function initializeSearchSpace(obj)
             % パラメータ探索空間を設定
@@ -229,7 +316,7 @@ classdef HybridOptimizer < handle
             %
             % 入力:
             %   numTrials - 試行回数
-            %   algorithm - 探索アルゴリズム ('lhs', 'random', 'grid')
+            %   algorithm - 探索アルゴリズム
             %
             % 出力:
             %   paramSets - パラメータセット行列 [numTrials x 9]
@@ -239,7 +326,7 @@ classdef HybridOptimizer < handle
                 algorithm = 'lhs';  % デフォルトはLatin Hypercube Sampling
             end
             
-            fprintf('パラメータ探索アルゴリズム: %s\n', algorithm);
+            obj.logMessage(2, 'パラメータ探索アルゴリズム: %s\n', algorithm);
             
             switch lower(algorithm)
                 case 'lhs'  % Latin Hypercube Sampling
@@ -248,13 +335,12 @@ classdef HybridOptimizer < handle
                     paramSets = obj.generateRandomParams(numTrials);
                 case 'grid'  % グリッドサーチ
                     paramSets = obj.generateGridParams();
-                    numTrials = size(paramSets, 1);  % グリッドサイズに合わせる
                 otherwise
-                    warning('未知の探索アルゴリズム: %s。LHSにフォールバックします。', algorithm);
+                    obj.logMessage(1, '未知の探索アルゴリズム: %s。LHSにフォールバックします。\n', algorithm);
                     paramSets = obj.generateLHSParams(numTrials);
             end
             
-            fprintf('探索パラメータセット数: %d\n', size(paramSets, 1));
+            obj.logMessage(2, '探索パラメータセット数: %d\n', size(paramSets, 1));
             
             % パラメータセット品質チェック
             obj.validateParameterSets(paramSets);
@@ -266,16 +352,16 @@ classdef HybridOptimizer < handle
             
             % 無効な値のチェック
             if any(isnan(paramSets(:)))
-                warning('生成されたパラメータセットにNaN値が含まれています');
+                obj.logMessage(1, '警告: 生成されたパラメータセットにNaN値が含まれています\n');
             end
             
             if any(isinf(paramSets(:)))
-                warning('生成されたパラメータセットにInf値が含まれています');
+                obj.logMessage(1, '警告: 生成されたパラメータセットにInf値が含まれています\n');
             end
             
             % 範囲外のパラメータをチェック
             if any(paramSets(:,1) < obj.searchSpace.learningRate(1)) || any(paramSets(:,1) > obj.searchSpace.learningRate(2))
-                warning('学習率パラメータに範囲外の値があります');
+                obj.logMessage(1, '警告: 学習率パラメータに範囲外の値があります\n');
             end
             
             % パラメータの多様性をチェック
@@ -285,11 +371,11 @@ classdef HybridOptimizer < handle
             end
             
             if any(uniqueValues < 3) && size(paramSets, 1) >= 5
-                warning('一部のパラメータ次元で多様性が低いです（%d次元目: %d個のユニーク値）', ...
+                obj.logMessage(1, '警告: 一部のパラメータ次元で多様性が低いです（%d次元目: %d個のユニーク値）\n', ...
                     find(uniqueValues < 3, 1), uniqueValues(find(uniqueValues < 3, 1)));
             end
             
-            fprintf('パラメータセット検証完了\n');
+            obj.logMessage(2, 'パラメータセット検証完了\n');
         end
         
         %% LHS (Latin Hypercube Sampling) パラメータ生成
@@ -337,7 +423,7 @@ classdef HybridOptimizer < handle
             fc_range = obj.searchSpace.fcUnits;
             paramSets(:,9) = round(fc_range(1) + (fc_range(2)-fc_range(1)) * lhsPoints(:,9));
             
-            fprintf('Latin Hypercube Samplingによりパラメータセットを生成しました（%d組）\n', numTrials);
+            obj.logMessage(3, 'Latin Hypercube Samplingによりパラメータセットを生成しました（%d組）\n', numTrials);
         end
         
         %% ランダムサンプリングパラメータ生成
@@ -383,7 +469,7 @@ classdef HybridOptimizer < handle
             fc_range = obj.searchSpace.fcUnits;
             paramSets(:,9) = round(fc_range(1) + (fc_range(2)-fc_range(1)) * rand(numTrials, 1));
             
-            fprintf('ランダムサンプリングによりパラメータセットを生成しました（%d組）\n', numTrials);
+            obj.logMessage(3, 'ランダムサンプリングによりパラメータセットを生成しました（%d組）\n', numTrials);
         end
         
         %% グリッドサーチパラメータ生成
@@ -427,13 +513,13 @@ classdef HybridOptimizer < handle
             % 行列に変換
             paramSets = [LR(:), BS(:), NCL(:), CF(:), FS(:), LU(:), NL(:), DO(:), FC(:)];
             
-            % グリッド数が多すぎる場合は警告し、サブサンプリング
+            % グリッド数が多すぎる場合は警告
             if size(paramSets, 1) > 200
-                warning(['グリッドサーチのパラメータ数が非常に多いです (%d組)。' ...
+                obj.logMessage(1, ['グリッドサーチのパラメータ数が非常に多いです (%d組)。' ...
                     '最適化には長時間かかる可能性があります。'], size(paramSets, 1));
             end
             
-            fprintf('グリッドサーチによりパラメータセットを生成しました（%d組）\n', size(paramSets, 1));
+            obj.logMessage(3, 'グリッドサーチによりパラメータセットを生成しました（%d組）\n', size(paramSets, 1));
         end
         
         %% ハイブリッドパラメータ更新メソッド
@@ -456,6 +542,8 @@ classdef HybridOptimizer < handle
                 numConvLayers = round(paramSet(3));
                 cnnFilters = round(paramSet(4));
                 filterSize = round(paramSet(5));
+                
+                % 畳み込み層の構築
                 convLayers = struct();
                 for j = 1:numConvLayers
                     layerName = sprintf('conv%d', j);
@@ -467,11 +555,15 @@ classdef HybridOptimizer < handle
                 % 3. LSTMパラメータの更新
                 lstmUnits = round(paramSet(6));
                 numLstmLayers = round(paramSet(7));
+                
+                % LSTM層の構築
                 lstmLayers = struct();
                 for i = 1:numLstmLayers
                     if i == numLstmLayers
+                        % 最後の層は'last'出力モード
                         lstmLayers.(['lstm' num2str(i)]) = struct('numHiddenUnits', floor(lstmUnits/2), 'OutputMode', 'last');
                     else
+                        % 中間層は'sequence'出力モード
                         lstmLayers.(['lstm' num2str(i)]) = struct('numHiddenUnits', lstmUnits, 'OutputMode', 'sequence');
                     end
                 end
@@ -495,33 +587,31 @@ classdef HybridOptimizer < handle
                 params.classifier.hybrid.architecture.cnn.dropoutLayers = cnnDropoutLayers;
                 
                 % 5. 全結合層ユニット数の更新
-                params.classifier.hybrid.architecture.cnn.fullyConnected = [round(paramSet(9))];
-                params.classifier.hybrid.architecture.lstm.fullyConnected = [round(paramSet(9))];
+                fcUnits = round(paramSet(9));
+                params.classifier.hybrid.architecture.cnn.fullyConnected = fcUnits;
+                params.classifier.hybrid.architecture.lstm.fullyConnected = fcUnits;
                 
                 return;
                 
             catch ME
-                fprintf('パラメータ更新中にエラーが発生: %s\n', ME.message);
-                fprintf('エラー詳細:\n');
-                disp(getReport(ME, 'extended'));
-                rethrow(ME);
+                error('パラメータ更新中にエラーが発生: %s', ME.message);
             end
         end
         
         %% 現在のパラメータ表示メソッド
-        function displayCurrentParams(~, paramSet)
+        function displayCurrentParams(obj, paramSet)
             % 現在評価中のパラメータセットを表示
             
-            fprintf('\n評価対象のパラメータ構成:\n');
-            fprintf('  - 学習率: %.6f\n', paramSet(1));
-            fprintf('  - バッチサイズ: %d\n', paramSet(2));
-            fprintf('  - CNN層数: %d\n', paramSet(3));
-            fprintf('  - CNNフィルタ数: %d\n', paramSet(4));
-            fprintf('  - フィルタサイズ: %d\n', paramSet(5));
-            fprintf('  - LSTMユニット数: %d\n', paramSet(6));
-            fprintf('  - LSTM層数: %d\n', paramSet(7));
-            fprintf('  - ドロップアウト率: %.2f\n', paramSet(8));
-            fprintf('  - 全結合層ユニット数: %d\n', paramSet(9));
+            obj.logMessage(2, '評価対象のパラメータ構成:\n');
+            obj.logMessage(2, '  - 学習率: %.6f\n', paramSet(1));
+            obj.logMessage(2, '  - バッチサイズ: %d\n', paramSet(2));
+            obj.logMessage(2, '  - CNN層数: %d\n', paramSet(3));
+            obj.logMessage(2, '  - CNNフィルタ数: %d\n', paramSet(4));
+            obj.logMessage(2, '  - フィルタサイズ: %d\n', paramSet(5));
+            obj.logMessage(2, '  - LSTMユニット数: %d\n', paramSet(6));
+            obj.logMessage(2, '  - LSTM層数: %d\n', paramSet(7));
+            obj.logMessage(2, '  - ドロップアウト率: %.2f\n', paramSet(8));
+            obj.logMessage(2, '  - 全結合層ユニット数: %d\n', paramSet(9));
         end
         
         %% 平均F1スコア計算メソッド
@@ -538,7 +628,7 @@ classdef HybridOptimizer < handle
                     f1Score = mean(f1Scores);
                 end
             catch ME
-                fprintf('F1スコア計算でエラー: %s\n', ME.message);
+                % エラー時は0を返す
                 f1Score = 0;
             end
         end
@@ -561,27 +651,24 @@ classdef HybridOptimizer < handle
                 testWeight = obj.evaluationWeights.test;
                 valWeight = obj.evaluationWeights.validation;
                 
-                % 検証精度のスコア
+                % 検証精度のスコア計算
+                validationScore = testAccuracy; % デフォルトはテスト精度と同じ
                 if valAccuracy > 0
                     validationScore = valAccuracy;
                 else
                     % なければテスト精度のみで評価
-                    validationScore = testAccuracy;
                     valWeight = 0;
                 end
                 
                 % 基本スコアの計算
-                if testWeight + valWeight > 0
-                    accuracyScore = (testWeight * testAccuracy + valWeight * validationScore) / (testWeight + valWeight);
-                else
-                    accuracyScore = testAccuracy;
-                end
+                accuracyScore = (testWeight * testAccuracy + valWeight * validationScore) / (testWeight + valWeight);
                 
                 % 2. F1スコアの統合（クラス不均衡への対応）
-                combinedScore = accuracyScore;
                 if f1Score > 0
                     f1Weight = obj.evaluationWeights.f1Score;
                     combinedScore = (1 - f1Weight) * accuracyScore + f1Weight * f1Score;
+                else
+                    combinedScore = accuracyScore;
                 end
                 
                 % 3. 過学習ペナルティの計算
@@ -613,7 +700,6 @@ classdef HybridOptimizer < handle
                 end
                 
                 % 4. モデル複雑性ペナルティの計算
-                complexityPenalty = 0;
                 if isfield(results, 'params') && length(results.params) >= 9
                     % CNN複雑性の計算
                     cnnLayers = results.params(3);
@@ -647,6 +733,7 @@ classdef HybridOptimizer < handle
                     complexityPenalty = obj.evaluationWeights.complexity * complexityScore;
                 else
                     % paramsフィールドがない場合はデフォルト値を使用
+                    obj.logMessage(3, '  注意: 結果の複雑性計算に必要なパラメータがありません。デフォルト値を使用します。\n');
                     complexityPenalty = 0.05; % デフォルトの中程度の複雑性ペナルティ
                 end
                 
@@ -654,18 +741,19 @@ classdef HybridOptimizer < handle
                 score = combinedScore * (1 - overfitPenalty - complexityPenalty);
                 
                 % 詳細なスコア計算ログ出力（デバッグ用）
-                fprintf('スコア計算詳細:\n');
-                fprintf('  - テスト精度: %.4f (重み: %.2f)\n', testAccuracy, testWeight);
-                fprintf('  - 検証スコア: %.4f (重み: %.2f)\n', validationScore, valWeight);
-                fprintf('  - F1スコア: %.4f (重み: %.2f)\n', f1Score, obj.evaluationWeights.f1Score);
-                fprintf('  - 基本精度スコア: %.4f\n', accuracyScore);
-                fprintf('  - 複合精度スコア: %.4f\n', combinedScore);
-                fprintf('  - 過学習ペナルティ: %.4f\n', overfitPenalty);
-                fprintf('  - 複雑性ペナルティ: %.4f\n', complexityPenalty);
-                fprintf('  - 最終スコア: %.4f\n', score);
+                obj.logMessage(3, 'スコア計算詳細:\n');
+                obj.logMessage(3, '  - テスト精度: %.4f (重み: %.2f)\n', testAccuracy, testWeight);
+                obj.logMessage(3, '  - 検証スコア: %.4f (重み: %.2f)\n', validationScore, valWeight);
+                obj.logMessage(3, '  - F1スコア: %.4f (重み: %.2f)\n', f1Score, obj.evaluationWeights.f1Score);
+                obj.logMessage(3, '  - 基本精度スコア: %.4f\n', accuracyScore);
+                obj.logMessage(3, '  - 複合精度スコア: %.4f\n', combinedScore);
+                obj.logMessage(3, '  - 過学習ペナルティ: %.4f\n', overfitPenalty);
+                obj.logMessage(3, '  - 複雑性ペナルティ: %.4f\n', complexityPenalty);
+                obj.logMessage(3, '  - 最終スコア: %.4f\n', score);
                 
             catch ME
-                fprintf('スコア計算でエラー: %s\n', ME.message);
+                obj.logMessage(1, 'スコア計算でエラー: %s\n', ME.message);
+                score = 0;
             end
         end
 
@@ -674,36 +762,46 @@ classdef HybridOptimizer < handle
             % 全ての試行結果を処理し、最良のモデルを選択
             
             try
-                fprintf('\n=== パラメータ最適化の結果処理 ===\n');
-                fprintf('総試行回数: %d\n', length(results));
+                obj.logMessage(1, '\n=== パラメータ最適化の結果処理 ===\n');
+                obj.logMessage(1, '総試行回数: %d\n', length(results));
                 
                 % 有効な結果のみを抽出
                 validResults = results(~cellfun(@isempty, results));
-                % エラーフラグのない結果のみを有効とする
-                validResultsNoError = validResults(~cellfun(@(x) isfield(x, 'error') && x.error, validResults));
-                numResults = length(validResultsNoError);
+                numResults = length(validResults);
                 
-                fprintf('有効なパラメータセット数: %d\n', numResults);
-                fprintf('無効な試行数: %d\n', length(results) - numResults);
+                obj.logMessage(1, '有効なパラメータセット数: %d\n', numResults);
+                obj.logMessage(1, '無効な試行数: %d\n', length(results) - numResults);
                 
-                % 結果がない場合のエラー処理 - 修正: 通常の空の結果を返す
-                if numResults == 0
-                    fprintf('有効な結果がありません。最初の結果を使用します。\n');
-                    if ~isempty(validResults)
-                        bestResults = validResults{1};
-                    else
-                        bestResults = struct(...
-                            'model', [], ...
-                            'performance', struct('accuracy', 0), ...
-                            'trainInfo', struct('cnnHistory', struct(), 'lstmHistory', struct()), ...
-                            'overfitting', struct('severity', 'unknown'), ...
-                            'normParams', [] ...
-                        );
+                % 有効結果チェック
+                validModelCount = 0;
+                for i = 1:numResults
+                    if ~isfield(validResults{i}, 'error') || ~validResults{i}.error
+                        if isfield(validResults{i}, 'model') && ~isempty(validResults{i}.model)
+                            validModelCount = validModelCount + 1;
+                        end
                     end
+                end
+                
+                % 結果がない場合のエラー処理
+                if validModelCount == 0
+                    obj.logMessage(0, '有効なモデル結果がありません。デフォルト値を使用します。\n');
                     
+                    % デフォルト結果の構造体
+                    bestResults = struct(...
+                        'model', [], ...
+                        'performance', struct('accuracy', 0), ...
+                        'trainInfo', struct('cnnHistory', struct(), 'lstmHistory', struct()), ...
+                        'overfitting', struct('severity', 'unknown'), ...
+                        'normParams', [], ...
+                        'params', [], ...
+                        'isValid', false ...  % 有効な結果ではない
+                    );
+                    
+                    % サマリー情報の初期化
                     summary = struct(...
                         'total_trials', length(results), ...
-                        'valid_trials', length(validResults), ...
+                        'valid_trials', numResults, ...
+                        'valid_models', validModelCount, ...
                         'overfit_models', 0, ...
                         'best_accuracy', 0, ...
                         'worst_accuracy', 0, ...
@@ -719,387 +817,405 @@ classdef HybridOptimizer < handle
                         'fc_units', [] ...
                     );
                     
-                    fprintf('警告: 有効な結果がないため、デフォルト値を返します。\n');
                     return;
                 end
                 
-                % 評価結果保存用の変数
+                % 評価結果保存用の変数 - 事前に配列を割り当て
                 modelScores = zeros(numResults, 1);
                 testAccuracies = zeros(numResults, 1);
                 valAccuracies = zeros(numResults, 1);
-                f1Scores = zeros(numResults, 1);
+                f1Scores = zeros(numResults, 1); 
                 overfitPenalties = zeros(numResults, 1);
                 complexityPenalties = zeros(numResults, 1);
-                isOverfitFlags = false(numResults, 1);
+                validIndices = zeros(numResults, 1);
                 
                 % サマリー情報の初期化
                 summary = struct(...
                     'total_trials', length(results), ...
                     'valid_trials', numResults, ...
+                    'valid_models', validModelCount, ...
                     'overfit_models', 0, ...
                     'best_accuracy', 0, ...
                     'worst_accuracy', 1, ...
                     'mean_accuracy', 0, ...
-                    'learning_rates', [], ...
-                    'batch_sizes', [], ...
-                    'num_conv_layers', [], ...
-                    'cnn_filters', [], ...
-                    'filter_sizes', [], ...
-                    'lstm_units', [], ...
-                    'num_lstm_layers', [], ...
-                    'dropout_rates', [], ...
-                    'fc_units', [] ...
+                    'learning_rates', zeros(1, numResults), ...
+                    'batch_sizes', zeros(1, numResults), ...
+                    'num_conv_layers', zeros(1, numResults), ...
+                    'cnn_filters', zeros(1, numResults), ...
+                    'filter_sizes', zeros(1, numResults), ...
+                    'lstm_units', zeros(1, numResults), ...
+                    'num_lstm_layers', zeros(1, numResults), ...
+                    'dropout_rates', zeros(1, numResults), ...
+                    'fc_units', zeros(1, numResults) ...
                 );
                 
-                fprintf('\n=== 各試行の詳細評価 ===\n');
-                validIndices = []; % 有効な結果のインデックスを保存する配列（修正）
-                validScores = []; % 有効なスコアを保存する配列（修正）
+                % 有効な結果数を追跡するカウンタ
+                validCount = 0;
                 
+                obj.logMessage(2, '\n=== 各試行の詳細評価 ===\n');
                 for i = 1:numResults
-                    result = validResultsNoError{i};
-                    
+                    result = validResults{i};
                     try
-                        if ~isempty(result) && isfield(result, 'model') && ~isempty(result.model) && ...
-                           isfield(result, 'performance') && ~isempty(result.performance)
-                            
-                            % 基本的な精度スコア
-                            testAccuracy = result.performance.accuracy;
-                            testAccuracies(i) = testAccuracy;
-                            
-                            % 検証精度の取得
-                            valAccuracy = 0;
-                            if isfield(result.trainInfo, 'hybridValMetrics') && ...
-                               isfield(result.trainInfo.hybridValMetrics, 'accuracy')
-                                valAccuracy = result.trainInfo.hybridValMetrics.accuracy;
-                            elseif isfield(result.trainInfo, 'cnnHistory') && ...
+                        % エラーチェック
+                        if isfield(result, 'error') && result.error
+                            obj.logMessage(2, '\n--- パラメータセット %d/%d: エラーあり (%s) ---\n', ...
+                                i, numResults, result.errorMessage);
+                            continue;
+                        end
+                        
+                        % モデルと性能データの存在確認
+                        if ~isfield(result, 'model') || isempty(result.model)
+                            obj.logMessage(2, '\n--- パラメータセット %d/%d: モデルが空または存在しません ---\n', i, numResults);
+                            continue;
+                        end
+                        
+                        if ~isfield(result, 'performance') || isempty(result.performance)
+                            obj.logMessage(2, '\n--- パラメータセット %d/%d: パフォーマンスデータが空または存在しません ---\n', i, numResults);
+                            continue;
+                        end
+                    
+                        % 基本的な精度スコア
+                        testAccuracy = result.performance.accuracy;
+                        
+                        % 検証精度の取得
+                        valAccuracy = 0;
+                        if isfield(result, 'trainInfo') && isfield(result.trainInfo, 'hybridValMetrics') && ...
+                           isfield(result.trainInfo.hybridValMetrics, 'accuracy')
+                            valAccuracy = result.trainInfo.hybridValMetrics.accuracy;
+                        elseif isfield(result, 'trainInfo') && isfield(result.trainInfo, 'cnnHistory') && ...
                                isfield(result.trainInfo.cnnHistory, 'ValidationAccuracy') && ...
                                ~isempty(result.trainInfo.cnnHistory.ValidationAccuracy)
-                                cnnValAcc = result.trainInfo.cnnHistory.ValidationAccuracy;
-                                lstmValAcc = result.trainInfo.lstmHistory.ValidationAccuracy;
-                                cnnValAcc = cnnValAcc(~isnan(cnnValAcc));
-                                lstmValAcc = lstmValAcc(~isnan(lstmValAcc));
-                                
-                                % 両モデルの検証精度の平均を計算（利用可能な場合のみ）
-                                if ~isempty(cnnValAcc) && ~isempty(lstmValAcc)
-                                    meanCnnValAcc = mean(cnnValAcc(max(1, end-5):end)); % 最後の5エポックの平均
-                                    meanLstmValAcc = mean(lstmValAcc(max(1, end-5):end));
-                                    valAccuracy = (meanCnnValAcc + meanLstmValAcc) / 2;
-                                elseif ~isempty(cnnValAcc)
-                                    valAccuracy = mean(cnnValAcc(max(1, end-5):end));
-                                elseif ~isempty(lstmValAcc)
-                                    valAccuracy = mean(lstmValAcc(max(1, end-5):end));
-                                end
+                            cnnValAcc = result.trainInfo.cnnHistory.ValidationAccuracy;
+                            lstmValAcc = result.trainInfo.lstmHistory.ValidationAccuracy;
+                            cnnValAcc = cnnValAcc(~isnan(cnnValAcc));
+                            lstmValAcc = lstmValAcc(~isnan(lstmValAcc));
+                            
+                            % 両モデルの検証精度の平均を計算（利用可能な場合のみ）
+                            if ~isempty(cnnValAcc) && ~isempty(lstmValAcc)
+                                meanCnnValAcc = mean(cnnValAcc(max(1, end-30):end)); % 最後の30エポックの平均
+                                meanLstmValAcc = mean(lstmValAcc(max(1, end-30):end));
+                                valAccuracy = (meanCnnValAcc + meanLstmValAcc) / 2;
+                            elseif ~isempty(cnnValAcc)
+                                valAccuracy = mean(cnnValAcc(max(1, end-30):end));
+                            elseif ~isempty(lstmValAcc)
+                                valAccuracy = mean(lstmValAcc(max(1, end-30):end));
                             end
-                            
-                            valAccuracies(i) = valAccuracy;
-                            
-                            % F1スコアの計算
-                            f1Score = obj.calculateMeanF1Score(result.performance);
-                            f1Scores(i) = f1Score;
-                            
-                            % 過学習ペナルティ計算
-                            overfitPenalty = 0;
-                            severity = 'none';
-                            
-                            if isfield(result, 'overfitting')
-                                % 動的な過学習ペナルティ計算
-                                if isfield(result.overfitting, 'performanceGap')
-                                    % 検証-テスト間のギャップに基づく動的ペナルティ
-                                    perfGap = result.overfitting.performanceGap / 100; % パーセントから小数に
-                                    overfitPenalty = min(obj.evaluationWeights.overfitMax, perfGap);
-                                else
-                                    % 既存の重大度ベースのペナルティをフォールバックとして使用
-                                    if isfield(result.overfitting, 'severity')
-                                        severity = result.overfitting.severity;
-                                        switch severity
-                                            case 'critical'
-                                                overfitPenalty = 0.5;  % 50%ペナルティ
-                                            case 'severe'
-                                                overfitPenalty = 0.3;  % 30%ペナルティ
-                                            case 'moderate'
-                                                overfitPenalty = 0.2;  % 20%ペナルティ
-                                            case 'mild'
-                                                overfitPenalty = 0.1;  % 10%ペナルティ
-                                            otherwise
-                                                overfitPenalty = 0;    % ペナルティなし
-                                        end
+                        end
+                        
+                        % F1スコアの計算
+                        f1Score = obj.calculateMeanF1Score(result.performance);
+                        
+                        % 過学習ペナルティ計算
+                        overfitPenalty = 0;
+                        if isfield(result, 'overfitting')
+                            % 動的な過学習ペナルティ計算
+                            if isfield(result.overfitting, 'performanceGap')
+                                % 検証-テスト間のギャップに基づく動的ペナルティ
+                                perfGap = result.overfitting.performanceGap / 100; % パーセントから小数に
+                                overfitPenalty = min(obj.evaluationWeights.overfitMax, perfGap);
+                            else
+                                % 既存の重大度ベースのペナルティをフォールバックとして使用
+                                if isfield(result.overfitting, 'severity')
+                                    severity = result.overfitting.severity;
+                                    switch severity
+                                        case 'critical'
+                                            overfitPenalty = 0.5;  % 50%ペナルティ
+                                        case 'severe'
+                                            overfitPenalty = 0.3;  % 30%ペナルティ
+                                        case 'moderate'
+                                            overfitPenalty = 0.2;  % 20%ペナルティ
+                                        case 'mild'
+                                            overfitPenalty = 0.1;  % 10%ペナルティ
+                                        otherwise
+                                            overfitPenalty = 0;    % ペナルティなし
                                     end
                                 end
                             end
-                            
-                            overfitPenalties(i) = overfitPenalty;
-                            
-                            % モデル複雑性ペナルティ
-                            complexityPenalty = 0.05; % デフォルト値
-                            if isfield(result, 'params') && length(result.params) >= 9
-                                % CNN複雑性の計算
-                                cnnLayers = result.params(3);
-                                cnnFilters = result.params(4);
-                                
-                                % LSTM複雑性の計算
-                                lstmLayers = result.params(7);
-                                lstmUnits = result.params(6);
-                                
-                                % 全結合層複雑性
-                                fcUnits = result.params(9);
-                                
-                                % 探索空間の最大値を参照して相対的な複雑さを計算
-                                maxCnnLayers = obj.searchSpace.numConvLayers(2);
-                                maxCnnFilters = obj.searchSpace.cnnFilters(2);
-                                maxLstmLayers = obj.searchSpace.numLstmLayers(2);
-                                maxLstmUnits = obj.searchSpace.lstmUnits(2);
-                                maxFcUnits = obj.searchSpace.fcUnits(2);
-                                
-                                % CNN複雑性スコア
-                                cnnComplexity = 0.5 * (cnnLayers / maxCnnLayers) + 0.5 * (cnnFilters / maxCnnFilters);
-                                
-                                % LSTM複雑性スコア
-                                lstmComplexity = 0.5 * (lstmLayers / maxLstmLayers) + 0.5 * (lstmUnits / maxLstmUnits);
-                                
-                                % 全結合層複雑性スコア
-                                fcComplexity = fcUnits / maxFcUnits;
-                                
-                                % 総合複雑性スコア
-                                complexityScore = 0.4 * cnnComplexity + 0.4 * lstmComplexity + 0.2 * fcComplexity;
-                                complexityPenalty = obj.evaluationWeights.complexity * complexityScore;
-                            end
-                            
-                            complexityPenalties(i) = complexityPenalty;
-                            
-                            % 総合スコアの計算
-                            score = obj.calculateTrialScore(testAccuracy, valAccuracy, f1Score, result);
-                            modelScores(i) = score;
-                            
-                            % 修正: 有効なスコアと結果インデックスを追加
-                            validIndices = [validIndices, i];
-                            validScores = [validScores, score];
-                            
-                            % 過学習フラグの設定 - 修正: 直接 isOverfitFlags を使用
-                            if isOverfitFlags(i)
-                                summary.overfit_models = summary.overfit_models + 1;
-                            end
-                            
-                            % サマリー情報の更新
-                            if isfield(result, 'params') && length(result.params) >= 9
-                                summary.learning_rates(end+1) = result.params(1);
-                                summary.batch_sizes(end+1) = result.params(2);
-                                summary.num_conv_layers(end+1) = result.params(3);
-                                summary.cnn_filters(end+1) = result.params(4);
-                                summary.filter_sizes(end+1) = result.params(5);
-                                summary.lstm_units(end+1) = result.params(6);
-                                summary.num_lstm_layers(end+1) = result.params(7);
-                                summary.dropout_rates(end+1) = result.params(8);
-                                summary.fc_units(end+1) = result.params(9);
-                            end
-                            
-                            % 結果の詳細表示
-                            fprintf('\n--- パラメータセット %d/%d ---\n', i, numResults);
-                            fprintf('性能指標:\n');
-                            fprintf('  - テスト精度: %.4f\n', testAccuracy);
-                            
-                            if valAccuracy > 0
-                                fprintf('  - 検証精度: %.4f\n', valAccuracy);
-                            end
-                            
-                            if f1Score > 0
-                                fprintf('  - 平均F1スコア: %.4f\n', f1Score);
-                            end
-                            
-                            fprintf('  - 過学習判定: %s\n', string(isOverfitFlags(i)));
-                            fprintf('  - 重大度: %s\n', severity);
-                            
-                            fprintf('複合スコア:\n');
-                            fprintf('  - 過学習ペナルティ: %.2f\n', overfitPenalty);
-                            fprintf('  - 複雑性ペナルティ: %.2f\n', complexityPenalty);
-                            fprintf('  - 最終スコア: %.4f\n', score);
-                            
-                            % 構造情報
-                            fprintf('モデル構造:\n');
-                            fprintf('  - CNN層数: %d\n', round(result.params(3)));
-                            fprintf('  - LSTM層数: %d\n', round(result.params(7)));
-                            fprintf('  - 総パラメータ数: 約 %dk\n', round((cnnFilters * 5 * 5 * cnnLayers + lstmUnits * lstmUnits * 4 * lstmLayers + fcUnits * (cnnFilters + lstmUnits))/1000));
-                        else
-                            fprintf('\n--- パラメータセット %d/%d: 有効なモデルがありません ---\n', i, numResults);
                         end
+                        
+                        % モデル複雑性ペナルティ
+                        complexityPenalty = 0.05; % デフォルト値
+                        if isfield(result, 'params') && length(result.params) >= 9
+                            % CNN複雑性の計算
+                            cnnLayers = result.params(3);
+                            cnnFilters = result.params(4);
+                            
+                            % LSTM複雑性の計算
+                            lstmLayers = result.params(7);
+                            lstmUnits = result.params(6);
+                            
+                            % 全結合層複雑性
+                            fcUnits = result.params(9);
+                            
+                            % 探索空間の最大値を参照して相対的な複雑さを計算
+                            maxCnnLayers = obj.searchSpace.numConvLayers(2);
+                            maxCnnFilters = obj.searchSpace.cnnFilters(2);
+                            maxLstmLayers = obj.searchSpace.numLstmLayers(2);
+                            maxLstmUnits = obj.searchSpace.lstmUnits(2);
+                            maxFcUnits = obj.searchSpace.fcUnits(2);
+                            
+                            % CNN複雑性スコア
+                            cnnComplexity = 0.5 * (cnnLayers / maxCnnLayers) + 0.5 * (cnnFilters / maxCnnFilters);
+                            
+                            % LSTM複雑性スコア
+                            lstmComplexity = 0.5 * (lstmLayers / maxLstmLayers) + 0.5 * (lstmUnits / maxLstmUnits);
+                            
+                            % 全結合層複雑性スコア
+                            fcComplexity = fcUnits / maxFcUnits;
+                            
+                            % 総合複雑性スコア
+                            complexityScore = 0.4 * cnnComplexity + 0.4 * lstmComplexity + 0.2 * fcComplexity;
+                            complexityPenalty = obj.evaluationWeights.complexity * complexityScore;
+                        else
+                            obj.logMessage(3, '  試行 %d: パラメータ情報がないため、デフォルトの複雑性ペナルティを適用します\n', i);
+                        end
+                        
+                        % 総合スコアの計算
+                        score = obj.calculateTrialScore(testAccuracy, valAccuracy, f1Score, result);
+                        
+                        % 配列に追加（カウンタを使用してサイズ変更を回避）
+                        validCount = validCount + 1;
+                        testAccuracies(validCount) = testAccuracy;
+                        valAccuracies(validCount) = valAccuracy;
+                        f1Scores(validCount) = f1Score;
+                        overfitPenalties(validCount) = overfitPenalty;
+                        complexityPenalties(validCount) = complexityPenalty;
+                        modelScores(validCount) = score;
+                        validIndices(validCount) = i;
+                        
+                        % 過学習フラグの設定
+                        severity = 'none';
+                        if isfield(result, 'overfitting') && isfield(result.overfitting, 'severity')
+                            severity = result.overfitting.severity;
+                        end
+                        isOverfit = ismember(severity, {'critical', 'severe', 'moderate'});
+                        if isOverfit
+                            summary.overfit_models = summary.overfit_models + 1;
+                        end
+                        
+                        % サマリー情報の更新
+                        if isfield(result, 'params') && length(result.params) >= 9
+                            summary.learning_rates(validCount) = result.params(1);
+                            summary.batch_sizes(validCount) = result.params(2);
+                            summary.num_conv_layers(validCount) = result.params(3);
+                            summary.cnn_filters(validCount) = result.params(4);
+                            summary.filter_sizes(validCount) = result.params(5);
+                            summary.lstm_units(validCount) = result.params(6);
+                            summary.num_lstm_layers(validCount) = result.params(7);
+                            summary.dropout_rates(validCount) = result.params(8);
+                            summary.fc_units(validCount) = result.params(9);
+                        end
+                        
+                        % 結果の詳細表示（verbosity >= 2）
+                        obj.logMessage(2, '\n--- パラメータセット %d/%d ---\n', i, numResults);
+                        obj.logMessage(2, '性能指標:\n');
+                        obj.logMessage(2, '  - テスト精度: %.4f\n', testAccuracy);
+                        
+                        if valAccuracy > 0
+                            obj.logMessage(2, '  - 検証精度: %.4f\n', valAccuracy);
+                        end
+                        
+                        if f1Score > 0
+                            obj.logMessage(2, '  - 平均F1スコア: %.4f\n', f1Score);
+                        end
+                        
+                        obj.logMessage(2, '  - 過学習判定: %s\n', string(isOverfit));
+                        obj.logMessage(2, '  - 重大度: %s\n', severity);
+                        
+                        obj.logMessage(2, '複合スコア:\n');
+                        obj.logMessage(2, '  - 過学習ペナルティ: %.2f\n', overfitPenalty);
+                        obj.logMessage(2, '  - 複雑性ペナルティ: %.2f\n', complexityPenalty);
+                        obj.logMessage(2, '  - 最終スコア: %.4f\n', score);
                     catch ME
-                        fprintf('\n--- パラメータセット %d/%d の評価中にエラーが発生: %s ---\n', i, numResults, ME.message);
-                        fprintf('スタックトレース:\n');
-                        disp(getReport(ME, 'extended'));
+                        obj.logMessage(1, '\n--- パラメータセット %d/%d の評価中にエラーが発生: %s ---\n', i, numResults, ME.message);
                     end
                 end
                 
-                % 有効な結果がない場合はエラーを返す - 修正: validScoresの確認に変更
-                if isempty(validScores)
-                    fprintf('有効な評価結果がありません。最初の有効な結果を使用します。\n');
+                % 使用した有効な結果数に配列サイズを調整
+                if validCount > 0
+                    testAccuracies = testAccuracies(1:validCount);
+                    valAccuracies = valAccuracies(1:validCount);
+                    f1Scores = f1Scores(1:validCount);
+                    overfitPenalties = overfitPenalties(1:validCount);
+                    complexityPenalties = complexityPenalties(1:validCount);
+                    modelScores = modelScores(1:validCount);
+                    validIndices = validIndices(1:validCount);
                     
-                    % 有効な結果が1つでもあれば使用
-                    if ~isempty(validResultsNoError)
-                        bestResults = validResultsNoError{1};
-                    else
-                        bestResults = struct(...
-                            'model', [], ...
-                            'performance', struct('accuracy', 0), ...
-                            'trainInfo', struct('cnnHistory', struct(), 'lstmHistory', struct()), ...
-                            'overfitting', struct('severity', 'unknown'), ...
-                            'normParams', [] ...
-                        );
-                    end
+                    summary.learning_rates = summary.learning_rates(1:validCount);
+                    summary.batch_sizes = summary.batch_sizes(1:validCount);
+                    summary.num_conv_layers = summary.num_conv_layers(1:validCount);
+                    summary.cnn_filters = summary.cnn_filters(1:validCount);
+                    summary.filter_sizes = summary.filter_sizes(1:validCount);
+                    summary.lstm_units = summary.lstm_units(1:validCount);
+                    summary.num_lstm_layers = summary.num_lstm_layers(1:validCount);
+                    summary.dropout_rates = summary.dropout_rates(1:validCount);
+                    summary.fc_units = summary.fc_units(1:validCount);
+                end
+                
+                % 有効な結果がない場合
+                if validCount == 0
+                    obj.logMessage(0, '有効な評価結果がありません。デフォルト設定を使用します。\n');
+                    
+                    % デフォルト結果の構築
+                    bestResults = struct(...
+                        'model', [], ...
+                        'performance', struct('accuracy', 0), ...
+                        'trainInfo', struct('cnnHistory', struct(), 'lstmHistory', struct()), ...
+                        'overfitting', struct('severity', 'unknown'), ...
+                        'normParams', [], ...
+                        'params', [], ...
+                        'isValid', false  ... % 有効な結果ではない
+                    );
                     
                     return;
                 end
                 
                 % 統計サマリーの計算
                 if ~isempty(testAccuracies)
-                    validTestAcc = testAccuracies(testAccuracies > 0);
-                    if ~isempty(validTestAcc)
-                        summary.best_accuracy = max(validTestAcc);
-                        summary.worst_accuracy = min(validTestAcc);
-                        summary.mean_accuracy = mean(validTestAcc);
-                    end
+                    summary.best_accuracy = max(testAccuracies);
+                    summary.worst_accuracy = min(testAccuracies);
+                    summary.mean_accuracy = mean(testAccuracies);
                 end
                 
                 % モデル選択の詳細情報
-                fprintf('\n=== モデルスコアの分布 ===\n');
-                if ~isempty(validScores)
-                    scorePercentiles = prctile(validScores, [0, 25, 50, 75, 100]);
-                    fprintf('  - 最小値: %.4f\n', scorePercentiles(1));
-                    fprintf('  - 25パーセンタイル: %.4f\n', scorePercentiles(2));
-                    fprintf('  - 中央値: %.4f\n', scorePercentiles(3));
-                    fprintf('  - 75パーセンタイル: %.4f\n', scorePercentiles(4));
-                    fprintf('  - 最大値: %.4f\n', scorePercentiles(5));
+                obj.logMessage(1, '\n=== モデルスコアの分布 ===\n');
+                if ~isempty(modelScores)
+                    scorePercentiles = prctile(modelScores, [0, 25, 50, 75, 100]);
+                    obj.logMessage(1, '  - 最小値: %.4f\n', scorePercentiles(1));
+                    obj.logMessage(1, '  - 25パーセンタイル: %.4f\n', scorePercentiles(2));
+                    obj.logMessage(1, '  - 中央値: %.4f\n', scorePercentiles(3));
+                    obj.logMessage(1, '  - 75パーセンタイル: %.4f\n', scorePercentiles(4));
+                    obj.logMessage(1, '  - 最大値: %.4f\n', scorePercentiles(5));
                 end
                 
-                % 最良モデル選択戦略
-                fprintf('\n=== 最良モデル選択戦略 ===\n');
-                fprintf('過学習モデル数: %d/%d (%.1f%%)\n', ...
-                    summary.overfit_models, numResults, (summary.overfit_models/max(numResults, 1))*100);
-                
-                % 修正: validIndicesが空の場合のチェックを追加
-                if isempty(validIndices)
-                    fprintf('有効な評価結果がありません。最初の有効な結果を使用します。\n');
-                    bestResults = validResultsNoError{1};
-                    return;
-                end
-                
-                % 過学習していないモデルがあるかをチェック
-                nonOverfitIndices = find(~isOverfitFlags);
-                nonOverfitIndices = nonOverfitIndices(ismember(nonOverfitIndices, validIndices));
-                
-                % 選択方法の決定
-                if ~isempty(nonOverfitIndices) && length(nonOverfitIndices) >= 3
-                    fprintf('過学習していないモデルが十分にあります。これらから最良モデルを選択します。\n');
-                    nonOverfitScores = modelScores(nonOverfitIndices);
-                    [bestNonOverfitScore, localIdx] = max(nonOverfitScores);
-                    bestIdx = nonOverfitIndices(localIdx);
-                    fprintf('非過学習モデルから選択 - 最良スコア: %.4f\n', bestNonOverfitScore);
+                % 最良モデルの選択（最高スコア）
+                [bestScore, bestLocalIdx] = max(modelScores);
+                if ~isempty(bestLocalIdx) && bestLocalIdx <= length(validIndices)
+                    bestIdx = validIndices(bestLocalIdx);
+                    bestResults = validResults{bestIdx};
+                    bestResults.isValid = true;  % これは正常な最適化結果
                     
-                    % 全体最良スコアとの比較
-                    [globalBestScore, globalBestIdx] = max(modelScores);
-                    if globalBestScore > bestNonOverfitScore * 1.05 % 5%以上の差がある場合
-                        fprintf('警告: 過学習モデルにより高いスコア (%.4f, +%.1f%%) があります\n', ...
-                            globalBestScore, (globalBestScore/bestNonOverfitScore-1)*100);
+                    obj.logMessage(1, '\n最良モデル選択 (インデックス: %d)\n', bestIdx);
+                    obj.logMessage(1, '  - 最終スコア: %.4f\n', bestScore);
+                    obj.logMessage(1, '  - テスト精度: %.4f\n', testAccuracies(bestLocalIdx));
+                    
+                    % 検証精度の表示部分を修正
+                    if bestLocalIdx <= length(valAccuracies) && valAccuracies(bestLocalIdx) > 0
+                        obj.logMessage(1, '  - 検証精度: %.4f\n', valAccuracies(bestLocalIdx));
                     end
-                else
-                    fprintf('過学習していないモデルが不足しています。全モデルから最良を選択します。\n');
-                    [~, bestIdx] = max(modelScores);
                     
-                    if isOverfitFlags(bestIdx)
-                        fprintf('警告: 選択された最良モデルは過学習の兆候があります\n');
+                    if bestLocalIdx <= length(f1Scores) && f1Scores(bestLocalIdx) > 0
+                        obj.logMessage(1, '  - 平均F1スコア: %.4f\n', f1Scores(bestLocalIdx));
                     end
-                end
-                
-                % 最良モデルの選択
-                bestResults = validResultsNoError{bestIdx};
-                
-                fprintf('\n最良モデル選択 (インデックス: %d)\n', bestIdx);
-                fprintf('  - 最終スコア: %.4f\n', modelScores(bestIdx));
-                fprintf('  - テスト精度: %.4f\n', testAccuracies(bestIdx));
-                
-                if bestIdx <= length(valAccuracies) && valAccuracies(bestIdx) > 0
-                    fprintf('  - 検証精度: %.4f\n', valAccuracies(bestIdx));
-                end
-                
-                if bestIdx <= length(f1Scores) && f1Scores(bestIdx) > 0
-                    fprintf('  - 平均F1スコア: %.4f\n', f1Scores(bestIdx));
-                end
-                
-                if bestIdx <= length(overfitPenalties)
-                    fprintf('  - 過学習ペナルティ: %.2f\n', overfitPenalties(bestIdx));
-                end
-                
-                if bestIdx <= length(complexityPenalties)
-                    fprintf('  - 複雑性ペナルティ: %.2f\n', complexityPenalties(bestIdx));
-                end
-                
-                % 最良パラメータの保存
-                if isfield(bestResults, 'params')
-                    obj.bestParams = bestResults.params;
-                    obj.bestPerformance = modelScores(bestIdx);
-                    obj.optimizedModel = bestResults.model;
                     
-                    % 上位モデルのパラメータ傾向分析
-                    topN = min(5, length(validIndices));
-                    if topN > 0
-                        [~, sortedIdxList] = sort(modelScores, 'descend');
-                        topLocalIndices = sortedIdxList(1:topN);
-                        topIndices = intersect(topLocalIndices, validIndices);
-                        
-                        % パラメータ情報のあるモデルを集計
-                        top_params = [];
-                        valid_top_count = 0;
-                        
-                        for j = 1:length(topIndices)
-                            if isfield(validResultsNoError{topIndices(j)}, 'params') && ...
-                               length(validResultsNoError{topIndices(j)}.params) >= 9
-                                valid_top_count = valid_top_count + 1;
-                                top_params(valid_top_count, :) = validResultsNoError{topIndices(j)}.params;
+                    if bestLocalIdx <= length(overfitPenalties)
+                        obj.logMessage(1, '  - 過学習ペナルティ: %.2f\n', overfitPenalties(bestLocalIdx));
+                    end
+                    
+                    if bestLocalIdx <= length(complexityPenalties)
+                        obj.logMessage(1, '  - 複雑性ペナルティ: %.2f\n', complexityPenalties(bestLocalIdx));
+                    end
+                    
+                    % 最良パラメータの保存
+                    if isfield(bestResults, 'params')
+                        obj.bestParams = bestResults.params;
+                        obj.bestPerformance = bestScore;
+                        obj.optimizedModel = bestResults.model;
+        
+                        % 上位モデルのパラメータ傾向分析
+                        topN = min(5, length(validIndices));
+                        if topN > 0 && obj.verbosity >= 2
+                            [~, topLocalIndices] = sort(modelScores, 'descend');
+                            topLocalIndices = topLocalIndices(1:topN);
+                            topIndices = validIndices(topLocalIndices);
+                            
+                            % パラメータ情報のあるモデルを集計
+                            top_params = zeros(topN, 9); % 配列を事前割り当て
+                            valid_top_count = 0;
+                            
+                            for j = 1:length(topIndices)
+                                if isfield(validResults{topIndices(j)}, 'params') && ...
+                                   length(validResults{topIndices(j)}.params) >= 9
+                                    valid_top_count = valid_top_count + 1;
+                                    if valid_top_count <= topN  % サイズを超えないように確認
+                                        top_params(valid_top_count, :) = validResults{topIndices(j)}.params;
+                                    end
+                                end
                             end
-                        end
-                        
-                        if valid_top_count > 0
-                            fprintf('\n上位%dモデルのパラメータ傾向:\n', valid_top_count);
-                            fprintf('  - 平均学習率: %.6f\n', mean(top_params(:, 1)));
-                            fprintf('  - 平均バッチサイズ: %.1f\n', mean(top_params(:, 2)));
-                            fprintf('  - 平均CNN層数: %.1f\n', mean(top_params(:, 3)));
-                            fprintf('  - 平均CNNフィルタ数: %.1f\n', mean(top_params(:, 4)));
-                            fprintf('  - 平均フィルタサイズ: %.1f\n', mean(top_params(:, 5)));
-                            fprintf('  - 平均LSTMユニット数: %.1f\n', mean(top_params(:, 6)));
-                            fprintf('  - 平均LSTM層数: %.1f\n', mean(top_params(:, 7)));
-                            fprintf('  - 平均ドロップアウト率: %.2f\n', mean(top_params(:, 8)));
-                            fprintf('  - 平均FC層ユニット数: %.1f\n', mean(top_params(:, 9)));
+                            
+                            % 有効なパラメータ数に配列を調整
+                            if valid_top_count > 0
+                                top_params = top_params(1:valid_top_count, :);
+                                
+                                obj.logMessage(2, '\n上位%dモデルのパラメータ傾向:\n', valid_top_count);
+                                obj.logMessage(2, '  - 平均学習率: %.6f\n', mean(top_params(:, 1)));
+                                obj.logMessage(2, '  - 平均バッチサイズ: %.1f\n', mean(top_params(:, 2)));
+                                obj.logMessage(2, '  - 平均CNN層数: %.1f\n', mean(top_params(:, 3)));
+                                obj.logMessage(2, '  - 平均CNNフィルタ数: %.1f\n', mean(top_params(:, 4)));
+                                obj.logMessage(2, '  - 平均フィルタサイズ: %.1f\n', mean(top_params(:, 5)));
+                                obj.logMessage(2, '  - 平均LSTMユニット数: %.1f\n', mean(top_params(:, 6)));
+                                obj.logMessage(2, '  - 平均LSTM層数: %.1f\n', mean(top_params(:, 7)));
+                                obj.logMessage(2, '  - 平均ドロップアウト率: %.2f\n', mean(top_params(:, 8)));
+                                obj.logMessage(2, '  - 平均FC層ユニット数: %.1f\n', mean(top_params(:, 9)));
+                            else
+                                obj.logMessage(2, '\n上位モデルに有効なパラメータ情報がありません\n');
+                            end
                         else
-                            fprintf('\n上位モデルに有効なパラメータ情報がありません\n');
+                            obj.logMessage(3, '\n上位モデル分析に十分な有効結果がありません\n');
                         end
                     else
-                        fprintf('\n上位モデル分析に十分な有効結果がありません\n');
+                        obj.logMessage(1, '\n最良モデルにパラメータ情報がありません\n');
                     end
                 else
-                    fprintf('\n最良モデルにパラメータ情報がありません\n');
+                    obj.logMessage(1, '\n有効な最良モデルが見つかりませんでした。最初の有効なモデルを使用します。\n');
+                    for i = 1:length(validResults)
+                        if ~isfield(validResults{i}, 'error') || ~validResults{i}.error
+                            if isfield(validResults{i}, 'model') && ~isempty(validResults{i}.model)
+                                bestResults = validResults{i};
+                                bestResults.isValid = true;
+                                break;
+                            end
+                        end
+                    end
+                    
+                    % それでも見つからない場合はデフォルト結果
+                    if ~exist('bestResults', 'var') || isempty(bestResults)
+                        obj.logMessage(0, '有効なモデルが見つかりません。デフォルト設定を使用します。\n');
+                        bestResults = struct(...
+                            'model', [], ...
+                            'performance', struct('accuracy', 0), ...
+                            'trainInfo', struct('cnnHistory', struct(), 'lstmHistory', struct()), ...
+                            'overfitting', struct('severity', 'unknown'), ...
+                            'normParams', [], ...
+                            'params', [], ...
+                            'isValid', false ...  % 有効な結果ではない
+                        );
+                    end
                 end
-                
-                return;
         
             catch ME
-                fprintf('結果処理中にエラーが発生: %s\n', ME.message);
-                fprintf('エラー詳細:\n');
-                disp(getReport(ME, 'extended'));
+                obj.logMessage(0, '結果処理中にエラーが発生: %s\n', ME.message);
+                
+                if obj.verbosity >= 2
+                    obj.logMessage(2, 'エラー詳細:\n');
+                    disp(getReport(ME, 'extended'));
+                end
                 
                 % 最低限の結果を返す
-                if ~isempty(validResultsNoError)
-                    bestResults = validResultsNoError{1};
-                else
-                    bestResults = struct(...
-                        'model', [], ...
-                        'performance', struct('accuracy', 0), ...
-                        'trainInfo', struct('cnnHistory', struct(), 'lstmHistory', struct()), ...
-                        'overfitting', struct('severity', 'unknown'), ...
-                        'normParams', [] ...
-                    );
-                end
+                bestResults = struct(...
+                    'model', [], ...
+                    'performance', struct('accuracy', 0), ...
+                    'trainInfo', struct('cnnHistory', struct(), 'lstmHistory', struct()), ...
+                    'overfitting', struct('severity', 'unknown'), ...
+                    'normParams', [], ...
+                    'params', [], ...
+                    'isValid', false ...  % 有効な結果ではない
+                );
                 
                 summary = struct(...
                     'total_trials', length(results), ...
-                    'valid_trials', length(validResultsNoError), ...
+                    'valid_trials', length(validResults), ...
+                    'valid_models', 0, ...
                     'overfit_models', 0, ...
                     'best_accuracy', 0, ...
                     'worst_accuracy', 0, ...
@@ -1115,7 +1231,8 @@ classdef HybridOptimizer < handle
                     'fc_units', [] ...
                 );
                 
-                fprintf('警告: エラーが発生しましたが、可能な限り処理を続行します。\n');
+                % エラーを再スローせず、可能な限り処理を続行
+                obj.logMessage(1, '警告: エラーが発生しましたが、可能な限り処理を続行します。\n');
             end
         end
         
@@ -1126,85 +1243,100 @@ classdef HybridOptimizer < handle
             try
                 % 有効な結果のみを抽出
                 validResults = results(~cellfun(@isempty, results));
-                validResults = validResults(~cellfun(@(x) isfield(x, 'error') && x.error, validResults));
+                validCount = 0;
                 
                 % 履歴に追加
                 for i = 1:length(validResults)
                     result = validResults{i};
-                    if isfield(result, 'model') && ~isempty(result.model) && ...
-                       isfield(result, 'performance') && ~isempty(result.performance)
-                        
-                        % テスト精度と検証精度の取得
-                        testAccuracy = result.performance.accuracy;
-                        
-                        valAccuracy = 0;
-                        if isfield(result.trainInfo, 'hybridValMetrics') && ...
-                           isfield(result.trainInfo.hybridValMetrics, 'accuracy')
-                            valAccuracy = result.trainInfo.hybridValMetrics.accuracy;
-                        elseif isfield(result.trainInfo, 'cnnHistory') && ...
+                    
+                    % エラーフラグのチェック
+                    if isfield(result, 'error') && result.error
+                        continue;  % エラーのある結果はスキップ
+                    end
+                    
+                    % モデルと性能データの存在確認
+                    if ~isfield(result, 'model') || isempty(result.model) || ...
+                       ~isfield(result, 'performance') || isempty(result.performance)
+                        continue;  % 必要なフィールドがない結果はスキップ
+                    end
+                    
+                    % テスト精度と検証精度の取得
+                    testAccuracy = result.performance.accuracy;
+                    
+                    valAccuracy = 0;
+                    if isfield(result, 'trainInfo') && isfield(result.trainInfo, 'hybridValMetrics') && ...
+                       isfield(result.trainInfo.hybridValMetrics, 'accuracy')
+                        valAccuracy = result.trainInfo.hybridValMetrics.accuracy;
+                    elseif isfield(result, 'trainInfo') && isfield(result.trainInfo, 'cnnHistory') && ...
                            isfield(result.trainInfo.cnnHistory, 'ValidationAccuracy') && ...
                            ~isempty(result.trainInfo.cnnHistory.ValidationAccuracy)
-                            cnnValAcc = result.trainInfo.cnnHistory.ValidationAccuracy;
-                            lstmValAcc = result.trainInfo.lstmHistory.ValidationAccuracy;
-                            cnnValAcc = cnnValAcc(~isnan(cnnValAcc));
-                            lstmValAcc = lstmValAcc(~isnan(lstmValAcc));
-                            
-                            % 両モデルの検証精度の平均を計算（利用可能な場合のみ）
-                            if ~isempty(cnnValAcc) && ~isempty(lstmValAcc)
-                                meanCnnValAcc = mean(cnnValAcc(max(1, end-5):end)); % 最後の5エポックの平均
-                                meanLstmValAcc = mean(lstmValAcc(max(1, end-5):end));
-                                valAccuracy = (meanCnnValAcc + meanLstmValAcc) / 2;
-                            elseif ~isempty(cnnValAcc)
-                                valAccuracy = mean(cnnValAcc(max(1, end-5):end));
-                            elseif ~isempty(lstmValAcc)
-                                valAccuracy = mean(lstmValAcc(max(1, end-5):end));
-                            end
-                        end
+                        cnnValAcc = result.trainInfo.cnnHistory.ValidationAccuracy;
+                        lstmValAcc = result.trainInfo.lstmHistory.ValidationAccuracy;
+                        cnnValAcc = cnnValAcc(~isnan(cnnValAcc));
+                        lstmValAcc = lstmValAcc(~isnan(lstmValAcc));
                         
-                        f1Score = obj.calculateMeanF1Score(result.performance);
-                        
-                        % 総合スコアの計算
-                        score = obj.calculateTrialScore(testAccuracy, valAccuracy, f1Score, result);
-                        
-                        % モデル構造とサイズの計算
-                        modelSize = 0;
-                        cnnLayerCount = 0;
-                        lstmLayerCount = 0;
-                        
-                        if isfield(result, 'params') && length(result.params) >= 9
-                            cnnLayerCount = round(result.params(3));
-                            cnnFilters = round(result.params(4));
-                            filterSize = round(result.params(5));
-                            lstmLayerCount = round(result.params(7));
-                            lstmUnits = round(result.params(6));
-                            fcUnits = round(result.params(9));
-                            
-                            % 各コンポーネントのパラメータ数（概算）
-                            cnnParams = cnnFilters * filterSize * filterSize * cnnLayerCount;
-                            lstmParams = lstmUnits * lstmUnits * 4 * lstmLayerCount; % LSTM内部のゲート数を考慮
-                            fcParams = fcUnits * (cnnFilters + lstmUnits);
-                            
-                            modelSize = (cnnParams + lstmParams + fcParams) / 1000; % KB単位
-                        end
-                        
-                        % 履歴に追加
-                        newEntry = struct(...
-                            'params', result.params, ...
-                            'testAccuracy', testAccuracy, ...
-                            'valAccuracy', valAccuracy, ...
-                            'f1Score', f1Score, ...
-                            'score', score, ...
-                            'modelSize', modelSize, ...
-                            'cnnLayerCount', cnnLayerCount, ...
-                            'lstmLayerCount', lstmLayerCount, ...
-                            'model', result.model);
-                        
-                        if isempty(obj.optimizationHistory)
-                            obj.optimizationHistory = newEntry;
-                        else
-                            obj.optimizationHistory(end+1) = newEntry;
+                        % 両モデルの検証精度の平均を計算（利用可能な場合のみ）
+                        if ~isempty(cnnValAcc) && ~isempty(lstmValAcc)
+                            meanCnnValAcc = mean(cnnValAcc(max(1, end-5):end)); % 最後の5エポックの平均
+                            meanLstmValAcc = mean(lstmValAcc(max(1, end-5):end));
+                            valAccuracy = (meanCnnValAcc + meanLstmValAcc) / 2;
+                        elseif ~isempty(cnnValAcc)
+                            valAccuracy = mean(cnnValAcc(max(1, end-5):end));
+                        elseif ~isempty(lstmValAcc)
+                            valAccuracy = mean(lstmValAcc(max(1, end-5):end));
                         end
                     end
+                    
+                    f1Score = obj.calculateMeanF1Score(result.performance);
+                    
+                    % 総合スコアの計算
+                    score = obj.calculateTrialScore(testAccuracy, valAccuracy, f1Score, result);
+                    
+                    % モデル構造とサイズの計算
+                    modelSize = 0;
+                    cnnLayerCount = 0;
+                    lstmLayerCount = 0;
+                    
+                    if isfield(result, 'params') && length(result.params) >= 9
+                        cnnLayerCount = round(result.params(3));
+                        cnnFilters = round(result.params(4));
+                        filterSize = round(result.params(5));
+                        lstmLayerCount = round(result.params(7));
+                        lstmUnits = round(result.params(6));
+                        fcUnits = round(result.params(9));
+                        
+                        % 各コンポーネントのパラメータ数（概算）
+                        cnnParams = cnnFilters * filterSize * filterSize * cnnLayerCount;
+                        lstmParams = lstmUnits * lstmUnits * 4 * lstmLayerCount; % LSTM内部のゲート数を考慮
+                        fcParams = fcUnits * (cnnFilters + lstmUnits);
+                        
+                        modelSize = (cnnParams + lstmParams + fcParams) / 1000; % KB単位
+                    end
+                    
+                    newEntry = struct(...
+                        'params', result.params, ...
+                        'testAccuracy', testAccuracy, ...
+                        'valAccuracy', valAccuracy, ...
+                        'f1Score', f1Score, ...
+                        'score', score, ...
+                        'modelSize', modelSize, ...
+                        'cnnLayerCount', cnnLayerCount, ...
+                        'lstmLayerCount', lstmLayerCount, ...
+                        'model', result.model);
+                    
+                    if isempty(obj.optimizationHistory)
+                        obj.optimizationHistory = newEntry;
+                    else
+                        obj.optimizationHistory(end+1) = newEntry;
+                    end
+                    
+                    validCount = validCount + 1;
+                end
+                
+                % 有効な結果がなかった場合の処理
+                if validCount == 0
+                    obj.logMessage(1, '\n有効な最適化履歴データがありません\n');
+                    return;
                 end
                 
                 % スコアで降順にソート
@@ -1212,7 +1344,7 @@ classdef HybridOptimizer < handle
                     [~, sortIdx] = sort([obj.optimizationHistory.score], 'descend');
                     obj.optimizationHistory = obj.optimizationHistory(sortIdx);
                     
-                    fprintf('\n最適化履歴を更新しました（計 %d 個のモデル）\n', ...
+                    obj.logMessage(2, '\n最適化履歴を更新しました（計 %d 個のモデル）\n', ...
                         length(obj.optimizationHistory));
                     
                     % 改善の傾向分析
@@ -1221,17 +1353,20 @@ classdef HybridOptimizer < handle
                         improvement = diff(scores(1:min(10, length(scores))));
                         avgImprovement = mean(improvement(improvement > 0));
                         
-                        fprintf('最適化の進行状況:\n');
-                        fprintf('  - 最良スコア: %.4f\n', scores(1));
-                        fprintf('  - 平均改善率: %.6f\n', avgImprovement);
-                        fprintf('  - 収束性: %s\n', string(avgImprovement < 0.001));
+                        obj.logMessage(2, '最適化の進行状況:\n');
+                        obj.logMessage(2, '  - 最良スコア: %.4f\n', scores(1));
+                        obj.logMessage(2, '  - 平均改善率: %.6f\n', avgImprovement);
+                        obj.logMessage(2, '  - 収束性: %s\n', string(avgImprovement < 0.001));
                     end
                 end
                 
             catch ME
-                fprintf('最適化履歴の更新に失敗: %s\n', ME.message);
-                fprintf('エラー詳細:\n');
-                disp(getReport(ME, 'extended'));
+                obj.logMessage(1, '最適化履歴の更新に失敗: %s\n', ME.message);
+                
+                if obj.verbosity >= 2
+                    obj.logMessage(2, 'エラー詳細:\n');
+                    disp(getReport(ME, 'extended'));
+                end
             end
         end
         
@@ -1239,120 +1374,104 @@ classdef HybridOptimizer < handle
         function displayOptimizationSummary(obj, summary)
             % 最適化プロセスの結果サマリーを表示
             
-            fprintf('\n=== 最適化プロセスサマリー ===\n');
-            fprintf('試行結果:\n');
-            fprintf('  - 総試行回数: %d\n', summary.total_trials);
-            fprintf('  - 有効な試行: %d\n', summary.valid_trials);
-            fprintf('  - 過学習モデル数: %d (%.1f%%)\n', summary.overfit_models, ...
+            obj.logMessage(1, '\n=== 最適化プロセスサマリー ===\n');
+            obj.logMessage(1, '試行結果:\n');
+            obj.logMessage(1, '  - 総試行回数: %d\n', summary.total_trials);
+            obj.logMessage(1, '  - 有効な試行: %d\n', summary.valid_trials);
+            
+            if isfield(summary, 'valid_models')
+                obj.logMessage(1, '  - 有効なモデル: %d\n', summary.valid_models);
+            end
+            
+            obj.logMessage(1, '  - 過学習モデル数: %d (%.1f%%)\n', summary.overfit_models, ...
                 (summary.overfit_models/max(summary.valid_trials,1))*100);
             
-            fprintf('\n精度統計:\n');
-            fprintf('  - 最高精度: %.4f\n', summary.best_accuracy);
-            fprintf('  - 最低精度: %.4f\n', summary.worst_accuracy);
-            fprintf('  - 平均精度: %.4f\n', summary.mean_accuracy);
+            obj.logMessage(1, '\n精度統計:\n');
+            obj.logMessage(1, '  - 最高精度: %.4f\n', summary.best_accuracy);
+            obj.logMessage(1, '  - 最低精度: %.4f\n', summary.worst_accuracy);
+            obj.logMessage(1, '  - 平均精度: %.4f\n', summary.mean_accuracy);
             
-            fprintf('\nパラメータ分布:\n');
-            
-            % 学習率の統計
-            if ~isempty(summary.learning_rates)
-                fprintf('\n学習率:\n');
-                fprintf('  - 平均: %.6f\n', mean(summary.learning_rates));
-                fprintf('  - 標準偏差: %.6f\n', std(summary.learning_rates));
-                fprintf('  - 最小: %.6f\n', min(summary.learning_rates));
-                fprintf('  - 最大: %.6f\n', max(summary.learning_rates));
-            end
-            
-            % バッチサイズの統計
-            if ~isempty(summary.batch_sizes)
-                fprintf('\nバッチサイズ:\n');
-                fprintf('  - 平均: %.1f\n', mean(summary.batch_sizes));
-                fprintf('  - 標準偏差: %.1f\n', std(summary.batch_sizes));
-                fprintf('  - 最小: %d\n', min(summary.batch_sizes));
-                fprintf('  - 最大: %d\n', max(summary.batch_sizes));
-            end
-            
-            % CNN層数の統計
-            if ~isempty(summary.num_conv_layers)
-                fprintf('\nCNN層数:\n');
-                fprintf('  - 平均: %.1f\n', mean(summary.num_conv_layers));
-                fprintf('  - 標準偏差: %.1f\n', std(summary.num_conv_layers));
-                fprintf('  - 最小: %d\n', min(summary.num_conv_layers));
-                fprintf('  - 最大: %d\n', max(summary.num_conv_layers));
-            end
-            
-            % CNNフィルタ数の統計
-            if ~isempty(summary.cnn_filters)
-                fprintf('\nCNNフィルタ数:\n');
-                fprintf('  - 平均: %.1f\n', mean(summary.cnn_filters));
-                fprintf('  - 標準偏差: %.1f\n', std(summary.cnn_filters));
-                fprintf('  - 最小: %d\n', min(summary.cnn_filters));
-                fprintf('  - 最大: %d\n', max(summary.cnn_filters));
-            end
-            
-            % フィルタサイズの統計
-            if ~isempty(summary.filter_sizes)
-                fprintf('\nフィルタサイズ:\n');
-                fprintf('  - 平均: %.1f\n', mean(summary.filter_sizes));
-                fprintf('  - 標準偏差: %.1f\n', std(summary.filter_sizes));
-                fprintf('  - 最小: %d\n', min(summary.filter_sizes));
-                fprintf('  - 最大: %d\n', max(summary.filter_sizes));
-            end
-            
-            % LSTMユニット数の統計
-            if ~isempty(summary.lstm_units)
-                fprintf('\nLSTMユニット数:\n');
-                fprintf('  - 平均: %.1f\n', mean(summary.lstm_units));
-                fprintf('  - 標準偏差: %.1f\n', std(summary.lstm_units));
-                fprintf('  - 最小: %d\n', min(summary.lstm_units));
-                fprintf('  - 最大: %d\n', max(summary.lstm_units));
-            end
-            
-            % LSTM層数の統計
-            if ~isempty(summary.num_lstm_layers)
-                fprintf('\nLSTM層数:\n');
-                fprintf('  - 平均: %.1f\n', mean(summary.num_lstm_layers));
-                fprintf('  - 標準偏差: %.1f\n', std(summary.num_lstm_layers));
-                fprintf('  - 最小: %d\n', min(summary.num_lstm_layers));
-                fprintf('  - 最大: %d\n', max(summary.num_lstm_layers));
-            end
-            
-            % ドロップアウト率の統計
-            if ~isempty(summary.dropout_rates)
-                fprintf('\nドロップアウト率:\n');
-                fprintf('  - 平均: %.3f\n', mean(summary.dropout_rates));
-                fprintf('  - 標準偏差: %.3f\n', std(summary.dropout_rates));
-                fprintf('  - 最小: %.3f\n', min(summary.dropout_rates));
-                fprintf('  - 最大: %.3f\n', max(summary.dropout_rates));
-            end
-            
-            % 全結合層ユニット数の統計
-            if ~isempty(summary.fc_units)
-                fprintf('\n全結合層ユニット数:\n');
-                fprintf('  - 平均: %.1f\n', mean(summary.fc_units));
-                fprintf('  - 標準偏差: %.1f\n', std(summary.fc_units));
-                fprintf('  - 最小: %d\n', min(summary.fc_units));
-                fprintf('  - 最大: %d\n', max(summary.fc_units));
-            end
-            
-            % パラメータ間の相関分析
-            if all([~isempty(summary.learning_rates), ~isempty(summary.batch_sizes), ...
-                    ~isempty(summary.num_conv_layers), ~isempty(summary.cnn_filters), ...
-                    ~isempty(summary.lstm_units), ~isempty(summary.num_lstm_layers), ...
-                    ~isempty(summary.dropout_rates), ~isempty(summary.fc_units)])
+            % 詳細統計情報（verbosityレベル2以上）
+            if obj.verbosity >= 2 && ~isempty(summary.learning_rates)
+                obj.logMessage(2, '\nパラメータ分布:\n');
                 
-                fprintf('\nパラメータ間の相関分析:\n');
+                % 学習率の統計
+                obj.logMessage(2, '\n学習率:\n');
+                obj.logMessage(2, '  - 平均: %.6f\n', mean(summary.learning_rates));
+                obj.logMessage(2, '  - 標準偏差: %.6f\n', std(summary.learning_rates));
+                obj.logMessage(2, '  - 最小: %.6f\n', min(summary.learning_rates));
+                obj.logMessage(2, '  - 最大: %.6f\n', max(summary.learning_rates));
+                
+                % バッチサイズの統計
+                obj.logMessage(2, '\nバッチサイズ:\n');
+                obj.logMessage(2, '  - 平均: %.1f\n', mean(summary.batch_sizes));
+                obj.logMessage(2, '  - 標準偏差: %.1f\n', std(summary.batch_sizes));
+                obj.logMessage(2, '  - 最小: %d\n', min(summary.batch_sizes));
+                obj.logMessage(2, '  - 最大: %d\n', max(summary.batch_sizes));
+                
+                % CNN層数の統計
+                obj.logMessage(2, '\nCNN層数:\n');
+                obj.logMessage(2, '  - 平均: %.1f\n', mean(summary.num_conv_layers));
+                obj.logMessage(2, '  - 標準偏差: %.1f\n', std(summary.num_conv_layers));
+                obj.logMessage(2, '  - 最小: %d\n', min(summary.num_conv_layers));
+                obj.logMessage(2, '  - 最大: %d\n', max(summary.num_conv_layers));
+                
+                % CNNフィルタ数の統計
+                obj.logMessage(2, '\nCNNフィルタ数:\n');
+                obj.logMessage(2, '  - 平均: %.1f\n', mean(summary.cnn_filters));
+                obj.logMessage(2, '  - 標準偏差: %.1f\n', std(summary.cnn_filters));
+                obj.logMessage(2, '  - 最小: %d\n', min(summary.cnn_filters));
+                obj.logMessage(2, '  - 最大: %d\n', max(summary.cnn_filters));
+                
+                % フィルタサイズの統計
+                obj.logMessage(2, '\nフィルタサイズ:\n');
+                obj.logMessage(2, '  - 平均: %.1f\n', mean(summary.filter_sizes));
+                obj.logMessage(2, '  - 標準偏差: %.1f\n', std(summary.filter_sizes));
+                obj.logMessage(2, '  - 最小: %d\n', min(summary.filter_sizes));
+                obj.logMessage(2, '  - 最大: %d\n', max(summary.filter_sizes));
+                
+                % LSTMユニット数の統計
+                obj.logMessage(2, '\nLSTMユニット数:\n');
+                obj.logMessage(2, '  - 平均: %.1f\n', mean(summary.lstm_units));
+                obj.logMessage(2, '  - 標準偏差: %.1f\n', std(summary.lstm_units));
+                obj.logMessage(2, '  - 最小: %d\n', min(summary.lstm_units));
+                obj.logMessage(2, '  - 最大: %d\n', max(summary.lstm_units));
+                
+                % LSTM層数の統計
+                obj.logMessage(2, '\nLSTM層数:\n');
+                obj.logMessage(2, '  - 平均: %.1f\n', mean(summary.num_lstm_layers));
+                obj.logMessage(2, '  - 標準偏差: %.1f\n', std(summary.num_lstm_layers));
+                obj.logMessage(2, '  - 最小: %d\n', min(summary.num_lstm_layers));
+                obj.logMessage(2, '  - 最大: %d\n', max(summary.num_lstm_layers));
+                
+                % ドロップアウト率の統計
+                obj.logMessage(2, '\nドロップアウト率:\n');
+                obj.logMessage(2, '  - 平均: %.3f\n', mean(summary.dropout_rates));
+                obj.logMessage(2, '  - 標準偏差: %.3f\n', std(summary.dropout_rates));
+                obj.logMessage(2, '  - 最小: %.3f\n', min(summary.dropout_rates));
+                obj.logMessage(2, '  - 最大: %.3f\n', max(summary.dropout_rates));
+                
+                % 全結合層ユニット数の統計
+                obj.logMessage(2, '\n全結合層ユニット数:\n');
+                obj.logMessage(2, '  - 平均: %.1f\n', mean(summary.fc_units));
+                obj.logMessage(2, '  - 標準偏差: %.1f\n', std(summary.fc_units));
+                obj.logMessage(2, '  - 最小: %d\n', min(summary.fc_units));
+                obj.logMessage(2, '  - 最大: %d\n', max(summary.fc_units));
+                
+                % パラメータ間の相関分析
+                obj.logMessage(2, '\nパラメータ間の相関分析:\n');
                 paramMatrix = [summary.learning_rates', summary.batch_sizes', ...
                              summary.num_conv_layers', summary.cnn_filters', ...
                              summary.filter_sizes', summary.lstm_units', ...
                              summary.num_lstm_layers', summary.dropout_rates', ...
                              summary.fc_units'];
-                
+                         
                 paramNames = {'学習率', 'バッチサイズ', 'CNN層数', ...
                              'CNNフィルタ数', 'フィルタサイズ', ...
                              'LSTMユニット数', 'LSTM層数', 'ドロップアウト率', ...
                              '全結合層ユニット数'};
-                
-                % 相関行列の計算
+                         
+                % 相関行列を計算
                 if size(paramMatrix, 1) > 1
                     corrMatrix = corr(paramMatrix);
                     
@@ -1360,61 +1479,18 @@ classdef HybridOptimizer < handle
                     for i = 1:size(corrMatrix, 1)
                         for j = i+1:size(corrMatrix, 2)
                             if abs(corrMatrix(i,j)) > 0.3
-                                fprintf('  - %s と %s: %.3f\n', ...
+                                obj.logMessage(2, '  - %s と %s: %.3f\n', ...
                                     paramNames{i}, paramNames{j}, corrMatrix(i,j));
                             end
                         end
                     end
                 else
-                    fprintf('  - 相関分析には複数の有効なモデルが必要です\n');
-                end
-                
-                % 最適化履歴からパラメータと性能の相関分析
-                if ~isempty(obj.optimizationHistory) && length(obj.optimizationHistory) > 2
-                    fprintf('\n各パラメータと性能の相関:\n');
-                    
-                    % scores を取得（列ベクトルに変換）
-                    scores = [obj.optimizationHistory.score]';
-                    
-                    % パラメータ行列の構築（optimizationHistory から直接取得）
-                    paramHistoryMatrix = zeros(length(obj.optimizationHistory), length(paramNames));
-                    
-                    % 各エントリからパラメータを抽出
-                    for j = 1:length(obj.optimizationHistory)
-                        if isfield(obj.optimizationHistory(j), 'params') && ...
-                           length(obj.optimizationHistory(j).params) >= 9
-                            paramHistoryMatrix(j, :) = obj.optimizationHistory(j).params;
-                        end
-                    end
-                    
-                    % 次元の確認（デバッグ出力）
-                    fprintf('  - 相関分析: スコア配列サイズ = [%s], パラメータ行列サイズ = [%s]\n', ...
-                        num2str(size(scores)), num2str(size(paramHistoryMatrix)));
-                    
-                    % 有効なデータのみで相関分析
-                    if ~isempty(paramHistoryMatrix) && size(paramHistoryMatrix, 1) == length(scores)
-                        for i = 1:length(paramNames)
-                            if i <= size(paramHistoryMatrix, 2)  % 配列境界チェック
-                                correlation = corr(paramHistoryMatrix(:,i), scores);
-                                if abs(correlation) > 0.2
-                                    direction = '';
-                                    if correlation > 0
-                                        direction = '正の相関 (↑)';
-                                    else
-                                        direction = '負の相関 (↓)';
-                                    end
-                                    fprintf('  - %s: %.3f (%s)\n', paramNames{i}, correlation, direction);
-                                end
-                            end
-                        end
-                    else
-                        fprintf('  - 相関分析を実行できません: 有効なパラメータ数とスコア数が一致しません\n');
-                    end
+                    obj.logMessage(2, '  - 相関分析には複数の有効なモデルが必要です\n');
                 end
             end
             
-            % 最適化の収束性評価
-            if length(obj.optimizationHistory) > 1
+            % 最適化の収束性評価（verbosityレベル2以上）
+            if obj.verbosity >= 2 && length(obj.optimizationHistory) > 1
                 scores = [obj.optimizationHistory.score];
                 improvement = diff(scores);
                 
@@ -1426,31 +1502,31 @@ classdef HybridOptimizer < handle
                         meanImprovement = 0;
                     end
                     
-                    fprintf('\n収束性評価:\n');
-                    fprintf('  - 平均改善率: %.6f\n', meanImprovement);
-                    fprintf('  - 改善回数: %d/%d\n', sum(improvement > 0), length(improvement));
+                    obj.logMessage(2, '\n収束性評価:\n');
+                    obj.logMessage(2, '  - 平均改善率: %.6f\n', meanImprovement);
+                    obj.logMessage(2, '  - 改善回数: %d/%d\n', sum(improvement > 0), length(improvement));
                     
                     if meanImprovement < 0.001
-                        fprintf('  - 状態: 収束\n');
+                        obj.logMessage(2, '  - 状態: 収束\n');
                     else
-                        fprintf('  - 状態: 未収束（さらなる最適化の余地あり）\n');
+                        obj.logMessage(2, '  - 状態: 未収束（さらなる最適化の余地あり）\n');
                     end
                 end
             end
             
             % 最適パラメータの表示
             if ~isempty(obj.bestParams)
-                fprintf('\n=== 最適なパラメータ ===\n');
-                fprintf('  - 学習率: %.6f\n', obj.bestParams(1));
-                fprintf('  - バッチサイズ: %d\n', obj.bestParams(2));
-                fprintf('  - CNN層数: %d\n', obj.bestParams(3));
-                fprintf('  - CNNフィルタ数: %d\n', obj.bestParams(4));
-                fprintf('  - フィルタサイズ: %d\n', obj.bestParams(5));
-                fprintf('  - LSTMユニット数: %d\n', obj.bestParams(6));
-                fprintf('  - LSTM層数: %d\n', obj.bestParams(7));
-                fprintf('  - ドロップアウト率: %.2f\n', obj.bestParams(8));
-                fprintf('  - 全結合層ユニット数: %d\n', obj.bestParams(9));
-                fprintf('  - 達成スコア: %.4f\n', obj.bestPerformance);
+                obj.logMessage(1, '\n=== 最適なパラメータ ===\n');
+                obj.logMessage(1, '  - 学習率: %.6f\n', obj.bestParams(1));
+                obj.logMessage(1, '  - バッチサイズ: %d\n', obj.bestParams(2));
+                obj.logMessage(1, '  - CNN層数: %d\n', obj.bestParams(3));
+                obj.logMessage(1, '  - CNNフィルタ数: %d\n', obj.bestParams(4));
+                obj.logMessage(1, '  - フィルタサイズ: %d\n', obj.bestParams(5));
+                obj.logMessage(1, '  - LSTMユニット数: %d\n', obj.bestParams(6));
+                obj.logMessage(1, '  - LSTM層数: %d\n', obj.bestParams(7));
+                obj.logMessage(1, '  - ドロップアウト率: %.2f\n', obj.bestParams(8));
+                obj.logMessage(1, '  - 全結合層ユニット数: %d\n', obj.bestParams(9));
+                obj.logMessage(1, '  - 達成スコア: %.4f\n', obj.bestPerformance);
             end
         end
 
@@ -1458,18 +1534,239 @@ classdef HybridOptimizer < handle
         function results = createDefaultResults(obj)
             % 最適化無効時のデフォルト結果構造体を生成
             
-            fprintf('ハイブリッドモデル最適化はスキップされました\n');
+            try
+                % 基本的なハイブリッドモデルのデフォルトパラメータを使用
+                obj.logMessage(1, 'デフォルトハイブリッドモデルパラメータを使用します。\n');
+
+                % デフォルトパラメータの設定
+                defaultLR = 0.001;          % 標準的な学習率
+                defaultBatchSize = 32;      % 標準的なバッチサイズ
+                defaultConvLayers = 2;      % 2層のCNN
+                defaultCnnFilters = 32;     % 標準的なCNNフィルタ数
+                defaultFilterSize = 5;      % 標準的なフィルタサイズ
+                defaultLstmUnits = 64;      % 標準的なLSTMユニット数
+                defaultLstmLayers = 2;      % 2層のLSTM
+                defaultDropoutRate = 0.5;   % 標準的なドロップアウト率
+                defaultFCUnits = 128;       % 標準的な全結合層
+                
+                % デフォルトパラメータの格納
+                defaultParams = [
+                    defaultLR; 
+                    defaultBatchSize; 
+                    defaultConvLayers; 
+                    defaultCnnFilters;
+                    defaultFilterSize;
+                    defaultLstmUnits;
+                    defaultLstmLayers;
+                    defaultDropoutRate; 
+                    defaultFCUnits
+                ];
+                
+                obj.logMessage(1, 'デフォルトパラメータ: \n');
+                obj.logMessage(1, '  - 学習率: %.6f\n', defaultLR);
+                obj.logMessage(1, '  - バッチサイズ: %d\n', defaultBatchSize);
+                obj.logMessage(1, '  - CNN層数: %d\n', defaultConvLayers);
+                obj.logMessage(1, '  - CNNフィルタ数: %d\n', defaultCnnFilters);
+                obj.logMessage(1, '  - フィルタサイズ: %d\n', defaultFilterSize);
+                obj.logMessage(1, '  - LSTMユニット数: %d\n', defaultLstmUnits);
+                obj.logMessage(1, '  - LSTM層数: %d\n', defaultLstmLayers);
+                obj.logMessage(1, '  - ドロップアウト率: %.2f\n', defaultDropoutRate);
+                obj.logMessage(1, '  - 全結合層ユニット数: %d\n', defaultFCUnits);
+                
+                % 結果構造体の作成
+                results = struct(...
+                    'model', [], ...  % モデル自体は空
+                    'performance', struct('accuracy', 0), ...  % 初期パフォーマンスは0
+                    'trainInfo', struct('cnnHistory', struct(), 'lstmHistory', struct()), ...
+                    'overfitting', struct('severity', 'unknown'), ...
+                    'normParams', [], ...
+                    'defaultParams', defaultParams, ...
+                    'isValid', false ...  % これはデフォルト値フラグ
+                );
+                
+                obj.logMessage(1, '最適化スキップ: デフォルト結果を返します\n');
+            catch ME
+                obj.logMessage(0, 'デフォルト結果の作成中にエラーが発生: %s\n', ME.message);
+                
+                % 最低限の結果を返す
+                results = struct(...
+                    'model', [], ...
+                    'performance', struct('accuracy', 0), ...
+                    'trainInfo', struct(), ...
+                    'defaultParams', [], ...
+                    'isValid', false, ...
+                    'error', true, ...
+                    'errorMessage', ME.message ...
+                );
+            end
+        end
+        
+        %% パラメータ抽出メソッド
+        function extractedParams = extractParams(obj)
+            % ハイブリッドモデルのパラメータを抽出して9要素の配列として返す
             
-            % デフォルトパラメータで結果構造体を作成
+            % デフォルト値で初期化
+            extractedParams = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+            
+            try
+                % 1. 学習率
+                if isfield(obj.params.classifier.hybrid.training.optimizer, 'learningRate')
+                    extractedParams(1) = obj.params.classifier.hybrid.training.optimizer.learningRate;
+                end
+                
+                % 2. バッチサイズ
+                if isfield(obj.params.classifier.hybrid.training, 'miniBatchSize')
+                    extractedParams(2) = obj.params.classifier.hybrid.training.miniBatchSize;
+                end
+                
+                % 3. CNN層数
+                if isfield(obj.params.classifier.hybrid.architecture.cnn, 'convLayers')
+                    extractedParams(3) = length(fieldnames(obj.params.classifier.hybrid.architecture.cnn.convLayers));
+                end
+                
+                % 4. CNNフィルタ数と5. フィルタサイズ
+                if isfield(obj.params.classifier.hybrid.architecture.cnn, 'convLayers')
+                    convFields = fieldnames(obj.params.classifier.hybrid.architecture.cnn.convLayers);
+                    if ~isempty(convFields)
+                        firstConv = obj.params.classifier.hybrid.architecture.cnn.convLayers.(convFields{1});
+                        if isfield(firstConv, 'filters')
+                            extractedParams(4) = firstConv.filters;
+                        end
+                        if isfield(firstConv, 'size')
+                            if length(firstConv.size) >= 1
+                                extractedParams(5) = firstConv.size(1);
+                            end
+                        end
+                    end
+                end
+                
+                % 6. LSTMユニット数と7. LSTM層数
+                if isfield(obj.params.classifier.hybrid.architecture.lstm, 'lstmLayers')
+                    lstmFields = fieldnames(obj.params.classifier.hybrid.architecture.lstm.lstmLayers);
+                    extractedParams(7) = length(lstmFields);
+                    if ~isempty(lstmFields)
+                        firstLstm = obj.params.classifier.hybrid.architecture.lstm.lstmLayers.(lstmFields{1});
+                        if isfield(firstLstm, 'numHiddenUnits')
+                            extractedParams(6) = firstLstm.numHiddenUnits;
+                        end
+                    end
+                end
+                
+                % 8. ドロップアウト率
+                if isfield(obj.params.classifier.hybrid.architecture.cnn, 'dropoutLayers')
+                    dropout = obj.params.classifier.hybrid.architecture.cnn.dropoutLayers;
+                    dropoutFields = fieldnames(dropout);
+                    if ~isempty(dropoutFields)
+                        extractedParams(8) = dropout.(dropoutFields{1});
+                    end
+                end
+                
+                % 9. 全結合層ユニット数
+                if isfield(obj.params.classifier.hybrid.architecture.cnn, 'fullyConnected')
+                    fc = obj.params.classifier.hybrid.architecture.cnn.fullyConnected;
+                    if ~isempty(fc)
+                        extractedParams(9) = fc(1);
+                    end
+                end
+            catch ME
+                obj.logMessage(1, '警告: パラメータ抽出中にエラーが発生\n');
+            end
+        end
+
+        %% ディープコピー作成メソッド
+        function copy = createDeepCopy(obj, original)
+            % 構造体のディープコピーを作成
+            
+            if ~isstruct(original)
+                copy = original;
+                return;
+            end
+            
+            % 新しい構造体を作成
+            copy = struct();
+            
+            % 各フィールドを再帰的にコピー
+            fields = fieldnames(original);
+            for i = 1:length(fields)
+                field = fields{i};
+                if isstruct(original.(field))
+                    % 構造体の場合は再帰的にコピー
+                    copy.(field) = obj.createDeepCopy(original.(field));
+                elseif iscell(original.(field))
+                    % セル配列の場合
+                    cellArray = original.(field);
+                    newCellArray = cell(size(cellArray));
+                    for j = 1:numel(cellArray)
+                        if isstruct(cellArray{j})
+                            newCellArray{j} = obj.createDeepCopy(cellArray{j});
+                        else
+                            newCellArray{j} = cellArray{j};
+                        end
+                    end
+                    copy.(field) = newCellArray;
+                else
+                    % その他のデータ型はそのままコピー
+                    copy.(field) = original.(field);
+                end
+            end
+        end
+
+        %% 結果検証メソッド
+        function validateResults(obj, results)
+            % 結果構造体の妥当性を検証
+            
+            if ~isstruct(results)
+                obj.logMessage(1, '警告: 結果が構造体ではありません\n');
+                return;
+            end
+            
+            % 必須フィールドのチェック
+            requiredFields = {'model', 'performance', 'trainInfo'};
+            for i = 1:length(requiredFields)
+                if ~isfield(results, requiredFields{i})
+                    obj.logMessage(1, '警告: 結果構造体に必須フィールド「%s」がありません\n', requiredFields{i});
+                end
+            end
+            
+            % パフォーマンスフィールドのチェック
+            if isfield(results, 'performance')
+                if ~isfield(results.performance, 'accuracy')
+                    obj.logMessage(1, '警告: performance構造体にaccuracyフィールドがありません\n');
+                end
+            end
+            
+            % trainInfoフィールドのチェック
+            if isfield(results, 'trainInfo')
+                if ~isfield(results.trainInfo, 'cnnHistory') && ~isfield(results.trainInfo, 'lstmHistory')
+                    obj.logMessage(1, '警告: trainInfo構造体にcnnHistoryまたはlstmHistoryフィールドがありません\n');
+                end
+            end
+        end
+
+        %% 結果構造体構築メソッド
+        function results = buildResultsStruct(obj, hybridModel, metrics, trainInfo, normParams)
+            % 結果構造体の構築
+            
+            % trainInfoの安全なディープコピー
+            trainInfoCopy = obj.createDeepCopy(trainInfo);
+            
+            % パラメータ情報の抽出
+            extractedParams = obj.extractParams();
+            
+            % 結果構造体の構築
             results = struct(...
-                'model', [], ...
-                'performance', [], ...
-                'trainInfo', struct('cnnHistory', struct(), 'lstmHistory', struct()), ...
+                'model', hybridModel, ...
+                'performance', metrics, ...
+                'trainInfo', trainInfoCopy, ...
                 'overfitting', [], ...
-                'normParams', [] ...
+                'normParams', normParams, ...
+                'params', extractedParams ...
             );
             
-            return;
+            % 出力前に結果の検証
+            obj.validateResults(results);
+            
+            obj.logMessage(2, '結果構造体の構築完了\n');
         end
     end
 end

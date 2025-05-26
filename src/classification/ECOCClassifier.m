@@ -3,54 +3,108 @@ classdef ECOCClassifier < handle
     %
     % このクラスはEEGデータの分類のためのECOCモデルを学習・評価・予測するための
     % 機能を提供します。ハイパーパラメータ最適化、交差検証、性能評価などの機能を含みます。
+    %
+    % 主な機能:
+    %   - EEGデータの前処理と正規化
+    %   - CSP特徴抽出
+    %   - データ拡張（オプション）
+    %   - ECOCモデルの学習と最適化
+    %   - 詳細な過学習分析
+    %   - 包括的な性能評価
+    %   - マルチクラス分類対応
+    %   - オンライン予測
     
     properties (Access = private)
-        params          % パラメータ設定
-        isOptimized     % 最適化の有無
-        isEnabled       % ECOCの有効/無効
-        trainResults    % 学習結果の保存
-        crossValModel   % 交差検証モデル
+        params              % パラメータ設定
+        isOptimized         % 最適化の有無
+        isEnabled           % ECOCの有効/無効
+        trainResults        % 学習結果の保存
+        crossValModel       % 交差検証モデル
+        verbosity           % 出力詳細度 (0:最小限, 1:通常, 2:詳細, 3:デバッグ)
+        
+        % 学習進捗と過学習監視用
+        trainingAccuracy    % 学習精度
+        validationAccuracy  % 検証精度
+        overfitMetrics      % 過学習メトリクス
+        
+        % データ拡張コンポーネント
+        dataAugmenter       % データ拡張コンポーネント
+        normalizer          % 正規化コンポーネント
     end
     
     properties (Access = public)
-        ecocModel       % 学習済みECOCモデル
-        performance     % 性能評価指標
+        ecocModel           % 学習済みECOCモデル
+        performance         % 性能評価指標
     end
     
     methods (Access = public)
-        function obj = ECOCClassifier(params)
-            % コンストラクタ
+        function obj = ECOCClassifier(params, verbosity)
+            % コンストラクタ - ECOCClassifierのインスタンスを初期化
             % 
             % 入力:
             %   params - 設定パラメータを含む構造体
+            %   verbosity - 出力詳細度 (0:最小限, 1:通常, 2:詳細, 3:デバッグ)
+            %             省略時はデフォルト値1が使用される
             
             obj.params = params;
             obj.isOptimized = params.classifier.ecoc.optimize;
             obj.isEnabled = params.classifier.ecoc.enable;
             obj.performance = struct();
+            
+            % verbosityレベルの設定（デフォルトは1）
+            if nargin < 2
+                obj.verbosity = 1;
+            else
+                obj.verbosity = verbosity;
+            end
+            
+            % プロパティの初期化
+            obj.initializeProperties();
+            
+            % コンポーネントの初期化
+            if obj.params.classifier.augmentation.enable
+                obj.dataAugmenter = DataAugmenter(params);
+            end
+            obj.normalizer = EEGNormalizer(params);
+            
+            obj.logMessage(2, 'ECOCClassifier初期化完了 (verbosity: %d)\n', obj.verbosity);
         end
         
         function results = trainECOC(obj, processedData, processedLabel)
             % ECOCモデルの学習と評価を行う
             %
             % 入力:
-            %   processedData - 前処理済みEEGデータ
-            %   processedLabel - データのクラスラベル
+            %   processedData - 前処理済みEEGデータ [チャンネル x サンプル x エポック]
+            %   processedLabel - データのクラスラベル [エポック x 1]
             %
             % 出力:
             %   results - 学習結果と性能評価指標を含む構造体
             
-            if ~obj.isEnabled
-                error('ECOC is disabled in configuration');
-            end
-
             try
+                obj.logMessage(1, '\n=== ECOC学習処理を開始 ===\n');
+                
+                % 機能が無効の場合のチェック
+                if ~obj.isEnabled
+                    error('ECOC is disabled in configuration');
+                end
+                
+                % データの検証
+                [processedData, ~] = obj.validateAndPrepareData(processedData, processedLabel);
+                
                 % EEGデータの正規化
                 [normalizedEEG, normParams] = obj.normalizeData(processedData);
                 
                 % CSP特徴抽出処理
+                obj.logMessage(1, 'CSP特徴抽出を実行...\n');
                 [features, filters, cspParameters] = obj.extractCSPFeatures(normalizedEEG, processedLabel);
+                obj.logMessage(2, '抽出された特徴量: %d次元\n', size(features, 2));
       
+                % データ拡張処理（オプション）
+                if obj.params.classifier.augmentation.enable
+                    obj.logMessage(1, 'データ拡張を実行...\n');
+                    [features, processedLabel] = obj.augmentData(features, processedLabel);
+                end
+                
                 % データの分割（学習用と検証用）
                 [trainFeatures, trainLabels, testFeatures, testLabels] = obj.splitDataset(features, processedLabel);
                 
@@ -59,100 +113,160 @@ classdef ECOCClassifier < handle
                 obj.checkClassDistribution('検証', testLabels);
 
                 % モデルの学習（学習データのみを使用）
-                fprintf('\nECOCモデルの学習を開始...\n');
+                obj.logMessage(1, '\nECOCモデルの学習を開始...\n');
                 obj.trainModel(trainFeatures, trainLabels);
 
+                % 学習データでの性能評価（過学習検出用）
+                obj.evaluateTrainingPerformance(trainFeatures, trainLabels);
+
                 % 交差検証の実行（学習データのみを使用）
-                if obj.params.classifier.evaluation.enable
+                if obj.params.classifier.ecoc.validation.enable
                     obj.performCrossValidation(trainFeatures, trainLabels);
                 end
 
                 % テストデータでの評価
                 testMetrics = obj.evaluateModel(testFeatures, testLabels);
                 
-                % 過学習の検出
-                [isOverfit, overfitMetrics] = obj.validateOverfitting(testMetrics.accuracy);
+                % 詳細な過学習分析（変数名を変更してプロパティ名との衝突を回避）
+                [isOverfit, overfitResults] = obj.validateOverfitting(testMetrics.accuracy);
                 
-                % 結果の構築
-                results = struct(...
-                    'model', obj.ecocModel, ...
-                    'performance', testMetrics, ...
-                    'overfitMetrics', overfitMetrics, ...
-                    'cspFilters', filters, ...
-                    'cspParameters', cspParameters, ...
-                    'normParams', normParams ...
-                );
+                % 結果の構築（過学習メトリクスを使用）
+                results = obj.buildResultsStruct(testMetrics, overfitResults, filters, cspParameters, normParams);
                 
-                % パフォーマンス情報を保存
-                obj.performance = results.performance;
+                % 過学習が検出された場合の警告表示
+                if isOverfit
+                    obj.logMessage(1, '\n過学習が検出されました: %s\n', overfitResults.severity);
+                end
                 
-                % 結果表示
-                obj.displayResults();
+                obj.logMessage(1, '\n=== ECOC学習処理が完了しました ===\n');
 
             catch ME
-                error('ECOC training failed: %s', ME.message);
+                obj.logMessage(0, '\n=== ECOC学習中にエラーが発生しました ===\n');
+                obj.logMessage(0, 'エラーメッセージ: %s\n', ME.message);
+                obj.logMessage(0, 'エラー発生場所:\n');
+                for i = 1:length(ME.stack)
+                    obj.logMessage(0, '  ファイル: %s\n  行: %d\n  関数: %s\n\n', ...
+                        ME.stack(i).file, ME.stack(i).line, ME.stack(i).name);
+                end
+                rethrow(ME);
             end
         end
 
-        function [label, score] = predictOnline(obj, data, model)
+        function [label, score] = predictOnline(obj, data, ecoc)
             % オンラインでECOC予測を実行する
             %
             % 入力:
-            %   data - 分類するEEGデータ
-            %   model - 学習済みECOCモデルと関連パラメータを含む構造体
+            %   data - 分類するEEGデータ [チャンネル x サンプル]
+            %   ecoc - 学習済みECOCモデルと関連パラメータを含む構造体
             %
             % 出力:
             %   label - 予測されたクラスラベル
             %   score - 各クラスへの所属確率
             
-            if ~obj.isEnabled
-                error('ECOC is disabled');
-            end
-        
             try
+                % 機能が無効の場合のチェック
+                if ~obj.isEnabled
+                    error('ECOC is disabled');
+                end
+                
                 % 入力データの検証
                 if isempty(data)
                     error('Data cannot be empty');
                 end
         
                 % モデルの検証
-                if isempty(model)
-                    error('Model cannot be empty');
+                if isempty(ecoc) || ~isfield(ecoc, 'model') || isempty(ecoc.model)
+                    error('Valid ECOC model not found');
                 end
 
                 % EEGデータの正規化
                 normalizedEEG = data;
-                if obj.params.classifier.normalize.enable && isfield(model, 'normParams')
-                    eegNormalizer = EEGNormalizer(obj.params);
-                    normalizedEEG = eegNormalizer.normalizeOnline(data, model.normParams);
+                if obj.params.classifier.normalize.enable && isfield(ecoc, 'normParams')
+                    normalizedEEG = obj.normalizer.normalizeOnline(data, ecoc.normParams);
+                    obj.logMessage(3, 'データ正規化完了\n');
                 end
 
                 % CSP特徴量の抽出
-                if isfield(model, 'cspFilters') && ~isempty(model.cspFilters)
+                if isfield(ecoc, 'cspFilters') && ~isempty(ecoc.cspFilters)
                     cspExtractor = CSPExtractor(obj.params);
-                    features = cspExtractor.extractFeatures(normalizedEEG, model.cspFilters);
+                    features = cspExtractor.extractFeatures(normalizedEEG, ecoc.cspFilters);
+                    obj.logMessage(3, '特徴量抽出完了: %d次元\n', size(features, 2));
                 else
                     error('CSP filters not found in ECOC model');
                 end
         
                 % 予測の実行
-                [label, score] = predict(model.model, features);
+                [label, score] = predict(ecoc.model, features);
                 
                 % スコアを確率に変換
                 score = obj.convertToProb(score);
+                obj.logMessage(3, '予測完了: クラス %d (確率: %.3f)\n', double(label), max(score));
         
             catch ME
-                error('Error in ECOC online prediction: %s', ME.message);
+                obj.logMessage(0, 'ECOC予測でエラーが発生: %s\n', ME.message);
+                obj.logMessage(2, 'エラー詳細:\n');
+                if obj.verbosity >= 2
+                    disp(getReport(ME, 'extended'));
+                end
+                rethrow(ME);
+            end
+        end
+        
+        %% ログ出力メソッド
+        function logMessage(obj, level, format, varargin)
+            % 指定されたverbosityレベル以上の場合にメッセージを出力
+            %
+            % 入力:
+            %   level - メッセージの重要度 (0:エラー, 1:警告/通常, 2:情報, 3:デバッグ)
+            %   format - fprintf形式の文字列
+            %   varargin - 追加パラメータ
+            
+            if obj.verbosity >= level
+                fprintf(format, varargin{:});
             end
         end
     end
     
     methods (Access = private)
+        %% プロパティ初期化メソッド
+        function initializeProperties(obj)
+            % クラスプロパティの初期化
+            obj.trainingAccuracy = 0;
+            obj.validationAccuracy = 0;
+            obj.overfitMetrics = struct();
+        end
+        
+        %% データ検証と準備
+        function [validatedData, infoMsg] = validateAndPrepareData(obj, data, labels)
+            % 入力データの検証と適切な形式への変換
+            %
+            % 入力:
+            %   data - 検証するEEGデータ [チャンネル x サンプル x エポック]
+            %   labels - 対応するクラスラベル [エポック x 1]
+            %
+            % 出力:
+            %   validatedData - 検証済みデータ
+            %   infoMsg - 検証結果メッセージ
+            
+            % データとラベルのサイズ確認
+            if size(data, 3) ~= length(labels)
+                error('データのエポック数(%d)とラベル数(%d)が一致しません', size(data, 3), length(labels));
+            end
+            
+            % データの妥当性検証
+            validateattributes(data, {'numeric'}, {'finite', 'nonnan'}, 'validateAndPrepareData', 'data');
+            
+            validatedData = data;
+            [channels, samples, epochs] = size(data);
+            infoMsg = sprintf('データ検証完了 [%d×%d×%d]', channels, samples, epochs);
+            obj.logMessage(2, '%s\n', infoMsg);
+        end
+        
         function [normalizedEEG, normParams] = normalizeData(obj, data)
             % EEGデータの正規化を行う
             %
             % 入力:
-            %   data - 正規化するEEGデータ
+            %   data - 正規化するEEGデータ [チャンネル x サンプル x エポック]
             %
             % 出力:
             %   normalizedEEG - 正規化されたデータ
@@ -162,8 +276,11 @@ classdef ECOCClassifier < handle
             normParams = [];
             
             if obj.params.classifier.normalize.enable
-                eegNormalizer = EEGNormalizer(obj.params);
-                [normalizedEEG, normParams] = eegNormalizer.normalize(data);
+                obj.logMessage(2, '正規化を実行...\n');
+                [normalizedEEG, normParams] = obj.normalizer.normalize(data);
+                obj.logMessage(2, '正規化完了\n');
+            else
+                obj.logMessage(2, '正規化はスキップされました\n');
             end
         end
         
@@ -171,25 +288,72 @@ classdef ECOCClassifier < handle
             % 共通空間パターン(CSP)特徴量を抽出する
             %
             % 入力:
-            %   data - EEGデータ
-            %   labels - クラスラベル
+            %   data - EEGデータ [チャンネル x サンプル x エポック]
+            %   labels - クラスラベル [エポック x 1]
             %
             % 出力:
-            %   features - 抽出された特徴量
-            %   filters - CSPフィルタ
+            %   features - 抽出された特徴量 [エポック x 特徴量数]
+            %   filters - CSPフィルタ [フィルタ数 x チャンネル数]
             %   cspParameters - CSP計算パラメータ
             
             cspExtractor = CSPExtractor(obj.params);
             [filters, cspParameters] = cspExtractor.trainCSP(data, labels);
             features = cspExtractor.extractFeatures(data, filters);
+            
+            obj.logMessage(2, 'CSP特徴抽出完了:\n');
+            obj.logMessage(2, '  - フィルタ数: %d\n', size(filters, 1));
+            obj.logMessage(2, '  - 特徴量次元: %d\n', size(features, 2));
         end
         
-        function [trainFeatures, trainLabels, testFeatures, testLabels] = splitDataset(~, features, labels)
+        function [augmentedFeatures, augmentedLabels] = augmentData(obj, features, labels)
+            % 特徴量レベルでのデータ拡張
+            %
+            % 入力:
+            %   features - 元の特徴量 [サンプル数 x 特徴量数]
+            %   labels - 元のラベル [サンプル数 x 1]
+            %
+            % 出力:
+            %   augmentedFeatures - 拡張された特徴量
+            %   augmentedLabels - 拡張されたラベル
+            
+            augmentedFeatures = features;
+            augmentedLabels = labels;
+            
+            if obj.params.classifier.augmentation.enable
+                % 基本的なデータ拡張（ノイズ付加とスケーリング）
+                numOriginal = size(features, 1);
+                ratio = obj.params.classifier.augmentation.augmentationRatio;
+                numAugmented = round(numOriginal * (ratio - 1));
+                
+                if numAugmented > 0
+                    % ノイズ付加による拡張
+                    noiseLevel = 0.01; % 1%のノイズ
+                    noisyFeatures = features(1:numAugmented, :) + ...
+                        noiseLevel * randn(numAugmented, size(features, 2)) .* std(features, 0, 1);
+                    
+                    % スケーリングによる拡張
+                    scaleRange = [0.9, 1.1];
+                    scaledFeatures = features(1:numAugmented, :) .* ...
+                        (scaleRange(1) + (scaleRange(2) - scaleRange(1)) * rand(numAugmented, 1));
+                    
+                    % 拡張データの結合
+                    augmentedFeatures = [features; noisyFeatures; scaledFeatures];
+                    augmentedLabels = [labels; labels(1:numAugmented); labels(1:numAugmented)];
+                    
+                    obj.logMessage(2, 'データ拡張完了:\n');
+                    obj.logMessage(2, '  - 元データ: %d サンプル\n', numOriginal);
+                    obj.logMessage(2, '  - 拡張後: %d サンプル (%.1f倍)\n', length(augmentedLabels), ...
+                        length(augmentedLabels)/numOriginal);
+                end
+            end
+        end
+        
+        function [trainFeatures, trainLabels, testFeatures, testLabels] = splitDataset(obj, features, labels)
             % データセットを学習用と検証用に分割する
             %
             % 入力:
-            %   features - 分割する特徴量
-            %   labels - 対応するラベル
+            %   features - 分割する特徴量 [サンプル数 x 特徴量数]
+            %   labels - 対応するラベル [サンプル数 x 1]
             %
             % 出力:
             %   trainFeatures - 学習用特徴量
@@ -197,7 +361,9 @@ classdef ECOCClassifier < handle
             %   testFeatures - 検証用特徴量
             %   testLabels - 検証用ラベル
             
-            fprintf('\nデータを学習用と検証用に分割します...\n');
+            obj.logMessage(1, '\nデータを学習用と検証用に分割します...\n');
+            
+            % 層別化サンプリングを使用してクラス分布を維持
             cv = cvpartition(labels, 'Holdout', 0.2);  % 80%学習, 20%検証
             trainIdx = cv.training;
             testIdx = cv.test;
@@ -207,20 +373,21 @@ classdef ECOCClassifier < handle
             testFeatures = features(testIdx, :);
             testLabels = labels(testIdx);
             
-            fprintf('  - 学習データ: %d サンプル\n', sum(trainIdx));
-            fprintf('  - 検証データ: %d サンプル\n', sum(testIdx));
+            obj.logMessage(1, '  - 学習データ: %d サンプル (%.1f%%)\n', sum(trainIdx), (sum(trainIdx)/length(labels))*100);
+            obj.logMessage(1, '  - 検証データ: %d サンプル (%.1f%%)\n', sum(testIdx), (sum(testIdx)/length(labels))*100);
         end
         
         function trainModel(obj, features, labels)
             % ECOCモデルを学習する
             %
             % 入力:
-            %   features - 学習用特徴量
-            %   labels - 学習用ラベル
+            %   features - 学習用特徴量 [サンプル数 x 特徴量数]
+            %   labels - 学習用ラベル [サンプル数 x 1]
             
-            fprintf('  - コーディング方式: %s\n', obj.params.classifier.ecoc.coding);
-            fprintf('  - 基本学習器: %s\n', obj.params.classifier.ecoc.learners);
-            fprintf('  - カーネル関数: %s\n', obj.params.classifier.ecoc.kernel);
+            obj.logMessage(1, 'ECOCモデル設定:\n');
+            obj.logMessage(1, '  - コーディング方式: %s\n', obj.params.classifier.ecoc.coding);
+            obj.logMessage(1, '  - 基本学習器: %s\n', obj.params.classifier.ecoc.learners);
+            obj.logMessage(1, '  - カーネル関数: %s\n', obj.params.classifier.ecoc.kernel);
             
             if obj.isOptimized
                 obj.trainOptimizedModel(features, labels);
@@ -228,34 +395,36 @@ classdef ECOCClassifier < handle
                 obj.trainDefaultModel(features, labels);
             end
 
-            % 注: fitPosterior関数はECOCモデルでは使用できないため削除
+            % 確率推定の設定（注: fitPosterior関数はECOCモデルでは使用できない）
             if obj.params.classifier.ecoc.probability
-                fprintf('確率推定は直接fitcecocで有効化されています\n');
+                obj.logMessage(2, '確率推定は学習時に有効化されています\n');
                 % 確率推定は学習時に設定済み
             end
+            
+            obj.logMessage(1, 'ECOCモデルの学習完了\n');
         end
-
+        
         function trainOptimizedModel(obj, features, labels)
             % ハイパーパラメータ最適化を用いてECOCモデルを学習する
             %
             % 入力:
-            %   features - 学習用特徴量
-            %   labels - 学習用ラベル
+            %   features - 学習用特徴量 [サンプル数 x 特徴量数]
+            %   labels - 学習用ラベル [サンプル数 x 1]
             
-            fprintf('\nECOCハイパーパラメータ最適化を実行...\n');
+            obj.logMessage(1, '\nECOCハイパーパラメータ最適化を実行...\n');
             
             % 最適化方法の設定
             if isfield(obj.params.classifier.ecoc, 'hyperparameters') && ...
                isfield(obj.params.classifier.ecoc.hyperparameters, 'optimizer')
                 optMethod = obj.params.classifier.ecoc.hyperparameters.optimizer;
-                fprintf('  - 最適化手法: %s\n', optMethod);
+                obj.logMessage(1, '  - 最適化手法: %s\n', optMethod);
                 
                 % グリッドサーチ最適化
                 obj.trainWithGridSearch(features, labels);
             else
                 % ハイパーパラメータフィールドがない場合はデフォルト最適化
                 obj.trainWithGridSearch(features, labels);
-                fprintf('  - デフォルトのグリッドサーチ最適化を使用\n');
+                obj.logMessage(1, '  - デフォルトのグリッドサーチ最適化を使用\n');
             end
         end
         
@@ -263,34 +432,20 @@ classdef ECOCClassifier < handle
             % グリッドサーチを用いたハイパーパラメータ最適化
             %
             % 入力:
-            %   features - 学習用特徴量
-            %   labels - 学習用ラベル
+            %   features - 学習用特徴量 [サンプル数 x 特徴量数]
+            %   labels - 学習用ラベル [サンプル数 x 1]
             
-            fprintf('  - グリッドサーチ最適化を使用\n');
+            obj.logMessage(1, '  - グリッドサーチ最適化を使用\n');
+            
+            % パラメータの設定
+            boxConstraints = obj.getParameterValues('boxConstraint', [0.1, 1, 10]);
+            kernelScales = obj.getParameterValues('kernelScale', [0.1, 1, 10]);
+            
+            obj.logMessage(2, '  - BoxConstraint候補: [%s]\n', num2str(boxConstraints));
+            obj.logMessage(2, '  - KernelScale候補: [%s]\n', num2str(kernelScales));
             
             % 確率推定オプションの設定
-            fitPosterior = false;
-            if obj.params.classifier.ecoc.probability
-                fitPosterior = true;
-            end
-            
-            % BoxConstraintパラメータの設定
-            if ~isfield(obj.params.classifier.ecoc.hyperparameters, 'boxConstraint')
-                boxConstraints = [0.1, 1, 10];
-                fprintf('  - BoxConstraint候補: デフォルト値を使用 [%s]\n', num2str(boxConstraints));
-            else
-                boxConstraints = obj.params.classifier.ecoc.hyperparameters.boxConstraint;
-                fprintf('  - BoxConstraint候補: [%s]\n', num2str(boxConstraints));
-            end
-            
-            % KernelScaleパラメータの設定
-            if ~isfield(obj.params.classifier.ecoc.hyperparameters, 'kernelScale')
-                kernelScales = [0.1, 1, 10];
-                fprintf('  - KernelScale候補: デフォルト値を使用 [%s]\n', num2str(kernelScales));
-            else
-                kernelScales = obj.params.classifier.ecoc.hyperparameters.kernelScale;
-                fprintf('  - KernelScale候補: [%s]\n', num2str(kernelScales));
-            end
+            fitPosterior = obj.params.classifier.ecoc.probability;
             
             % グリッドサーチの実行
             bestScore = -inf;
@@ -298,37 +453,41 @@ classdef ECOCClassifier < handle
             
             for c = boxConstraints
                 for k = kernelScales
-                    % 基本学習器の選択
-                    if strcmpi(obj.params.classifier.ecoc.learners, 'svm')
-                        template = templateSVM(...
-                            'KernelFunction', obj.params.classifier.ecoc.kernel, ...
-                            'BoxConstraint', c, ...
-                            'KernelScale', k);
-                    else
-                        % 決定木 (tree) の場合
-                        template = templateTree();
-                    end
-                    
-                    mdl = fitcecoc(features, labels, ...
-                        'Learners', template, ...
-                        'Coding', obj.params.classifier.ecoc.coding, ...
-                        'FitPosterior', fitPosterior);
-                    
-                    cv = crossval(mdl, 'KFold', obj.params.classifier.ecoc.validation.kfold);
-                    score = 1 - kfoldLoss(cv);
-                    
-                    fprintf('  - C=%.3f, KScale=%.3f: スコア=%.4f\n', c, k, score);
-                    
-                    if score > bestScore
-                        bestScore = score;
-                        bestParams.BoxConstraint = c;
-                        bestParams.KernelScale = k;
-                        fprintf('    -> 新しい最良パラメータ\n');
+                    try
+                        % 基本学習器の選択
+                        if strcmpi(obj.params.classifier.ecoc.learners, 'svm')
+                            template = templateSVM(...
+                                'KernelFunction', obj.params.classifier.ecoc.kernel, ...
+                                'BoxConstraint', c, ...
+                                'KernelScale', k);
+                        else
+                            % 決定木 (tree) の場合
+                            template = templateTree();
+                        end
+                        
+                        mdl = fitcecoc(features, labels, ...
+                            'Learners', template, ...
+                            'Coding', obj.params.classifier.ecoc.coding, ...
+                            'FitPosterior', fitPosterior);
+                        
+                        cv = crossval(mdl, 'KFold', obj.params.classifier.ecoc.validation.kfold);
+                        score = 1 - kfoldLoss(cv);
+                        
+                        obj.logMessage(2, '  - C=%.3f, KScale=%.3f: スコア=%.4f\n', c, k, score);
+                        
+                        if score > bestScore
+                            bestScore = score;
+                            bestParams.BoxConstraint = c;
+                            bestParams.KernelScale = k;
+                            obj.logMessage(2, '    -> 新しい最良パラメータ\n');
+                        end
+                    catch ME
+                        obj.logMessage(1, '    パラメータ組み合わせでエラー: %s\n', ME.message);
                     end
                 end
             end
             
-            fprintf('\n最適パラメータ: C=%.3f, KScale=%.3f, スコア=%.4f\n', ...
+            obj.logMessage(1, '\n最適パラメータ: C=%.3f, KScale=%.3f, スコア=%.4f\n', ...
                 bestParams.BoxConstraint, bestParams.KernelScale, bestScore);
             
             % 最適パラメータでモデルを作成
@@ -348,20 +507,36 @@ classdef ECOCClassifier < handle
                 'FitPosterior', fitPosterior);
         end
         
+        function values = getParameterValues(obj, paramName, defaultValues)
+            % パラメータ値を設定から取得（なければデフォルト値を使用）
+            %
+            % 入力:
+            %   paramName - パラメータ名
+            %   defaultValues - デフォルト値配列
+            %
+            % 出力:
+            %   values - パラメータ値配列
+            
+            if isfield(obj.params.classifier.ecoc, 'hyperparameters') && ...
+               isfield(obj.params.classifier.ecoc.hyperparameters, paramName)
+                values = obj.params.classifier.ecoc.hyperparameters.(paramName);
+            else
+                values = defaultValues;
+                obj.logMessage(2, '  - %s: デフォルト値を使用\n', paramName);
+            end
+        end
+        
         function trainDefaultModel(obj, features, labels)
             % デフォルトパラメータでECOCモデルを学習する
             %
             % 入力:
-            %   features - 学習用特徴量
-            %   labels - 学習用ラベル
+            %   features - 学習用特徴量 [サンプル数 x 特徴量数]
+            %   labels - 学習用ラベル [サンプル数 x 1]
             
-            fprintf('\nデフォルトパラメータでECOCモデルを作成...\n');
+            obj.logMessage(1, '\nデフォルトパラメータでECOCモデルを作成...\n');
             
             % 確率推定オプションの設定
-            fitPosterior = false;
-            if obj.params.classifier.ecoc.probability
-                fitPosterior = true;
-            end
+            fitPosterior = obj.params.classifier.ecoc.probability;
             
             % 基本学習器の選択
             if strcmpi(obj.params.classifier.ecoc.learners, 'svm')
@@ -378,107 +553,157 @@ classdef ECOCClassifier < handle
                 'FitPosterior', fitPosterior);
         end
         
-        function performCrossValidation(obj, features, labels)
+        function evaluateTrainingPerformance(obj, trainFeatures, trainLabels)
+            % 学習データでの性能を評価（過学習検出用）
+            %
+            % 入力:
+            %   trainFeatures - 学習用特徴量 [サンプル数 x 特徴量数]
+            %   trainLabels - 学習用ラベル [サンプル数 x 1]
+            
+            obj.logMessage(2, '学習データでの性能評価...\n');
+            
+            try
+                [pred, ~] = predict(obj.ecocModel, trainFeatures);
+                obj.trainingAccuracy = mean(pred == trainLabels);
+                obj.logMessage(2, '学習精度: %.2f%%\n', obj.trainingAccuracy * 100);
+            catch ME
+                obj.logMessage(1, '学習精度の計算でエラー: %s\n', ME.message);
+                obj.trainingAccuracy = NaN;
+            end
+        end
+        
+        function performCrossValidation(obj, trainFeatures, trainLabels)
             % 交差検証を実行する
             %
             % 入力:
-            %   features - 特徴量
-            %   labels - ラベル
+            %   trainFeatures - 学習用特徴量（現在は交差検証では直接使用しない）
+            %   trainLabels - 学習用ラベル（現在は交差検証では直接使用しない）
+            %
+            % 注意: 現在の実装では学習済みモデルに対して交差検証を実行している
+            %      将来的にはtrainFeaturesとtrainLabelsを直接使用する実装への変更も可能
             
-            if ~obj.params.classifier.evaluation.enable
+            if ~obj.params.classifier.ecoc.validation.enable
                 return;
             end
             
-            kfolds = obj.params.classifier.ecoc.validation.kfold;
-            fprintf('\n交差検証の実行（K=%d）...\n', kfolds);
+            % 引数の未使用を明示的に示す（将来的な拡張のために引数は保持）
+            if obj.verbosity >= 3
+                obj.logMessage(3, '交差検証用データサイズ: %d x %d\n', size(trainFeatures, 1), size(trainFeatures, 2));
+                obj.logMessage(3, '交差検証用ラベル数: %d\n', length(trainLabels));
+            end
             
-            % 交差検証
-            cv = cvpartition(labels, 'KFold', kfolds);
-            cvAcc = zeros(kfolds, 1);
-
-            for i = 1:kfolds
-                trainIdx = cv.training(i);
-                testIdx = cv.test(i);
+            kfold = obj.params.classifier.ecoc.validation.kfold;
+            obj.logMessage(1, '\n交差検証の実行（K=%d）...\n', kfold);
+            
+            try
+                obj.crossValModel = crossval(obj.ecocModel, 'KFold', kfold);
                 
-                % 基本学習器の選択
-                if strcmpi(obj.params.classifier.ecoc.learners, 'svm')
-                    template = templateSVM(...
-                        'KernelFunction', obj.params.classifier.ecoc.kernel);
-                else
-                    template = templateTree();
+                obj.performance.cvAccuracies = zeros(kfold, 1);
+                
+                % 各フォールドの精度を計算
+                for i = 1:kfold
+                    obj.performance.cvAccuracies(i) = 1 - kfoldLoss(obj.crossValModel, 'Folds', i);
+                    obj.logMessage(2, '  - フォールド %d: 精度 = %.4f\n', i, obj.performance.cvAccuracies(i));
                 end
                 
-                % 現在のフォールドでのモデル学習
-                mdl = fitcecoc(features(trainIdx,:), labels(trainIdx), ...
-                    'Learners', template, ...
-                    'Coding', obj.params.classifier.ecoc.coding, ...
-                    'FitPosterior', obj.params.classifier.ecoc.probability);
+                obj.performance.cvMeanAccuracy = mean(obj.performance.cvAccuracies);
+                obj.performance.cvStdAccuracy = std(obj.performance.cvAccuracies);
+                obj.validationAccuracy = obj.performance.cvMeanAccuracy;
                 
-                % テストデータでの予測と精度計算
-                [pred, ~] = predict(mdl, features(testIdx,:));
-                cvAcc(i) = mean(pred == labels(testIdx));
-                
-                fprintf('  - フォールド %d: 精度 = %.4f\n', i, cvAcc(i));
+                obj.logMessage(1, '平均交差検証精度: %.4f (±%.4f)\n', ...
+                    obj.performance.cvMeanAccuracy, obj.performance.cvStdAccuracy);
+                    
+            catch ME
+                obj.logMessage(1, '交差検証でエラーが発生: %s\n', ME.message);
+                obj.performance.cvMeanAccuracy = NaN;
+                obj.performance.cvStdAccuracy = NaN;
             end
-
-            % 交差検証の結果を保存
-            obj.performance.cvAccuracies = cvAcc;
-            obj.performance.cvMeanAccuracy = mean(cvAcc);
-            obj.performance.cvStdAccuracy = std(cvAcc);
-            
-            fprintf('平均交差検証精度: %.4f (±%.4f)\n', ...
-                obj.performance.cvMeanAccuracy, obj.performance.cvStdAccuracy);
         end
 
         function metrics = evaluateModel(obj, testFeatures, testLabels)
             % テストデータでモデルの性能を評価する
             %
             % 入力:
-            %   testFeatures - 検証用特徴量
-            %   testLabels - 検証用ラベル
+            %   testFeatures - 検証用特徴量 [サンプル数 x 特徴量数]
+            %   testLabels - 検証用ラベル [サンプル数 x 1]
             %
             % 出力:
             %   metrics - テストデータでの性能評価結果
             
-            fprintf('\n検証データでモデルを評価中...\n');
+            obj.logMessage(1, '\n検証データでモデルを評価中...\n');
+            
+            % 初期化
             metrics = struct(...
-                'accuracy', [], ...
+                'accuracy', 0, ...
                 'score', [], ...
-                'confusionMat', [], ....
+                'confusionMat', [], ...
                 'roc', [], ...
                 'auc', [], ...
                 'classwise', [] ...
             );
 
-            [pred, score] = predict(obj.ecocModel, testFeatures);
-            
-            % スコアを確率に変換
-            score = obj.convertToProb(score);
-            metrics.score = score;
-            
-            % 検証データでの精度と混同行列
-            metrics.accuracy = mean(pred == testLabels);
-            metrics.confusionMat = confusionmat(testLabels, pred);
-            
-            % クラスラベル
-            classLabels = unique(testLabels);
-
-            % ROC曲線とAUCの計算（2クラス分類の場合のみ）
-            if length(classLabels) == 2
-                [X, Y, T, AUC] = perfcurve(testLabels, score(:,2), classLabels(2));
-                metrics.roc = struct('X', X, 'Y', Y, 'T', T);
-                metrics.auc = AUC;
-                obj.performance.testRoc = metrics.roc;
-                obj.performance.testAuc = AUC;
-                fprintf('AUC: %.4f\n', AUC);
+            try
+                [pred, score] = predict(obj.ecocModel, testFeatures);
+                
+                % スコアを確率に変換
+                score = obj.convertToProb(score);
+                metrics.score = score;
+                
+                % 検証データでの精度と混同行列
+                metrics.accuracy = mean(pred == testLabels);
+                metrics.confusionMat = confusionmat(testLabels, pred);
+                
+                % パフォーマンス情報の保存
+                obj.performance.testAccuracy = metrics.accuracy;
+                obj.performance.testConfusionMat = metrics.confusionMat;
+                obj.performance.testScore = score;
+                obj.performance.testPredictions = pred;
+                
+                % クラスラベル
+                classLabels = unique(testLabels);
+                obj.performance.classLabels = classLabels;
+                
+                obj.logMessage(1, 'テスト精度: %.2f%%\n', metrics.accuracy * 100);
+                
+                % ROC曲線とAUCの計算
+                if length(classLabels) == 2
+                    % 二値分類の場合
+                    [X, Y, T, AUC] = perfcurve(testLabels, score(:,2), classLabels(2));
+                    metrics.roc = struct('X', X, 'Y', Y, 'T', T);
+                    metrics.auc = AUC;
+                    obj.performance.testRoc = metrics.roc;
+                    obj.performance.testAuc = AUC;
+                    obj.logMessage(1, 'AUC: %.3f\n', AUC);
+                elseif length(classLabels) > 2
+                    % マルチクラス分類の場合: One-vs-Rest AUC
+                    aucValues = zeros(1, length(classLabels));
+                    for i = 1:length(classLabels)
+                        binaryLabels = (testLabels == classLabels(i));
+                        [~, ~, ~, aucValues(i)] = perfcurve(binaryLabels, score(:,i), true);
+                    end
+                    metrics.auc = mean(aucValues);
+                    obj.performance.testAuc = metrics.auc;
+                    obj.logMessage(1, '平均AUC (One-vs-Rest): %.3f\n', metrics.auc);
+                end
+                
+                % クラスごとの性能評価
+                metrics.classwise = obj.calculateClassMetrics(testLabels, pred, classLabels);
+                obj.performance.testClasswise = metrics.classwise;
+                
+                % 混同行列の表示
+                obj.logMessage(1, '\n混同行列:\n');
+                if obj.verbosity >= 1
+                    disp(metrics.confusionMat);
+                end
+                
+            catch ME
+                obj.logMessage(0, 'モデル評価でエラーが発生: %s\n', ME.message);
+                obj.performance.testAccuracy = metrics.accuracy;
+                rethrow(ME);
             end
-            
-            % クラスごとの性能評価
-            metrics.classwise = obj.calculateClassMetrics(testLabels, pred, classLabels);
-            obj.performance.testClasswise = metrics.classwise;
         end
 
-        function metrics = calculateClassMetrics(~, trueLabels, predLabels, classLabels)
+        function metrics = calculateClassMetrics(obj, trueLabels, predLabels, classLabels)
             % クラスごとの性能評価指標を計算する
             %
             % 入力:
@@ -489,6 +714,7 @@ classdef ECOCClassifier < handle
             % 出力:
             %   metrics - クラスごとの性能評価指標
             
+            obj.logMessage(2, '\nクラスごとの性能評価:\n');
             metrics = struct();
             
             for i = 1:length(classLabels)
@@ -524,14 +750,14 @@ classdef ECOCClassifier < handle
                 metrics(i).recall = recall;
                 metrics(i).f1score = f1score;
                 
-                fprintf('\nクラス %d の評価:\n', className);
-                fprintf('  - 精度 (Precision): %.4f\n', precision);
-                fprintf('  - 再現率 (Recall): %.4f\n', recall);
-                fprintf('  - F1スコア: %.4f\n', f1score);
+                obj.logMessage(2, 'クラス %d:\n', className);
+                obj.logMessage(2, '  - 精度 (Precision): %.2f%%\n', precision * 100);
+                obj.logMessage(2, '  - 再現率 (Recall): %.2f%%\n', recall * 100);
+                obj.logMessage(2, '  - F1スコア: %.3f\n', f1score);
             end
         end
         
-        function checkClassDistribution(~, setName, labels)
+        function checkClassDistribution(obj, setName, labels)
             % データセット内のクラス分布を解析して表示する
             %
             % 入力:
@@ -539,159 +765,345 @@ classdef ECOCClassifier < handle
             %   labels - クラスラベル
             
             uniqueLabels = unique(labels);
-            fprintf('\n%sデータのクラス分布:\n', setName);
+            obj.logMessage(1, '\n%sデータのクラス分布:\n', setName);
             
+            % 修正: histcountsの問題を解決
+            counts = zeros(1, length(uniqueLabels));
             for i = 1:length(uniqueLabels)
-                count = sum(labels == uniqueLabels(i));
-                fprintf('  - クラス %d: %d サンプル (%.1f%%)\n', ...
-                    uniqueLabels(i), count, (count/length(labels))*100);
+                counts(i) = sum(labels == uniqueLabels(i));
+                obj.logMessage(1, '  - クラス %d: %d サンプル (%.1f%%)\n', ...
+                    uniqueLabels(i), counts(i), (counts(i)/length(labels))*100);
             end
             
             % クラス不均衡の評価
-            counts = histcounts(labels, 'BinMethod', 'integers');
             maxCount = max(counts);
             minCount = min(counts);
             imbalanceRatio = maxCount / max(minCount, 1);
             
             if imbalanceRatio > 3
-                warning('%sデータセットのクラス不均衡が大きいです (比率: %.1f:1)', ...
+                obj.logMessage(1, '警告: %sデータセットのクラス不均衡が大きいです (比率: %.1f:1)\n', ...
                     setName, imbalanceRatio);
             end
         end
         
-        function [isOverfit, metrics] = validateOverfitting(obj, testAccuracy)
-            % 学習データと検証データの性能比較に基づく過学習検出
+        function [isOverfit, analysisResults] = validateOverfitting(obj, testAccuracy)
+            % 詳細な過学習検証（SVMClassifierと同等レベル）
             %
             % 入力:
             %   testAccuracy - 検証データでの精度
             %
             % 出力:
             %   isOverfit - 過学習検出フラグ
-            %   metrics - 過学習メトリクス
+            %   analysisResults - 詳細な過学習メトリクス（プロパティ名との衝突を回避）
 
-            fprintf('\n=== 過学習検証の実行 ===\n');
+            obj.logMessage(1, '\n=== 詳細な過学習検証の実行 ===\n');
             
-            % 交差検証精度との比較
-            if isfield(obj.performance, 'cvMeanAccuracy')
-                valAccuracy = obj.performance.cvMeanAccuracy;
-                perfGap = abs(valAccuracy - testAccuracy);
+            % 初期化
+            isOverfit = false;
+            analysisResults = struct(...
+                'trainAccuracy', obj.trainingAccuracy, ...
+                'valAccuracy', obj.validationAccuracy, ...
+                'testAccuracy', testAccuracy, ...
+                'trainTestGap', NaN, ...
+                'valTestGap', NaN, ...
+                'severity', 'none', ...
+                'isCompletelyBiased', false, ...
+                'gapSeverity', 'none' ...
+            );
+            
+            try
+                % 学習精度との比較
+                trainTestGap = NaN;
+                if ~isnan(obj.trainingAccuracy)
+                    trainTestGap = abs(obj.trainingAccuracy - testAccuracy);
+                    obj.logMessage(1, '学習精度: %.2f%%\n', obj.trainingAccuracy * 100);
+                    analysisResults.trainTestGap = trainTestGap;
+                end
                 
-                fprintf('交差検証平均精度: %.2f%%\n', valAccuracy * 100);
-                fprintf('検証データ精度: %.2f%%\n', testAccuracy * 100);
-                fprintf('精度差: %.2f%%\n', perfGap * 100);
+                % 交差検証精度との比較
+                valTestGap = NaN;
+                if isfield(obj.performance, 'cvMeanAccuracy') && ~isnan(obj.performance.cvMeanAccuracy)
+                    valTestGap = abs(obj.performance.cvMeanAccuracy - testAccuracy);
+                    obj.logMessage(1, '交差検証平均精度: %.2f%%\n', obj.performance.cvMeanAccuracy * 100);
+                    analysisResults.valTestGap = valTestGap;
+                end
                 
-                % 過学習の程度を評価
-                if perfGap > 0.15  % 15%以上の差は重度の過学習と判定
-                    severity = 'severe';
-                elseif perfGap > 0.10  % 10%以上の差は中程度の過学習
-                    severity = 'moderate';
-                elseif perfGap > 0.05  % 5%以上の差は軽度の過学習
-                    severity = 'mild';
+                obj.logMessage(1, 'テスト精度: %.2f%%\n', testAccuracy * 100);
+                
+                % ギャップの表示
+                if ~isnan(trainTestGap)
+                    obj.logMessage(1, '学習-テスト精度差: %.2f%%\n', trainTestGap * 100);
+                end
+                if ~isnan(valTestGap)
+                    obj.logMessage(1, '検証-テスト精度差: %.2f%%\n', valTestGap * 100);
+                end
+                
+                % 分類バイアスの検出
+                isCompletelyBiased = obj.detectClassificationBias();
+                analysisResults.isCompletelyBiased = isCompletelyBiased;
+                
+                % 過学習の程度を段階的に評価
+                [gapOverfit, gapSeverity] = obj.evaluatePerformanceGap(trainTestGap, valTestGap);
+                analysisResults.gapSeverity = gapSeverity;
+                
+                % 最終的な重大度判定
+                if isCompletelyBiased
+                    severity = 'critical';
+                    isOverfit = true;
+                    obj.logMessage(1, '完全な分類バイアスが検出されました\n');
+                elseif gapOverfit
+                    severity = gapSeverity;
+                    isOverfit = true;
                 else
                     severity = 'none';
+                    isOverfit = false;
                 end
-            else
-                % 交差検証データがない場合はテスト精度のみで判断
-                valAccuracy = NaN;
-                perfGap = NaN;
                 
-                if testAccuracy < 0.6
-                    severity = 'poor_performance';
-                elseif testAccuracy > 0.95
-                    severity = 'potential_overfit';
-                else
-                    severity = 'unknown';
-                end
+                % メトリクスの更新
+                analysisResults.severity = severity;
+                
+                % プロパティに保存
+                obj.overfitMetrics = analysisResults;
+                
+                % 結果の表示と警告
+                obj.logMessage(1, '過学習判定: %s (重大度: %s)\n', mat2str(isOverfit), severity);
+                obj.displayOverfitWarning(isOverfit, severity);
+                
+            catch ME
+                obj.logMessage(1, '過学習検証でエラーが発生: %s\n', ME.message);
+                % エラー時のフォールバック - メトリクスは既に初期化済み
+                analysisResults.severity = 'unknown';
             end
-            
-            % 過学習フラグの設定
-            isOverfit = ~strcmp(severity, 'none') && ~strcmp(severity, 'unknown');
-            
-            % メトリクスの構築
-            metrics = struct(...
-                'valAccuracy', valAccuracy, ...
-                'testAccuracy', testAccuracy, ...
-                'accuracyGap', perfGap, ...
-                'severity', severity);
-            
-            % 結果の表示
-            fprintf('過学習評価結果: %s\n', severity);
-            
-            % 過学習や性能問題の警告とアドバイス
-            obj.displayOverfitWarning(isOverfit, severity);
         end
         
-        function displayOverfitWarning(~, isOverfit, severity)
-            % 過学習や性能問題の警告を表示する
+        function [gapOverfit, severity] = evaluatePerformanceGap(obj, trainTestGap, valTestGap)
+            % 性能ギャップに基づく過学習評価
+            %
+            % 入力:
+            %   trainTestGap - 学習-テスト精度差
+            %   valTestGap - 検証-テスト精度差
+            %
+            % 出力:
+            %   gapOverfit - ギャップベースの過学習フラグ
+            %   severity - 重大度
+            
+            gapOverfit = false;
+            severity = 'none';
+            
+            % 主要なギャップを選択（利用可能な方を優先）
+            primaryGap = NaN;
+            if ~isnan(valTestGap)
+                primaryGap = valTestGap;
+                gapType = '検証-テスト';
+            elseif ~isnan(trainTestGap)
+                primaryGap = trainTestGap;
+                gapType = '学習-テスト';
+            end
+            
+            if ~isnan(primaryGap)
+                obj.logMessage(2, '主要ギャップ (%s): %.2f%%\n', gapType, primaryGap * 100);
+                
+                % 段階的な重大度判定
+                if primaryGap > 0.20      % 20%以上の差
+                    severity = 'critical';
+                    gapOverfit = true;
+                elseif primaryGap > 0.15  % 15%以上の差
+                    severity = 'severe';
+                    gapOverfit = true;
+                elseif primaryGap > 0.10  % 10%以上の差
+                    severity = 'moderate';
+                    gapOverfit = true;
+                elseif primaryGap > 0.05  % 5%以上の差
+                    severity = 'mild';
+                    gapOverfit = true;
+                else
+                    severity = 'none';
+                    gapOverfit = false;
+                end
+            else
+                obj.logMessage(2, '性能ギャップの計算に十分なデータがありません\n');
+            end
+        end
+        
+        function isCompletelyBiased = detectClassificationBias(obj)
+            % 混同行列から分類バイアスを検出
+            %
+            % 出力:
+            %   isCompletelyBiased - 完全なバイアスの有無
+            
+            isCompletelyBiased = false;
+            
+            if isfield(obj.performance, 'testConfusionMat') && ~isempty(obj.performance.testConfusionMat)
+                cm = obj.performance.testConfusionMat;
+                
+                % 各実際のクラス（行）のサンプル数を確認
+                rowSums = sum(cm, 2);
+                missingActual = any(rowSums == 0);
+                
+                % 各予測クラス（列）の予測件数を確認
+                colSums = sum(cm, 1);
+                missingPredicted = any(colSums == 0);
+                
+                % すべての予測が1クラスに集中しているかを検出
+                predictedClassCount = sum(colSums > 0);
+                
+                isCompletelyBiased = missingActual || missingPredicted || predictedClassCount <= 1;
+                
+                if isCompletelyBiased
+                    obj.logMessage(1, '\n警告: 分類に完全な偏りが検出されました\n');
+                    obj.logMessage(1, '  - 分類された実際のクラス数: %d / %d\n', sum(rowSums > 0), size(cm, 1));
+                    obj.logMessage(1, '  - 予測されたクラス数: %d / %d\n', predictedClassCount, size(cm, 2));
+                end
+            end
+        end
+        
+        function displayOverfitWarning(obj, isOverfit, severity)
+            % 詳細な過学習警告とアドバイスの表示
             %
             % 入力:
             %   isOverfit - 過学習フラグ
-            %   severity - 過学習または性能問題の重症度
+            %   severity - 過学習の重症度
             
             if isOverfit
-                fprintf('\n警告: モデルに過学習または性能問題の兆候が検出されました (%s)\n', severity);
-                fprintf('  対策として以下を検討してください:\n');
-                fprintf('  - 特徴量の削減\n');
-                fprintf('  - 正則化パラメータの調整\n');
-                fprintf('  - データ拡張\n');
-                fprintf('  - より多くのトレーニングデータの使用\n');
-            elseif strcmp(severity, 'poor_performance')
-                fprintf('\n警告: モデルの性能が十分ではありません。\n');
-                fprintf('  対策として以下を検討してください:\n');
-                fprintf('  - より適切な特徴量の選択\n');
-                fprintf('  - ハイパーパラメータの最適化\n');
-                fprintf('  - 別のカーネル関数の試行\n');
+                obj.logMessage(1, '\n警告: モデルに過学習の兆候が検出されました (%s)\n', severity);
+                
+                switch severity
+                    case 'critical'
+                        obj.logMessage(1, '  *** 重大な過学習 ***\n');
+                        obj.logMessage(1, '  緊急対策が必要です:\n');
+                        obj.logMessage(1, '  - 特徴量の大幅削減\n');
+                        obj.logMessage(1, '  - より強い正則化\n');
+                        obj.logMessage(1, '  - 交差検証による厳密な評価\n');
+                        obj.logMessage(1, '  - 別のアルゴリズムの検討\n');
+                        
+                    case 'severe'
+                        obj.logMessage(1, '  ** 深刻な過学習 **\n');
+                        obj.logMessage(1, '  対策として以下を検討してください:\n');
+                        obj.logMessage(1, '  - 特徴量選択の見直し\n');
+                        obj.logMessage(1, '  - 正則化パラメータの調整\n');
+                        obj.logMessage(1, '  - より多くの学習データの収集\n');
+                        
+                    case 'moderate'
+                        obj.logMessage(1, '  * 中程度の過学習 *\n');
+                        obj.logMessage(1, '  推奨対策:\n');
+                        obj.logMessage(1, '  - ハイパーパラメータの調整\n');
+                        obj.logMessage(1, '  - データ拡張の適用\n');
+                        obj.logMessage(1, '  - 交差検証の実施\n');
+                        
+                    case 'mild'
+                        obj.logMessage(1, '  軽度の過学習\n');
+                        obj.logMessage(1, '  軽微な調整で改善可能:\n');
+                        obj.logMessage(1, '  - 正則化の微調整\n');
+                        obj.logMessage(1, '  - 追加検証の実施\n');
+                end
             else
-                fprintf('\nモデルは良好に一般化されています。\n');
+                obj.logMessage(1, '\nモデルは良好に一般化されています。\n');
             end
+        end
+        
+        function results = buildResultsStruct(obj, testMetrics, overfitAnalysis, filters, cspParameters, normParams)
+            % 結果構造体の構築
+            %
+            % 入力:
+            %   testMetrics - テスト評価結果
+            %   overfitAnalysis - 過学習分析結果（変数名を変更）
+            %   filters - CSPフィルタ
+            %   cspParameters - CSPパラメータ
+            %   normParams - 正規化パラメータ
+            %
+            % 出力:
+            %   results - 完全な結果構造体
+            
+            results = struct(...
+                'model', obj.ecocModel, ...
+                'performance', testMetrics, ...
+                'overfitting', overfitAnalysis, ...
+                'cspFilters', filters, ...
+                'cspParameters', cspParameters, ...
+                'normParams', normParams, ...
+                'trainingAccuracy', obj.trainingAccuracy, ...
+                'crossValidation', struct() ...
+            );
+            
+            % 交差検証結果の追加
+            if isfield(obj.performance, 'cvMeanAccuracy')
+                results.crossValidation.meanAccuracy = obj.performance.cvMeanAccuracy;
+                results.crossValidation.stdAccuracy = obj.performance.cvStdAccuracy;
+                results.crossValidation.accuracies = obj.performance.cvAccuracies;
+            end
+            
+            % パフォーマンス情報を更新
+            obj.performance = results.performance;
+            obj.performance.isOverfit = ~strcmp(overfitAnalysis.severity, 'none');
+            obj.performance.overfitMetrics = overfitAnalysis;
+            
+            % 結果表示
+            obj.displayResults();
+            
+            obj.logMessage(2, '結果構造体の構築完了\n');
         end
 
         function displayResults(obj)
-            % 分類結果の概要を表示する
+            % 分類結果の詳細概要を表示する
             
-            fprintf('\n=== ECOC Classification Results ===\n');
+            obj.logMessage(1, '\n=== ECOC Classification Results ===\n');
             
-            % 検証データでの結果
+            % 基本性能指標
             if isfield(obj.performance, 'testAccuracy')
-                fprintf('Overall Accuracy: %.2f%%\n', obj.performance.testAccuracy * 100);
+                obj.logMessage(1, 'Overall Test Accuracy: %.2f%%\n', obj.performance.testAccuracy * 100);
+            end
+            
+            % 学習精度
+            if ~isnan(obj.trainingAccuracy)
+                obj.logMessage(1, 'Training Accuracy: %.2f%%\n', obj.trainingAccuracy * 100);
             end
             
             % 交差検証結果
-            if obj.params.classifier.evaluation.enable && isfield(obj.performance, 'cvMeanAccuracy')
-                fprintf('Cross-validation Accuracy: %.2f%% (±%.2f%%)\n', ...
+            if isfield(obj.performance, 'cvMeanAccuracy') && ~isnan(obj.performance.cvMeanAccuracy)
+                obj.logMessage(1, 'Cross-validation Accuracy: %.2f%% (±%.2f%%)\n', ...
                     obj.performance.cvMeanAccuracy * 100, ...
                     obj.performance.cvStdAccuracy * 100);
             end
             
-            % AUC表示（2クラス分類の場合のみ）
+            % AUC表示
             if isfield(obj.performance, 'testAuc')
-                fprintf('AUC: %.3f\n', obj.performance.testAuc);
-            end
-            
-            % 混同行列表示
-            if isfield(obj.performance, 'testConfusionMat')
-                fprintf('\nConfusion Matrix:\n');
-                disp(obj.performance.testConfusionMat);
+                obj.logMessage(1, 'AUC: %.3f\n', obj.performance.testAuc);
             end
             
             % 過学習評価結果
-            if isfield(obj.performance, 'isOverfit')
-                if obj.performance.isOverfit
-                    fprintf('\nOverfitting detected: %s\n', obj.performance.overfitMetrics.severity);
-                    fprintf('Accuracy gap: %.2f%%\n', obj.performance.overfitMetrics.accuracyGap * 100);
-                else
-                    fprintf('\nNo significant overfitting detected.\n');
+            if isfield(obj.performance, 'isOverfit') && obj.performance.isOverfit
+                obj.logMessage(1, '\n*** Overfitting Detected: %s ***\n', obj.performance.overfitMetrics.severity);
+                if isfield(obj.performance.overfitMetrics, 'trainTestGap') && ~isnan(obj.performance.overfitMetrics.trainTestGap)
+                    obj.logMessage(1, 'Training-Test gap: %.2f%%\n', obj.performance.overfitMetrics.trainTestGap * 100);
+                end
+                if isfield(obj.performance.overfitMetrics, 'valTestGap') && ~isnan(obj.performance.overfitMetrics.valTestGap)
+                    obj.logMessage(1, 'Validation-Test gap: %.2f%%\n', obj.performance.overfitMetrics.valTestGap * 100);
+                end
+            else
+                obj.logMessage(1, '\nNo significant overfitting detected.\n');
+            end
+            
+            % クラスごとの性能（詳細表示はverbosity >= 2）
+            if isfield(obj.performance, 'testClasswise') && obj.verbosity >= 2
+                obj.logMessage(2, '\nClass-wise Performance (Test data):\n');
+                for i = 1:length(obj.performance.classLabels)
+                    obj.logMessage(2, 'Class %d:\n', obj.performance.classLabels(i));
+                    obj.logMessage(2, '  - Precision: %.2f%%\n', obj.performance.testClasswise(i).precision * 100);
+                    obj.logMessage(2, '  - Recall: %.2f%%\n', obj.performance.testClasswise(i).recall * 100);
+                    obj.logMessage(2, '  - F1-Score: %.3f\n', obj.performance.testClasswise(i).f1score);
                 end
             end
             
-            % クラスごとの性能（検証データ）
-            if isfield(obj.performance, 'testClasswise')
-                fprintf('\nClass-wise Performance (Test data):\n');
-                for i = 1:length(obj.performance.classLabels)
-                    fprintf('Class %d:\n', obj.performance.classLabels(i));
-                    fprintf('  - Precision: %.2f%%\n', obj.performance.testClasswise(i).precision * 100);
-                    fprintf('  - Recall: %.2f%%\n', obj.performance.testClasswise(i).recall * 100);
-                    fprintf('  - F1-Score: %.2f\n', obj.performance.testClasswise(i).f1score);
+            % システム情報（verbosity >= 3）
+            if obj.verbosity >= 3
+                obj.logMessage(3, '\nSystem Information:\n');
+                obj.logMessage(3, '  - ECOC Coding: %s\n', obj.params.classifier.ecoc.coding);
+                obj.logMessage(3, '  - Base Learners: %s\n', obj.params.classifier.ecoc.learners);
+                obj.logMessage(3, '  - Kernel Function: %s\n', obj.params.classifier.ecoc.kernel);
+                obj.logMessage(3, '  - Optimization: %s\n', mat2str(obj.isOptimized));
+                obj.logMessage(3, '  - Probability Estimation: %s\n', mat2str(obj.params.classifier.ecoc.probability));
+                if isfield(obj.performance, 'classLabels')
+                    obj.logMessage(3, '  - Number of Classes: %d\n', length(obj.performance.classLabels));
                 end
             end
         end
@@ -700,16 +1112,16 @@ classdef ECOCClassifier < handle
             % スコアをソフトマックス関数で確率に変換
             % 
             % 入力:
-            %   scores - 分類器の生のスコア値
+            %   scores - 分類器の生のスコア値 [サンプル数 x クラス数]
             %
             % 出力:
-            %   probScores - ソフトマックス関数による確率値
+            %   probScores - ソフトマックス関数による確率値 [サンプル数 x クラス数]
             
             % スコアの符号を反転（距離が小さいほど確率が高いため）
             negScores = -scores;
             
             % ソフトマックス関数で確率に変換
-            expScores = exp(negScores - max(negScores));
+            expScores = exp(negScores - max(negScores, [], 2));
             probScores = expScores ./ sum(expScores, 2);
         end
     end
