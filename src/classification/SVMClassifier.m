@@ -26,9 +26,7 @@ classdef SVMClassifier < handle
         trainingAccuracy    % 学習精度
         validationAccuracy  % 検証精度
         overfitMetrics      % 過学習メトリクス
-        
-        % データ拡張コンポーネント
-        dataAugmenter       % データ拡張コンポーネント
+
         normalizer          % 正規化コンポーネント
     end
     
@@ -60,11 +58,6 @@ classdef SVMClassifier < handle
             
             % プロパティの初期化
             obj.initializeProperties();
-            
-            % コンポーネントの初期化
-            if obj.params.classifier.augmentation.enable
-                obj.dataAugmenter = DataAugmenter(params);
-            end
             obj.normalizer = EEGNormalizer(params);
             
             obj.logMessage(2, 'SVMClassifier初期化完了 (verbosity: %d)\n', obj.verbosity);
@@ -93,12 +86,6 @@ classdef SVMClassifier < handle
                 obj.logMessage(1, 'CSP特徴抽出を実行...\n');
                 [features, filters, cspParameters] = obj.extractCSPFeatures(normalizedEEG, processedLabel);
                 obj.logMessage(2, '抽出された特徴量: %d次元\n', size(features, 2));
-      
-                % データ拡張処理（オプション）
-                if obj.params.classifier.augmentation.enable
-                    obj.logMessage(1, 'データ拡張を実行...\n');
-                    [features, processedLabel] = obj.augmentData(features, processedLabel);
-                end
                 
                 % データの分割（学習用と検証用）
                 [trainFeatures, trainLabels, testFeatures, testLabels] = obj.splitDataset(features, processedLabel);
@@ -282,49 +269,6 @@ classdef SVMClassifier < handle
             obj.logMessage(2, 'CSP特徴抽出完了:\n');
             obj.logMessage(2, '  - フィルタ数: %d\n', size(filters, 1));
             obj.logMessage(2, '  - 特徴量次元: %d\n', size(features, 2));
-        end
-        
-        function [augmentedFeatures, augmentedLabels] = augmentData(obj, features, labels)
-            % 特徴量レベルでのデータ拡張
-            %
-            % 入力:
-            %   features - 元の特徴量
-            %   labels - 元のラベル
-            %
-            % 出力:
-            %   augmentedFeatures - 拡張された特徴量
-            %   augmentedLabels - 拡張されたラベル
-            
-            augmentedFeatures = features;
-            augmentedLabels = labels;
-            
-            if obj.params.classifier.augmentation.enable
-                % 基本的なデータ拡張（ノイズ付加とスケーリング）
-                numOriginal = size(features, 1);
-                ratio = obj.params.classifier.augmentation.augmentationRatio;
-                numAugmented = round(numOriginal * (ratio - 1));
-                
-                if numAugmented > 0
-                    % ノイズ付加による拡張
-                    noiseLevel = 0.01; % 1%のノイズ
-                    noisyFeatures = features(1:numAugmented, :) + ...
-                        noiseLevel * randn(numAugmented, size(features, 2)) .* std(features, 0, 1);
-                    
-                    % スケーリングによる拡張
-                    scaleRange = [0.9, 1.1];
-                    scaledFeatures = features(1:numAugmented, :) .* ...
-                        (scaleRange(1) + (scaleRange(2) - scaleRange(1)) * rand(numAugmented, 1));
-                    
-                    % 拡張データの結合
-                    augmentedFeatures = [features; noisyFeatures; scaledFeatures];
-                    augmentedLabels = [labels; labels(1:numAugmented); labels(1:numAugmented)];
-                    
-                    obj.logMessage(2, 'データ拡張完了:\n');
-                    obj.logMessage(2, '  - 元データ: %d サンプル\n', numOriginal);
-                    obj.logMessage(2, '  - 拡張後: %d サンプル (%.1f倍)\n', length(augmentedLabels), ...
-                        length(augmentedLabels)/numOriginal);
-                end
-            end
         end
         
         function [trainFeatures, trainLabels, testFeatures, testLabels] = splitDataset(obj, features, labels)
