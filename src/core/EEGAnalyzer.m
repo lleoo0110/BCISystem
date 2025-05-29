@@ -857,119 +857,95 @@ classdef EEGAnalyzer < handle
                     saveData.results = obj.results;
                 end
         
-                % 分類器結果の保存
+                % 分類器結果の保存（結果構造体をそのまま保存）
                 saveData.classifier = struct();
                 
-                % SVM結果
+                % SVM結果（構造体全体をコピー）
                 if obj.params.classifier.svm.enable && ~isempty(obj.svm)
                     try
-                        saveData.classifier.svm = struct(...
-                            'model', obj.svm.model, ...
-                            'performance', obj.svm.performance);
-                        
-                        % 追加フィールドの安全な追加
-                        if isfield(obj.svm, 'normParams')
-                            saveData.classifier.svm.normParams = obj.svm.normParams;
-                        end
-                        if isfield(obj.svm, 'cspFilters')
-                            saveData.classifier.svm.cspFilters = obj.svm.cspFilters;
-                        end
+                        saveData.classifier.svm = obj.svm;
+                        fprintf('SVM結果を保存しました\n');
                     catch ME
-                        error('SVM結果の保存中にエラーが発生: %s', ME.message);
+                        fprintf('警告: SVM結果の保存中にエラーが発生: %s\n', ME.message);
+                        saveData.classifier.svm = struct('error', ME.message);
                     end
                 end
         
-                % ECOC結果
+                % ECOC結果（構造体全体をコピー）
                 if obj.params.classifier.ecoc.enable && ~isempty(obj.ecoc)
                     try
-                        saveData.classifier.ecoc = struct(...
-                            'model', obj.ecoc.model, ...
-                            'performance', obj.ecoc.performance);
+                        saveData.classifier.ecoc = obj.ecoc;
+                        fprintf('ECOC結果を保存しました\n');
                         
-                        % 追加フィールドの安全な追加
-                        if isfield(obj.ecoc, 'normParams')
-                            saveData.classifier.ecoc.normParams = obj.ecoc.normParams;
-                        end
-                        if isfield(obj.ecoc, 'cspFilters')
-                            saveData.classifier.ecoc.cspFilters = obj.ecoc.cspFilters;
+                        % 交差検証結果の確認
+                        if isfield(obj.ecoc, 'crossValidation') && ~isempty(obj.ecoc.crossValidation)
+                            if isfield(obj.ecoc.crossValidation, 'completed') && obj.ecoc.crossValidation.completed
+                                fprintf('  - 交差検証結果も保存されました (平均精度: %.2f%%)\n', ...
+                                    obj.ecoc.crossValidation.meanAccuracy * 100);
+                            else
+                                fprintf('  - 交差検証は実行されませんでした\n');
+                            end
                         end
                     catch ME
-                        error('ECOC結果の保存中にエラーが発生: %s', ME.message);
+                        fprintf('警告: ECOC結果の保存中にエラーが発生: %s\n', ME.message);
+                        saveData.classifier.ecoc = struct('error', ME.message);
                     end
                 end
         
-                % CNN結果
+                % CNN結果（構造体全体をコピー）
                 if obj.params.classifier.cnn.enable && ~isempty(obj.cnn)
                     try
-                        saveData.classifier.cnn = struct(...
-                            'model', obj.cnn.model, ...
-                            'performance', obj.cnn.performance);
+                        saveData.classifier.cnn = obj.cnn;
+                        fprintf('CNN結果を保存しました\n');
                         
-                        % フィールドの安全な追加
-                        if isfield(obj.cnn, 'trainInfo')
-                            saveData.classifier.cnn.trainInfo = obj.cnn.trainInfo;
-                        end
-                        if isfield(obj.cnn, 'crossValidation')
-                            saveData.classifier.cnn.crossValidation = obj.cnn.crossValidation;
-                        end
-                        if isfield(obj.cnn, 'overfitting')
-                            saveData.classifier.cnn.overfitting = obj.cnn.overfitting;
-                        end
-                        if isfield(obj.cnn, 'normParams')
-                            saveData.classifier.cnn.normParams = obj.cnn.normParams;
+                        % 交差検証結果の確認
+                        if isfield(obj.cnn, 'crossValidation') && ~isempty(obj.cnn.crossValidation)
+                            if isfield(obj.cnn.crossValidation, 'meanAccuracy')
+                                fprintf('  - モンテカルロ交差検証結果も保存されました (平均精度: %.2f%%)\n', ...
+                                    obj.cnn.crossValidation.meanAccuracy * 100);
+                            end
                         end
                     catch ME
-                        error('CNN結果の保存中にエラーが発生: %s', ME.message);
+                        fprintf('警告: CNN結果の保存中にエラーが発生: %s\n', ME.message);
+                        saveData.classifier.cnn = struct('error', ME.message);
                     end
                 end
         
-                % LSTM結果
+                % LSTM結果（構造体全体をコピー）
                 if obj.params.classifier.lstm.enable && ~isempty(obj.lstm)
                     try
-                        saveData.classifier.lstm = struct(...
-                            'model', obj.lstm.model, ...
-                            'performance', obj.lstm.performance);
+                        saveData.classifier.lstm = obj.lstm;
+                        fprintf('LSTM結果を保存しました\n');
                         
-                        % フィールドの安全な追加
-                        if isfield(obj.lstm, 'trainInfo')
-                            saveData.classifier.lstm.trainInfo = obj.lstm.trainInfo;
-                        end
-                        if isfield(obj.lstm, 'crossValidation')
-                            saveData.classifier.lstm.crossValidation = obj.lstm.crossValidation;
-                        end
-                        if isfield(obj.lstm, 'overfitting')
-                            saveData.classifier.lstm.overfitting = obj.lstm.overfitting;
-                        end
-                        if isfield(obj.lstm, 'normParams')
-                            saveData.classifier.lstm.normParams = obj.lstm.normParams;
+                        % 交差検証結果の確認
+                        if isfield(obj.lstm, 'crossValidation') && ~isempty(obj.lstm.crossValidation)
+                            if isfield(obj.lstm.crossValidation, 'meanAccuracy')
+                                fprintf('  - モンテカルロ交差検証結果も保存されました (平均精度: %.2f%%)\n', ...
+                                    obj.lstm.crossValidation.meanAccuracy * 100);
+                            end
                         end
                     catch ME
-                        error('LSTM結果の保存中にエラーが発生: %s', ME.message);
+                        fprintf('警告: LSTM結果の保存中にエラーが発生: %s\n', ME.message);
+                        saveData.classifier.lstm = struct('error', ME.message);
                     end
                 end
         
-                % Hybrid結果
+                % Hybrid結果（構造体全体をコピー）
                 if obj.params.classifier.hybrid.enable && ~isempty(obj.hybrid)
                     try
-                        saveData.classifier.hybrid = struct(...
-                            'model', obj.hybrid.model, ...
-                            'performance', obj.hybrid.performance);
+                        saveData.classifier.hybrid = obj.hybrid;
+                        fprintf('Hybrid結果を保存しました\n');
                         
-                        % フィールドの安全な追加
-                        if isfield(obj.hybrid, 'trainInfo')
-                            saveData.classifier.hybrid.trainInfo = obj.hybrid.trainInfo;
-                        end
-                        if isfield(obj.hybrid, 'crossValidation')
-                            saveData.classifier.hybrid.crossValidation = obj.hybrid.crossValidation;
-                        end
-                        if isfield(obj.hybrid, 'overfitting')
-                            saveData.classifier.hybrid.overfitting = obj.hybrid.overfitting;
-                        end
-                        if isfield(obj.hybrid, 'normParams')
-                            saveData.classifier.hybrid.normParams = obj.hybrid.normParams;
+                        % 交差検証結果の確認
+                        if isfield(obj.hybrid, 'crossValidation') && ~isempty(obj.hybrid.crossValidation)
+                            if isfield(obj.hybrid.crossValidation, 'meanAccuracy')
+                                fprintf('  - モンテカルロ交差検証結果も保存されました (平均精度: %.2f%%)\n', ...
+                                    obj.hybrid.crossValidation.meanAccuracy * 100);
+                            end
                         end
                     catch ME
-                        error('Hybrid結果の保存中にエラーが発生: %s', ME.message);
+                        fprintf('警告: Hybrid結果の保存中にエラーが発生: %s\n', ME.message);
+                        saveData.classifier.hybrid = struct('error', ME.message);
                     end
                 end
         
@@ -990,7 +966,29 @@ classdef EEGAnalyzer < handle
         
                 % DataManagerを使用して保存
                 obj.dataManager.saveDataset(saveData, savePath);
-                fprintf('解析結果を保存しました: %s\n', savePath);
+                
+                % 保存内容のサマリー表示
+                fprintf('\n=== 保存完了サマリー ===\n');
+                fprintf('保存先: %s\n', savePath);
+                fprintf('保存された分類器:\n');
+                
+                if isfield(saveData.classifier, 'svm') && ~isempty(saveData.classifier.svm)
+                    fprintf('  - SVM: ✓\n');
+                end
+                if isfield(saveData.classifier, 'ecoc') && ~isempty(saveData.classifier.ecoc)
+                    fprintf('  - ECOC: ✓\n');
+                end
+                if isfield(saveData.classifier, 'cnn') && ~isempty(saveData.classifier.cnn)
+                    fprintf('  - CNN: ✓\n');
+                end
+                if isfield(saveData.classifier, 'lstm') && ~isempty(saveData.classifier.lstm)
+                    fprintf('  - LSTM: ✓\n');
+                end
+                if isfield(saveData.classifier, 'hybrid') && ~isempty(saveData.classifier.hybrid)
+                    fprintf('  - Hybrid: ✓\n');
+                end
+                
+                fprintf('解析結果の保存が完了しました\n');
         
             catch ME
                 error('解析結果の保存に失敗: %s\n詳細: %s', ME.message, getReport(ME, 'extended'));

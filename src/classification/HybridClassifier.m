@@ -276,14 +276,14 @@ classdef HybridClassifier < handle
                 lstmData = obj.prepareDataForLSTM(data);
                 
                 % 各モデルから特徴抽出
-                cnnFeatures = activations(hybrid.netCNN, cnnData, 'fc_cnn', 'OutputAs', 'rows');
+                cnnFeatures = activations(hybrid.model.netCNN, cnnData, 'fc_cnn', 'OutputAs', 'rows');
                 
                 % LSTMからの特徴抽出
                 if iscell(lstmData)
                     % 事前に配列サイズを決定して動的サイズ変更を回避
                     numSamples = length(lstmData);
                     % 最初のサンプルで特徴量次元を確認
-                    tempOut = predict(hybrid.netLSTM, lstmData{1}, 'MiniBatchSize', 1);
+                    tempOut = predict(hybrid.model.netLSTM, lstmData{1}, 'MiniBatchSize', 1);
                     featureSize = size(tempOut, 2);
                     
                     % 事前に配列を割り当て
@@ -292,11 +292,11 @@ classdef HybridClassifier < handle
                     
                     % 残りのサンプルを処理
                     for i = 2:numSamples
-                        lstmOut = predict(hybrid.netLSTM, lstmData{i}, 'MiniBatchSize', 1);
+                        lstmOut = predict(hybrid.model.netLSTM, lstmData{i}, 'MiniBatchSize', 1);
                         lstmFeatures(i,:) = lstmOut;
                     end
                 else
-                    lstmOut = predict(hybrid.netLSTM, lstmData, 'MiniBatchSize', 1);
+                    lstmOut = predict(hybrid.model.netLSTM, lstmData, 'MiniBatchSize', 1);
                     lstmFeatures = lstmOut;
                 end
                 
@@ -304,7 +304,10 @@ classdef HybridClassifier < handle
                 combinedFeatures = [cnnFeatures, lstmFeatures];
                 
                 % AdaBoostで最終予測
-                [label, score] = predict(hybrid.adaModel, combinedFeatures);
+                [label, score] = predict(hybrid.model.adaModel, combinedFeatures);
+
+                % スコアを確率に変換
+                score = obj.convertScoreToProbability(score);
         
             catch ME
                 obj.logMessage(0, 'Error in Hybrid online prediction: %s\n', ME.message);
@@ -1504,7 +1507,8 @@ classdef HybridClassifier < handle
                 
                 % AdaBoostによる予測
                 [pred, score] = predict(model.adaModel, combinedFeatures);
-                metrics.score = score;
+                % スコアを確率に変換
+                metrics.score = obj.convertScoreToProbability(score);
                 
                 % テストラベルをcategorical型に変換
                 testLabels_cat = categorical(testLabels);
@@ -2081,6 +2085,57 @@ classdef HybridClassifier < handle
             obj.logMessage(1, '  統計的判定: %s (重大度: %s)\n', mat2str(statisticalOverfit), statSeverity);
             obj.logMessage(1, '  絶対差判定: %s (重大度: %s)\n', mat2str(absoluteOverfit), absSeverity);
             obj.logMessage(1, '  最終判定結果: %s (重大度: %s)\n', mat2str(isOverfit), severity);
+        end
+
+        %% スコアを確率に変換するメソッド
+        function probability = convertScoreToProbability(obj, score)
+            % AdaBoostのスコアを確率に変換
+            %
+            % 入力:
+            %   score - AdaBoostの生スコア
+            %
+            % 出力:
+            %   probability - 正規化された確率
+            
+            try
+                % AdaBoostのスコアをソフトマックス関数で確率に変換
+                if size(score, 2) > 1
+                    % 多クラス分類の場合
+                    % スコアが非常に大きい場合の数値安定性を確保
+                    maxScore = max(score, [], 2);
+                    expScore = exp(score - maxScore);
+                    sumExpScore = sum(expScore, 2);
+                    probability = expScore ./ sumExpScore;
+                else
+                    % 2クラス分類の場合（通常はこちらが使われる）
+                    % シグモイド関数を適用
+                    probability = 1 ./ (1 + exp(-score));
+                    % 2クラス分類では補数も計算
+                    probability = [1-probability, probability];
+                end
+                
+                % 確率の合計が1になるように正規化（数値誤差対策）
+                probability = probability ./ sum(probability, 2);
+                
+                % NaN/Infチェック
+                if any(isnan(probability(:))) || any(isinf(probability(:)))
+                    obj.logMessage(1, '警告: 確率計算でNaN/Infが検出されました。均等確率にフォールバックします。\n');
+                    numClasses = size(score, 2);
+                    if numClasses == 1
+                        numClasses = 2; % 2クラス分類
+                    end
+                    probability = ones(size(score, 1), numClasses) / numClasses;
+                end
+                
+            catch ME
+                obj.logMessage(1, 'スコア→確率変換でエラー: %s\n', ME.message);
+                % エラー時は均等確率を返す
+                numClasses = size(score, 2);
+                if numClasses == 1
+                    numClasses = 2; % 2クラス分類
+                end
+                probability = ones(size(score, 1), numClasses) / numClasses;
+            end
         end
         
         %% トレーニング情報検証メソッド

@@ -938,19 +938,15 @@ classdef SVMClassifier < handle
                 obj.logMessage(1, '\nモデルは良好に一般化されています。\n');
             end
         end
-        
+
         function results = buildResultsStruct(obj, testMetrics, overfitAnalysis, filters, cspParameters, normParams)
-            % 結果構造体の構築
-            %
-            % 入力:
-            %   testMetrics - テスト評価結果
-            %   overfitAnalysis - 過学習分析結果（変数名を変更）
-            %   filters - CSPフィルタ
-            %   cspParameters - CSPパラメータ
-            %   normParams - 正規化パラメータ
-            %
-            % 出力:
-            %   results - 完全な結果構造体
+            % 交差検証結果を保持
+            crossValResults = struct();
+            if isfield(obj.performance, 'cvMeanAccuracy')
+                crossValResults.meanAccuracy = obj.performance.cvMeanAccuracy;
+                crossValResults.stdAccuracy = obj.performance.cvStdAccuracy;
+                crossValResults.accuracies = obj.performance.cvAccuracies;
+            end
             
             results = struct(...
                 'model', obj.svmModel, ...
@@ -960,18 +956,27 @@ classdef SVMClassifier < handle
                 'cspParameters', cspParameters, ...
                 'normParams', normParams, ...
                 'trainingAccuracy', obj.trainingAccuracy, ...
-                'crossValidation', struct() ...
+                'crossValidation', crossValResults ...
             );
             
-            % 交差検証結果の追加
-            if isfield(obj.performance, 'cvMeanAccuracy')
-                results.crossValidation.meanAccuracy = obj.performance.cvMeanAccuracy;
-                results.crossValidation.stdAccuracy = obj.performance.cvStdAccuracy;
-                results.crossValidation.accuracies = obj.performance.cvAccuracies;
+            % フィールド名を正しくマッピング
+            obj.performance = struct();  % 一旦クリア
+            
+            % テスト結果を正しいフィールド名で設定
+            obj.performance.testAccuracy = testMetrics.accuracy;
+            obj.performance.testAuc = testMetrics.auc;
+            obj.performance.testConfusionMat = testMetrics.confusionMat;
+            obj.performance.testScore = testMetrics.score;
+            obj.performance.testClasswise = testMetrics.classwise;
+            
+            % 交差検証結果を復元
+            if ~isempty(fieldnames(crossValResults))
+                obj.performance.cvMeanAccuracy = crossValResults.meanAccuracy;
+                obj.performance.cvStdAccuracy = crossValResults.stdAccuracy;
+                obj.performance.cvAccuracies = crossValResults.accuracies;
             end
             
-            % パフォーマンス情報を更新
-            obj.performance = results.performance;
+            % 過学習情報を追加
             obj.performance.isOverfit = ~strcmp(overfitAnalysis.severity, 'none');
             obj.performance.overfitMetrics = overfitAnalysis;
             

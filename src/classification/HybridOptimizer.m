@@ -130,7 +130,7 @@ classdef HybridOptimizer < handle
         
                         % ハイブリッドモデルの学習と評価
                         hybridClassifier = HybridClassifier(localParams);
-                        trainResults = hybridClassifier.trainHybrid(data, processedLabel);
+                        trainResults = hybridClassifier.trainModel(data, processedLabel);
         
                         % 結果の保存
                         trialResults{i} = struct(...

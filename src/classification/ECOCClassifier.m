@@ -33,6 +33,7 @@ classdef ECOCClassifier < handle
     properties (Access = public)
         ecocModel           % 学習済みECOCモデル
         performance         % 性能評価指標
+        crossValidation     % 交差検証結果（専用プロパティ）
     end
     
     methods (Access = public)
@@ -41,13 +42,14 @@ classdef ECOCClassifier < handle
             % 
             % 入力:
             %   params - 設定パラメータを含む構造体
-            %   verbosity - 出力詳細度 (0:最小限, 1:通常, 2:詳細, 3:デバッグ)
+            %   verbosity - 出力詳細度 (1:通常, 2:詳細, 3:デバッグ)
             %             省略時はデフォルト値1が使用される
             
             obj.params = params;
             obj.isOptimized = params.classifier.ecoc.optimize;
             obj.isEnabled = params.classifier.ecoc.enable;
             obj.performance = struct();
+            obj.crossValidation = struct(); % 交差検証結果用の専用プロパティ
             
             % verbosityレベルの設定（デフォルトは1）
             if nargin < 2
@@ -99,17 +101,20 @@ classdef ECOCClassifier < handle
                 obj.checkClassDistribution('学習', trainLabels);
                 obj.checkClassDistribution('検証', testLabels);
 
+                % 交差検証の実行（学習データのみを使用 - モデル学習前に実行）
+                if obj.params.classifier.ecoc.validation.enable
+                    obj.performCrossValidation(trainFeatures, trainLabels);
+                else
+                    obj.logMessage(1, '交差検証はスキップされました（設定で無効化されています）\n');
+                    obj.initializeEmptyCrossValidation();
+                end
+
                 % モデルの学習（学習データのみを使用）
                 obj.logMessage(1, '\nECOCモデルの学習を開始...\n');
                 obj.trainModel(trainFeatures, trainLabels);
 
                 % 学習データでの性能評価（過学習検出用）
                 obj.evaluateTrainingPerformance(trainFeatures, trainLabels);
-
-                % 交差検証の実行（学習データのみを使用）
-                if obj.params.classifier.ecoc.validation.enable
-                    obj.performCrossValidation(trainFeatures, trainLabels);
-                end
 
                 % テストデータでの評価
                 testMetrics = obj.evaluateModel(testFeatures, testLabels);
@@ -221,6 +226,38 @@ classdef ECOCClassifier < handle
             obj.trainingAccuracy = 0;
             obj.validationAccuracy = 0;
             obj.overfitMetrics = struct();
+            
+            % 交差検証結果の初期化
+            obj.crossValidation = struct(...
+                'enabled', false, ...
+                'kfold', 0, ...
+                'meanAccuracy', NaN, ...
+                'stdAccuracy', NaN, ...
+                'foldAccuracies', [], ...
+                'meanLoss', NaN, ...
+                'stdLoss', NaN, ...
+                'foldLosses', [], ...
+                'model', [], ...
+                'completed', false ...
+            );
+        end
+        
+        function initializeEmptyCrossValidation(obj)
+            % 交差検証が実行されない場合の初期化
+            obj.crossValidation = struct(...
+                'enabled', false, ...
+                'kfold', 0, ...
+                'meanAccuracy', NaN, ...
+                'stdAccuracy', NaN, ...
+                'foldAccuracies', [], ...
+                'meanLoss', NaN, ...
+                'stdLoss', NaN, ...
+                'foldLosses', [], ...
+                'model', [], ...
+                'completed', false, ...
+                'reason', 'Disabled in configuration' ...
+            );
+            obj.logMessage(2, '交差検証結果を空で初期化しました\n');
         end
         
         %% データ検証と準備
@@ -339,10 +376,9 @@ classdef ECOCClassifier < handle
                 obj.trainDefaultModel(features, labels);
             end
 
-            % 確率推定の設定（注: fitPosterior関数はECOCモデルでは使用できない）
+            % 確率推定の設定
             if obj.params.classifier.ecoc.probability
                 obj.logMessage(2, '確率推定は学習時に有効化されています\n');
-                % 確率推定は学習時に設定済み
             end
             
             obj.logMessage(1, 'ECOCモデルの学習完了\n');
@@ -517,64 +553,300 @@ classdef ECOCClassifier < handle
         end
         
         function performCrossValidation(obj, trainFeatures, trainLabels)
-            % 交差検証を実行する
+            % 交差検証を実行する（パラメータ最適化を含む）
             %
             % 入力:
-            %   trainFeatures - 学習用特徴量（現在は交差検証では直接使用しない）
-            %   trainLabels - 学習用ラベル（現在は交差検証では直接使用しない）
-            %
-            % 注意: 現在の実装では学習済みモデルに対して交差検証を実行している
-            %      将来的にはtrainFeaturesとtrainLabelsを直接使用する実装への変更も可能
+            %   trainFeatures - 学習用特徴量 [サンプル数 x 特徴量数]
+            %   trainLabels - 学習用ラベル [サンプル数 x 1]
             
             if ~obj.params.classifier.ecoc.validation.enable
+                obj.initializeEmptyCrossValidation();
                 return;
             end
             
-            % 引数の未使用を明示的に示す（将来的な拡張のために引数は保持）
-            if obj.verbosity >= 3
-                obj.logMessage(3, '交差検証用データサイズ: %d x %d\n', size(trainFeatures, 1), size(trainFeatures, 2));
-                obj.logMessage(3, '交差検証用ラベル数: %d\n', length(trainLabels));
-            end
-            
             kfold = obj.params.classifier.ecoc.validation.kfold;
-            obj.logMessage(1, '\n交差検証の実行（K=%d）...\n', kfold);
+            obj.logMessage(1, '\n交差検証の実行（K=%d）パラメータ最適化付き...\n', kfold);
             
             try
-                obj.crossValModel = crossval(obj.ecocModel, 'KFold', kfold);
+                % 交差検証の開始
+                obj.crossValidation.enabled = true;
+                obj.crossValidation.kfold = kfold;
+                obj.crossValidation.completed = false;
                 
-                obj.performance.cvAccuracies = zeros(kfold, 1);
+                % 交差検証用のパーティション作成
+                cv = cvpartition(trainLabels, 'KFold', kfold);
                 
-                % 各フォールドの精度を計算
+                % 各フォールドの精度と損失を計算
+                foldAccuracies = zeros(kfold, 1);
+                foldLosses = zeros(kfold, 1);
+                optimalParams = cell(kfold, 1);  % 各フォールドの最適パラメータ
+                
+                obj.logMessage(2, '各フォールドの詳細結果（最適化付き）:\n');
+                
                 for i = 1:kfold
-                    obj.performance.cvAccuracies(i) = 1 - kfoldLoss(obj.crossValModel, 'Folds', i);
-                    obj.logMessage(2, '  - フォールド %d: 精度 = %.4f\n', i, obj.performance.cvAccuracies(i));
+                    obj.logMessage(2, '\n--- フォールド %d/%d ---\n', i, kfold);
+                    
+                    % 現在のフォールドのデータ分割
+                    foldTrainIdx = cv.training(i);
+                    foldValIdx = cv.test(i);
+                    
+                    foldTrainFeatures = trainFeatures(foldTrainIdx, :);
+                    foldTrainLabels = trainLabels(foldTrainIdx);
+                    foldValFeatures = trainFeatures(foldValIdx, :);
+                    foldValLabels = trainLabels(foldValIdx);
+                    
+                    if obj.isOptimized
+                        % フォールド内でパラメータ最適化を実行
+                        [bestModel, bestParams] = obj.optimizeParametersForFold(...
+                            foldTrainFeatures, foldTrainLabels);
+                        optimalParams{i} = bestParams;
+                    else
+                        % デフォルトパラメータでモデル作成
+                        bestModel = obj.createDefaultModelForFold(foldTrainFeatures, foldTrainLabels);
+                        optimalParams{i} = struct('type', 'default');
+                    end
+                    
+                    % フォールドのバリデーションデータで評価
+                    [pred, ~] = predict(bestModel, foldValFeatures);
+                    foldAccuracies(i) = mean(pred == foldValLabels);
+                    foldLosses(i) = 1 - foldAccuracies(i);  % 簡単な損失計算
+                    
+                    obj.logMessage(2, '  - フォールド %d: 精度 = %.4f, 損失 = %.4f\n', ...
+                        i, foldAccuracies(i), foldLosses(i));
+                    
+                    if obj.isOptimized && obj.verbosity >= 3
+                        obj.logMessage(3, '  - 最適パラメータ: C=%.3f, KScale=%.3f\n', ...
+                            bestParams.BoxConstraint, bestParams.KernelScale);
+                    end
                 end
                 
-                obj.performance.cvMeanAccuracy = mean(obj.performance.cvAccuracies);
-                obj.performance.cvStdAccuracy = std(obj.performance.cvAccuracies);
-                obj.validationAccuracy = obj.performance.cvMeanAccuracy;
+                % 統計的指標の計算
+                obj.crossValidation.foldAccuracies = foldAccuracies;
+                obj.crossValidation.foldLosses = foldLosses;
+                obj.crossValidation.meanAccuracy = mean(foldAccuracies);
+                obj.crossValidation.stdAccuracy = std(foldAccuracies);
+                obj.crossValidation.meanLoss = mean(foldLosses);
+                obj.crossValidation.stdLoss = std(foldLosses);
+                obj.crossValidation.optimalParams = optimalParams;  % 各フォールドの最適パラメータ
+                obj.crossValidation.completed = true;
                 
-                obj.logMessage(1, '平均交差検証精度: %.4f (±%.4f)\n', ...
-                    obj.performance.cvMeanAccuracy, obj.performance.cvStdAccuracy);
+                % validationAccuracyプロパティの更新
+                obj.validationAccuracy = obj.crossValidation.meanAccuracy;
+                
+                % 最適パラメータの統計
+                if obj.isOptimized
+                    obj.analyzeOptimalParameters(optimalParams);
+                end
+                
+                % パフォーマンス構造体への保存（後方互換性のため）
+                obj.performance.cvAccuracies = foldAccuracies;
+                obj.performance.cvMeanAccuracy = obj.crossValidation.meanAccuracy;
+                obj.performance.cvStdAccuracy = obj.crossValidation.stdAccuracy;
+                obj.performance.cvMeanLoss = obj.crossValidation.meanLoss;
+                obj.performance.cvStdLoss = obj.crossValidation.stdLoss;
+                
+                % 結果の表示
+                obj.logMessage(1, '\n交差検証結果のサマリー（最適化付き）:\n');
+                obj.logMessage(1, '  - 平均精度: %.4f (±%.4f)\n', ...
+                    obj.crossValidation.meanAccuracy, obj.crossValidation.stdAccuracy);
+                obj.logMessage(1, '  - 平均損失: %.4f (±%.4f)\n', ...
+                    obj.crossValidation.meanLoss, obj.crossValidation.stdLoss);
+                obj.logMessage(1, '  - 最高精度: %.4f (フォールド %d)\n', ...
+                    max(foldAccuracies), find(foldAccuracies == max(foldAccuracies), 1));
+                obj.logMessage(1, '  - 最低精度: %.4f (フォールド %d)\n', ...
+                    min(foldAccuracies), find(foldAccuracies == min(foldAccuracies), 1));
+                
+                % 信頼区間の計算（95%信頼区間）
+                if kfold > 1
+                    sem = obj.crossValidation.stdAccuracy / sqrt(kfold);
+                    tValue = 2.262;  % t分布の95%信頼区間（自由度4、近似値）
+                    if kfold > 5
+                        tValue = 1.96;  % 正規分布の近似（サンプル数が多い場合）
+                    end
+                    ci_lower = obj.crossValidation.meanAccuracy - tValue * sem;
+                    ci_upper = obj.crossValidation.meanAccuracy + tValue * sem;
+                    
+                    obj.crossValidation.confidenceInterval = [ci_lower, ci_upper];
+                    obj.logMessage(1, '  - 95%%信頼区間: [%.4f, %.4f]\n', ci_lower, ci_upper);
+                end
+                
+                obj.logMessage(1, '交差検証（最適化付き）が正常に完了しました\n');
                     
             catch ME
-                obj.logMessage(1, '交差検証でエラーが発生: %s\n', ME.message);
+                obj.logMessage(0, '交差検証でエラーが発生: %s\n', ME.message);
+                
+                % エラー時の情報保存
+                obj.crossValidation.completed = false;
+                obj.crossValidation.error = true;
+                obj.crossValidation.errorMessage = ME.message;
+                obj.crossValidation.meanAccuracy = NaN;
+                obj.crossValidation.stdAccuracy = NaN;
+                obj.crossValidation.meanLoss = NaN;
+                obj.crossValidation.stdLoss = NaN;
+                
+                % パフォーマンス構造体への保存（後方互換性のため）
                 obj.performance.cvMeanAccuracy = NaN;
                 obj.performance.cvStdAccuracy = NaN;
+                
+                obj.logMessage(2, 'エラー詳細:\n');
+                if obj.verbosity >= 2
+                    disp(getReport(ME, 'extended'));
+                end
             end
+        end
+        
+        function [bestModel, bestParams] = optimizeParametersForFold(obj, foldTrainFeatures, foldTrainLabels)
+            % 単一フォールド内でのパラメータ最適化
+            %
+            % 入力:
+            %   foldTrainFeatures - フォールド学習データ
+            %   foldTrainLabels - フォールド学習ラベル
+            %
+            % 出力:
+            %   bestModel - 最適化されたモデル
+            %   bestParams - 最適パラメータ
+            
+            % パラメータの設定
+            boxConstraints = obj.getParameterValues('boxConstraint', [0.1, 1, 10]);
+            kernelScales = obj.getParameterValues('kernelScale', [0.1, 1, 10]);
+            
+            % 確率推定オプションの設定
+            fitPosterior = obj.params.classifier.ecoc.probability;
+            
+            % 内側交差検証用のフォールド数（外側より少なく）
+            innerKfold = max(3, obj.params.classifier.ecoc.validation.kfold - 1);
+            
+            % グリッドサーチの実行
+            bestScore = -inf;
+            bestParams = struct('BoxConstraint', 1, 'KernelScale', 1);
+            bestModel = [];
+            
+            obj.logMessage(3, '    フォールド内最適化: %d × %d パラメータ組み合わせ\n', ...
+                length(boxConstraints), length(kernelScales));
+            
+            for c = boxConstraints
+                for k = kernelScales
+                    try
+                        % 基本学習器の選択
+                        if strcmpi(obj.params.classifier.ecoc.learners, 'svm')
+                            template = templateSVM(...
+                                'KernelFunction', obj.params.classifier.ecoc.kernel, ...
+                                'BoxConstraint', c, ...
+                                'KernelScale', k);
+                        else
+                            template = templateTree();
+                        end
+                        
+                        % モデル作成
+                        mdl = fitcecoc(foldTrainFeatures, foldTrainLabels, ...
+                            'Learners', template, ...
+                            'Coding', obj.params.classifier.ecoc.coding, ...
+                            'FitPosterior', fitPosterior);
+                        
+                        % 内側交差検証で評価
+                        cv = crossval(mdl, 'KFold', innerKfold);
+                        score = 1 - kfoldLoss(cv);
+                        
+                        obj.logMessage(3, '      C=%.3f, KScale=%.3f: スコア=%.4f\n', c, k, score);
+                        
+                        if score > bestScore
+                            bestScore = score;
+                            bestParams.BoxConstraint = c;
+                            bestParams.KernelScale = k;
+                            bestModel = mdl;  % 最適モデルを保存
+                        end
+                    catch ME
+                        obj.logMessage(3, '      パラメータ組み合わせでエラー: %s\n', ME.message);
+                    end
+                end
+            end
+            
+            obj.logMessage(3, '    最適パラメータ: C=%.3f, KScale=%.3f, スコア=%.4f\n', ...
+                bestParams.BoxConstraint, bestParams.KernelScale, bestScore);
+        end
+        
+        function model = createDefaultModelForFold(obj, foldTrainFeatures, foldTrainLabels)
+            % デフォルトパラメータでのモデル作成（フォールド用）
+            %
+            % 入力:
+            %   foldTrainFeatures - フォールド学習データ
+            %   foldTrainLabels - フォールド学習ラベル
+            %
+            % 出力:
+            %   model - 作成されたモデル
+            
+            % 確率推定オプションの設定
+            fitPosterior = obj.params.classifier.ecoc.probability;
+            
+            % 基本学習器の選択
+            if strcmpi(obj.params.classifier.ecoc.learners, 'svm')
+                template = templateSVM(...
+                    'KernelFunction', obj.params.classifier.ecoc.kernel);
+            else
+                template = templateTree();
+            end
+            
+            model = fitcecoc(foldTrainFeatures, foldTrainLabels, ...
+                'Learners', template, ...
+                'Coding', obj.params.classifier.ecoc.coding, ...
+                'FitPosterior', fitPosterior);
+        end
+        
+        function analyzeOptimalParameters(obj, optimalParams)
+            % 各フォールドの最適パラメータを分析
+            %
+            % 入力:
+            %   optimalParams - 各フォールドの最適パラメータ
+            
+            if ~obj.isOptimized || isempty(optimalParams)
+                return;
+            end
+            
+            % パラメータの統計を計算
+            boxConstraints = zeros(length(optimalParams), 1);
+            kernelScales = zeros(length(optimalParams), 1);
+            
+            for i = 1:length(optimalParams)
+                if isstruct(optimalParams{i}) && isfield(optimalParams{i}, 'BoxConstraint')
+                    boxConstraints(i) = optimalParams{i}.BoxConstraint;
+                    kernelScales(i) = optimalParams{i}.KernelScale;
+                end
+            end
+            
+            % 統計情報を交差検証結果に保存
+            obj.crossValidation.parameterStats = struct(...
+                'boxConstraint', struct(...
+                    'mean', mean(boxConstraints), ...
+                    'std', std(boxConstraints), ...
+                    'min', min(boxConstraints), ...
+                    'max', max(boxConstraints) ...
+                ), ...
+                'kernelScale', struct(...
+                    'mean', mean(kernelScales), ...
+                    'std', std(kernelScales), ...
+                    'min', min(kernelScales), ...
+                    'max', max(kernelScales) ...
+                ) ...
+            );
+            
+            obj.logMessage(2, '\n最適パラメータの統計:\n');
+            obj.logMessage(2, '  BoxConstraint: 平均=%.3f, 標準偏差=%.3f, 範囲=[%.3f, %.3f]\n', ...
+                mean(boxConstraints), std(boxConstraints), min(boxConstraints), max(boxConstraints));
+            obj.logMessage(2, '  KernelScale: 平均=%.3f, 標準偏差=%.3f, 範囲=[%.3f, %.3f]\n', ...
+                mean(kernelScales), std(kernelScales), min(kernelScales), max(kernelScales));
         end
 
         function metrics = evaluateModel(obj, testFeatures, testLabels)
             % テストデータでモデルの性能を評価する
             %
             % 入力:
-            %   testFeatures - 検証用特徴量 [サンプル数 x 特徴量数]
-            %   testLabels - 検証用ラベル [サンプル数 x 1]
+            %   testFeatures - テスト用特徴量 [サンプル数 x 特徴量数]
+            %   testLabels - テスト用ラベル [サンプル数 x 1]
             %
             % 出力:
             %   metrics - テストデータでの性能評価結果
             
-            obj.logMessage(1, '\n検証データでモデルを評価中...\n');
+            obj.logMessage(1, '\nテストデータでモデルを評価中...\n');
             
             % 初期化
             metrics = struct(...
@@ -583,9 +855,10 @@ classdef ECOCClassifier < handle
                 'confusionMat', [], ...
                 'roc', [], ...
                 'auc', [], ...
-                'classwise', [] ...
+                'classwise', [], ...
+                'classLabels', [] ...  % 追加
             );
-
+        
             try
                 [pred, score] = predict(obj.ecocModel, testFeatures);
                 
@@ -593,18 +866,19 @@ classdef ECOCClassifier < handle
                 score = obj.convertToProb(score);
                 metrics.score = score;
                 
-                % 検証データでの精度と混同行列
+                % テストデータでの精度と混同行列
                 metrics.accuracy = mean(pred == testLabels);
                 metrics.confusionMat = confusionmat(testLabels, pred);
+                
+                % クラスラベル
+                classLabels = unique(testLabels);
+                metrics.classLabels = classLabels;  % metricsに追加
                 
                 % パフォーマンス情報の保存
                 obj.performance.testAccuracy = metrics.accuracy;
                 obj.performance.testConfusionMat = metrics.confusionMat;
                 obj.performance.testScore = score;
                 obj.performance.testPredictions = pred;
-                
-                % クラスラベル
-                classLabels = unique(testLabels);
                 obj.performance.classLabels = classLabels;
                 
                 obj.logMessage(1, 'テスト精度: %.2f%%\n', metrics.accuracy * 100);
@@ -766,9 +1040,16 @@ classdef ECOCClassifier < handle
                 
                 % 交差検証精度との比較
                 valTestGap = NaN;
-                if isfield(obj.performance, 'cvMeanAccuracy') && ~isnan(obj.performance.cvMeanAccuracy)
+                if obj.crossValidation.completed && ~isnan(obj.crossValidation.meanAccuracy)
+                    valTestGap = abs(obj.crossValidation.meanAccuracy - testAccuracy);
+                    obj.logMessage(1, '交差検証平均精度: %.2f%%\n', obj.crossValidation.meanAccuracy * 100);
+                    analysisResults.valAccuracy = obj.crossValidation.meanAccuracy;
+                    analysisResults.valTestGap = valTestGap;
+                elseif isfield(obj.performance, 'cvMeanAccuracy') && ~isnan(obj.performance.cvMeanAccuracy)
+                    % フォールバック: パフォーマンス構造体から取得
                     valTestGap = abs(obj.performance.cvMeanAccuracy - testAccuracy);
                     obj.logMessage(1, '交差検証平均精度: %.2f%%\n', obj.performance.cvMeanAccuracy * 100);
+                    analysisResults.valAccuracy = obj.performance.cvMeanAccuracy;
                     analysisResults.valTestGap = valTestGap;
                 end
                 
@@ -845,7 +1126,7 @@ classdef ECOCClassifier < handle
             end
             
             if ~isnan(primaryGap)
-                obj.logMessage(2, '主要ギャップ (%s): %.2f%%\n', gapType, primaryGap * 100);
+                obj.logMessage(2, '主要精度差 (%s): %.2f%%\n', gapType, primaryGap * 100);
                 
                 % 段階的な重大度判定
                 if primaryGap > 0.20      % 20%以上の差
@@ -946,18 +1227,44 @@ classdef ECOCClassifier < handle
         end
         
         function results = buildResultsStruct(obj, testMetrics, overfitAnalysis, filters, cspParameters, normParams)
-            % 結果構造体の構築
+            % 最終結果構造体を構築する
             %
             % 入力:
-            %   testMetrics - テスト評価結果
-            %   overfitAnalysis - 過学習分析結果（変数名を変更）
+            %   testMetrics - テストデータでの評価結果
+            %   overfitAnalysis - 過学習分析結果
             %   filters - CSPフィルタ
             %   cspParameters - CSPパラメータ
             %   normParams - 正規化パラメータ
             %
             % 出力:
-            %   results - 完全な結果構造体
+            %   results - 統合された結果構造体
             
+            % 交差検証結果を構築（専用プロパティから取得）
+            crossValResults = struct();
+            if obj.crossValidation.completed
+                crossValResults = obj.crossValidation;  % 完全な交差検証結果をコピー
+                
+                % 後方互換性のための追加フィールド
+                crossValResults.meanAccuracy = obj.crossValidation.meanAccuracy;
+                crossValResults.stdAccuracy = obj.crossValidation.stdAccuracy;
+                crossValResults.accuracies = obj.crossValidation.foldAccuracies;
+            else
+                % 交差検証が完了していない場合
+                crossValResults.enabled = obj.crossValidation.enabled;
+                crossValResults.completed = false;
+                crossValResults.meanAccuracy = NaN;
+                crossValResults.stdAccuracy = NaN;
+                crossValResults.accuracies = [];
+                if isfield(obj.crossValidation, 'reason')
+                    crossValResults.reason = obj.crossValidation.reason;
+                end
+                if isfield(obj.crossValidation, 'error')
+                    crossValResults.error = obj.crossValidation.error;
+                    crossValResults.errorMessage = obj.crossValidation.errorMessage;
+                end
+            end
+            
+            % 結果構造体の構築
             results = struct(...
                 'model', obj.ecocModel, ...
                 'performance', testMetrics, ...
@@ -966,18 +1273,48 @@ classdef ECOCClassifier < handle
                 'cspParameters', cspParameters, ...
                 'normParams', normParams, ...
                 'trainingAccuracy', obj.trainingAccuracy, ...
-                'crossValidation', struct() ...
+                'crossValidation', crossValResults ...  % 専用の交差検証結果
             );
             
-            % 交差検証結果の追加
-            if isfield(obj.performance, 'cvMeanAccuracy')
-                results.crossValidation.meanAccuracy = obj.performance.cvMeanAccuracy;
-                results.crossValidation.stdAccuracy = obj.performance.cvStdAccuracy;
-                results.crossValidation.accuracies = obj.performance.cvAccuracies;
+            % パフォーマンスプロパティの更新
+            obj.performance = struct();  % 一旦クリア
+            
+            % テスト結果を正しいフィールド名で設定
+            obj.performance.testAccuracy = testMetrics.accuracy;
+            obj.performance.testAuc = testMetrics.auc;
+            obj.performance.testConfusionMat = testMetrics.confusionMat;
+            obj.performance.testScore = testMetrics.score;
+            obj.performance.testClasswise = testMetrics.classwise;
+            
+            % classLabelsの復元（修正部分）
+            if isfield(testMetrics, 'classLabels')
+                obj.performance.classLabels = testMetrics.classLabels;
+            else
+                % フォールバック: 混同行列のサイズからクラス数を推定
+                if ~isempty(testMetrics.confusionMat)
+                    numClasses = size(testMetrics.confusionMat, 1);
+                    obj.performance.classLabels = 1:numClasses;
+                else
+                    obj.performance.classLabels = [];
+                end
             end
             
-            % パフォーマンス情報を更新
-            obj.performance = results.performance;
+            % 交差検証結果を復元（後方互換性のため）
+            if obj.crossValidation.completed
+                obj.performance.cvMeanAccuracy = obj.crossValidation.meanAccuracy;
+                obj.performance.cvStdAccuracy = obj.crossValidation.stdAccuracy;
+                obj.performance.cvAccuracies = obj.crossValidation.foldAccuracies;
+                obj.performance.cvMeanLoss = obj.crossValidation.meanLoss;
+                obj.performance.cvStdLoss = obj.crossValidation.stdLoss;
+            else
+                obj.performance.cvMeanAccuracy = NaN;
+                obj.performance.cvStdAccuracy = NaN;
+                obj.performance.cvAccuracies = [];
+                obj.performance.cvMeanLoss = NaN;
+                obj.performance.cvStdLoss = NaN;
+            end
+            
+            % 過学習情報を追加
             obj.performance.isOverfit = ~strcmp(overfitAnalysis.severity, 'none');
             obj.performance.overfitMetrics = overfitAnalysis;
             
@@ -985,6 +1322,8 @@ classdef ECOCClassifier < handle
             obj.displayResults();
             
             obj.logMessage(2, '結果構造体の構築完了\n');
+            obj.logMessage(2, '交差検証結果の保存状態: completed=%s, enabled=%s\n', ...
+                mat2str(obj.crossValidation.completed), mat2str(obj.crossValidation.enabled));
         end
 
         function displayResults(obj)
@@ -1002,11 +1341,41 @@ classdef ECOCClassifier < handle
                 obj.logMessage(1, 'Training Accuracy: %.2f%%\n', obj.trainingAccuracy * 100);
             end
             
-            % 交差検証結果
-            if isfield(obj.performance, 'cvMeanAccuracy') && ~isnan(obj.performance.cvMeanAccuracy)
-                obj.logMessage(1, 'Cross-validation Accuracy: %.2f%% (±%.2f%%)\n', ...
-                    obj.performance.cvMeanAccuracy * 100, ...
-                    obj.performance.cvStdAccuracy * 100);
+            % 交差検証結果の詳細表示
+            if obj.crossValidation.enabled
+                if obj.crossValidation.completed
+                    obj.logMessage(1, 'Cross-validation Results:\n');
+                    obj.logMessage(1, '  - Mean Accuracy: %.2f%% (±%.2f%%)\n', ...
+                        obj.crossValidation.meanAccuracy * 100, ...
+                        obj.crossValidation.stdAccuracy * 100);
+                    obj.logMessage(1, '  - Mean Loss: %.4f (±%.4f)\n', ...
+                        obj.crossValidation.meanLoss, obj.crossValidation.stdLoss);
+                    obj.logMessage(1, '  - K-Fold: %d\n', obj.crossValidation.kfold);
+                    
+                    if isfield(obj.crossValidation, 'confidenceInterval')
+                        obj.logMessage(1, '  - 95%% Confidence Interval: [%.2f%%, %.2f%%]\n', ...
+                            obj.crossValidation.confidenceInterval(1) * 100, ...
+                            obj.crossValidation.confidenceInterval(2) * 100);
+                    end
+                    
+                    % 各フォールドの詳細（verbosity >= 2）
+                    if obj.verbosity >= 2 && ~isempty(obj.crossValidation.foldAccuracies)
+                        obj.logMessage(2, '  - Individual Fold Accuracies:\n');
+                        for i = 1:length(obj.crossValidation.foldAccuracies)
+                            obj.logMessage(2, '    Fold %d: %.4f\n', i, obj.crossValidation.foldAccuracies(i));
+                        end
+                    end
+                else
+                    obj.logMessage(1, 'Cross-validation: Failed to complete\n');
+                    if isfield(obj.crossValidation, 'errorMessage')
+                        obj.logMessage(1, '  - Error: %s\n', obj.crossValidation.errorMessage);
+                    end
+                end
+            else
+                obj.logMessage(1, 'Cross-validation: Disabled\n');
+                if isfield(obj.crossValidation, 'reason')
+                    obj.logMessage(1, '  - Reason: %s\n', obj.crossValidation.reason);
+                end
             end
             
             % AUC表示
@@ -1023,8 +1392,6 @@ classdef ECOCClassifier < handle
                 if isfield(obj.performance.overfitMetrics, 'valTestGap') && ~isnan(obj.performance.overfitMetrics.valTestGap)
                     obj.logMessage(1, 'Validation-Test gap: %.2f%%\n', obj.performance.overfitMetrics.valTestGap * 100);
                 end
-            else
-                obj.logMessage(1, '\nNo significant overfitting detected.\n');
             end
             
             % クラスごとの性能（詳細表示はverbosity >= 2）
@@ -1049,23 +1416,14 @@ classdef ECOCClassifier < handle
                 if isfield(obj.performance, 'classLabels')
                     obj.logMessage(3, '  - Number of Classes: %d\n', length(obj.performance.classLabels));
                 end
+                obj.logMessage(3, '  - Cross-validation Status: %s\n', mat2str(obj.crossValidation.completed));
             end
         end
         
         function probScores = convertToProb(~, scores)
-            % スコアをソフトマックス関数で確率に変換
-            % 
-            % 入力:
-            %   scores - 分類器の生のスコア値 [サンプル数 x クラス数]
-            %
-            % 出力:
-            %   probScores - ソフトマックス関数による確率値 [サンプル数 x クラス数]
-            
-            % スコアの符号を反転（距離が小さいほど確率が高いため）
-            negScores = -scores;
-            
+            % 符号反転をしない版でテスト
             % ソフトマックス関数で確率に変換
-            expScores = exp(negScores - max(negScores, [], 2));
+            expScores = exp(scores - max(scores, [], 2));
             probScores = expScores ./ sum(expScores, 2);
         end
     end
