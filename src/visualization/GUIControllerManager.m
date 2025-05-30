@@ -32,6 +32,7 @@ classdef GUIControllerManager < handle
         % 設定とコールバック
         params
         callbacks
+        masterStartTimer  % マスタータイマー参照
 
         % 状態管理
         isRunning = false
@@ -43,18 +44,18 @@ classdef GUIControllerManager < handle
     methods (Access = public)
         function obj = GUIControllerManager(params)
             obj.params = params;
+            obj.masterStartTimer = []; % 初期化時は空
 
-            % plotHandlesの初期化を最初に行う
             obj.plotHandles = struct('rawData', [], 'emgData', [], 'spectrum', [], 'ersp', []);
-
-            % GUIの初期化
             obj.initializeGUI();
-
-            % プロットの初期化を明示的に行う
             obj.initializePlots();
-
-            % その他の初期化
             obj.setupTimers();
+        end
+
+        % マスタータイマー設定メソッド
+        function setMasterStartTimer(obj, masterStartTimer)
+            obj.masterStartTimer = masterStartTimer;
+            fprintf('GUIController: マスタータイマー設定完了\n');
         end
         
         function delete(obj)
@@ -574,8 +575,8 @@ classdef GUIControllerManager < handle
         end
         
         function updateDisplay(obj)
-            if obj.isRunning
-                elapsed = toc(obj.startTime);
+            if obj.isRunning && ~isempty(obj.masterStartTimer)
+                elapsed = toc(obj.masterStartTimer);
                 timeStr = sprintf('Time: %02d:%02d:%02d', ...
                     floor(elapsed/3600), ...
                     mod(floor(elapsed/60), 60), ...
@@ -891,18 +892,29 @@ classdef GUIControllerManager < handle
         function onLabelButtonClick(obj, labelValue)
             if obj.isRunning && ~obj.isPaused && ...
                     ~isempty(obj.callbacks) && isfield(obj.callbacks, 'onLabel')
-                currentTime = toc(obj.startTime);
+                
+                % マスタータイマーベースの時刻計算
+                if ~isempty(obj.masterStartTimer)
+                    currentTime = toc(obj.masterStartTimer);
+                    triggerTime = uint64(currentTime * 1000);
+                else
+                    % フォールバック処理
+                    warning('GUIController: マスタータイマーが設定されていません');
+                    currentTime = 0;
+                    triggerTime = uint64(0);
+                end
+                
                 trigger = struct(...
                     'value', labelValue, ...
-                    'time', uint64(currentTime * 1000), ...
-                    'sample', []);
+                    'time', triggerTime, ...
+                    'sample', [] ...
+                );
                 
                 % トリガー値に対応するテキストを取得
                 mappings = obj.params.udp.receive.triggers.mappings;
                 fields = fieldnames(mappings);
                 triggerText = '';
                 
-                % マッピングから対応するテキストを検索
                 for i = 1:length(fields)
                     if mappings.(fields{i}).value == labelValue
                         triggerText = mappings.(fields{i}).text;
@@ -910,10 +922,9 @@ classdef GUIControllerManager < handle
                     end
                 end
                 
-                % デバッグ用の出力（UDPManagerと同じスタイル）
-                fprintf('Label button pressed: %s (value: %d)\n', triggerText, labelValue);
+                fprintf('Label button pressed: %s (value: %d, time: %.3f s)\n', ...
+                    triggerText, labelValue, currentTime);
                 
-                % コールバック実行
                 obj.callbacks.onLabel(trigger);
                 drawnow;
             end

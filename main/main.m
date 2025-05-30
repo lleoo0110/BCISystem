@@ -16,7 +16,7 @@ setupPaths(currentDir);
 
 
 %%  指定のパラメータで実行
-params = getConfig('epocflex', 'preset', 'magic');
+params = getConfig('epocx', 'preset', 'ahaloud');
 manager = EEGAcquisitionManager(params);      % データ計測
 
 

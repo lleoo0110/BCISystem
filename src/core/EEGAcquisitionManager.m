@@ -19,99 +19,101 @@
 % - 保存形式: .mat形式
 
 classdef EEGAcquisitionManager < handle
-    %% Properties Definition
     properties (Access = private)
-    % システムマネージャー群
-    lslManager       % Lab Streaming Layer通信管理
-    udpManager      % UDP通信とトリガー管理
-    guiController   % GUI表示制御
-    dataManager     % データ保存・読み込み管理
-    dataLoader      % データ読み込み・検証（追加）
-    
-    % 前処理用コンポーネント群
-    artifactRemover    % アーティファクト(ノイズ)除去
-    baselineCorrector  % ベースライン補正処理
-    downSampler       % ダウンサンプリング処理
-    firFilter         % FIRフィルタ処理
-    iirFilter         % IIRフィルタ処理
-    notchFilter       % ノッチフィルタ処理
-    
-    % 特徴抽出コンポーネント群
-    powerExtractor     % パワースペクトル解析用
-    faaExtractor      % 前頭部α波非対称性分析用
-    abRatioExtractor  % α/β比解析用
-    cspExtractor      % 共通空間パターン抽出用
-    emotionExtractor  % 感情状態推定用
-    
-    % 分類器コンポーネント群
-    svmClassifier      % サポートベクターマシン
-    ecocClassifier     % Error-Correcting Output Codes
-    cnnClassifier      % 畳み込みニューラルネットワーク
-    lstmClassifier     % 長短期記憶ネットワーク
-    hybridClassifier   % ハイブリッドモデル分類器
-    
-    % データ管理・設定関連
-    params              % システム設定パラメータ
-    rawData            % 生脳波データ格納用
-    labels             % イベントマーカー/トリガー情報
-    emgData            % 筋電図データ格納用
-    emgLabels          % 筋電図用マーカー情報
-    classifiers        % 学習済み分類器モデル群
-    results            % 解析結果保持用構造体
-    threshold   % 分類閾値
-    
-    % システム状態管理フラグ
-    isRunning           % 実行中フラグ
-    isPaused            % 一時停止フラグ
-    currentTotalSamples % 現在の累積サンプル数
-    isDestroying        % オブジェクト破棄フラグ
-    
-    % データバッファ管理
-    dataBuffer         % メインEEGデータバッファ
-    emgBuffer         % EMGデータバッファ
-    emgBufferSize     % EMGバッファサイズ(サンプル数)
-    bufferSize        % メインバッファサイズ(サンプル数)
-    processingWindow  % 処理ウィンドウサイズ(サンプル数)
-    slidingStep       % スライディングステップ幅(サンプル数)
-    
-    % タイマー管理
-    acquisitionTimer   % データ取得用タイマーオブジェクト
-    processingTimer   % 処理時間計測用タイマー
-    
-    % ファイル管理
-    tempDataFiles      % 一時保存ファイルリスト
-    fileIndex         % ファイル連番管理用インデックス
-    lastSaveTime      % 最終保存時刻
-    lastSavedFilePath % 最終保存ファイルパス
-    latestResults     % UDP送信用最新結果バッファ
-    
-    % サンプル管理カウンタ
-    totalSampleCount       % 総取得サンプル数
-    lastResetSampleCount   % 最終リセット時のサンプル数
-    emgSampleCount        % EMG総サンプル数
-end
-    
+        % システムマネージャー群
+        lslManager       
+        udpManager      
+        guiController   
+        dataManager     
+        dataLoader      
+        
+        % 前処理用コンポーネント群
+        artifactRemover    
+        baselineCorrector  
+        downSampler       
+        firFilter         
+        iirFilter         
+        notchFilter       
+        
+        % 特徴抽出コンポーネント群
+        powerExtractor     
+        faaExtractor      
+        abRatioExtractor  
+        cspExtractor      
+        emotionExtractor  
+        
+        % 分類器コンポーネント群
+        svmClassifier      
+        ecocClassifier     
+        cnnClassifier      
+        lstmClassifier     
+        hybridClassifier   
+        
+        % データ管理・設定関連
+        params              
+        rawData            
+        labels             
+        emgData            
+        emgLabels          
+        classifiers        
+        results            
+        threshold   
+        
+        % システム状態管理フラグ
+        isRunning           
+        isPaused            
+        currentTotalSamples 
+        isDestroying        
+        
+        % データバッファ管理
+        dataBuffer         
+        emgBuffer         
+        emgBufferSize     
+        bufferSize        
+        processingWindow  
+        slidingStep       
+        
+        % 統一タイマー管理
+        acquisitionTimer   
+        masterStartTimer
+        
+        % ファイル管理
+        tempDataFiles      
+        fileIndex         
+        lastSaveTimestamp  % 最後の保存時刻（秒）
+        lastSavedFilePath 
+        latestResults     
+        
+        % サンプル管理カウンタの精密化
+        totalSampleCount       % 総取得サンプル数
+        lastResetSampleCount   % 最終リセット時のサンプル数
+        emgSampleCount        % EMG総サンプル数
+        
+        % データレート監視
+        actualSampleRate      % 実際のサンプリングレート
+    end
+
     %% Public Methods - システム制御用メソッド群
     methods (Access = public)
         % コンストラクタ - システムの初期化と設定
         function obj = EEGAcquisitionManager(params)
-            % 入力パラメータの保存と初期状態の設定
             obj.params = params;
             obj.isRunning = false;
             obj.isPaused = false;
             obj.isDestroying = false;
             obj.threshold = params.classifier.threshold;
             
-            % システムコンポーネントの初期化
-            obj.initializeDataBuffers();    % バッファ初期化
-            obj.initializeResults();        % 結果構造体初期化
-            obj.initializeManagers();       % マネージャー初期化
+            % マスタータイマーの初期化
+            obj.masterStartTimer = [];
+            obj.actualSampleRate = params.device.sampleRate;
             
-            % データ管理システムの初期化
+            obj.initializeDataBuffers();
+            obj.initializeResults();
+            obj.initializeManagers();
+            
             obj.tempDataFiles = {};
             obj.fileIndex = 1;
             
-            % カウンタ類の初期化
             obj.totalSampleCount = 0;
             obj.lastResetSampleCount = 0;
             obj.emgSampleCount = 0;
@@ -169,6 +171,14 @@ end
         function start(obj)
             if ~obj.isRunning
                 try
+                    % マスタータイマー開始時刻の設定
+                    obj.masterStartTimer = tic;
+                    fprintf('=== タイマー開始: %.6f ===\n', toc(obj.masterStartTimer));
+                    
+                    % 他のコンポーネントにマスター時刻を設定
+                    obj.udpManager.setMasterStartTimer(obj.masterStartTimer);
+                    obj.guiController.setMasterStartTimer(obj.masterStartTimer);
+                    
                     % タイマーを初期化して計測開始
                     obj.setupTimers();
                     
@@ -182,10 +192,6 @@ end
                     obj.tempDataFiles = {};
                     obj.fileIndex = 1;
                     
-                    % タイマー関連の初期化
-                    obj.lastSaveTime = uint64(tic);
-                    obj.processingTimer = tic;
-                    
                     % GUI状態の更新
                     obj.guiController.updateStatus('Recording');
 
@@ -193,7 +199,6 @@ end
                     timestamp = datestr(now, 'yyyymmdd_HHMMSS');
                     defaultFileName = sprintf('eeg_recording_%s.mat', timestamp);
                     
-                    % 保存先選択ダイアログの表示
                     [saveName, saveDir] = uiputfile('*.mat', '記録データの保存先を選択してください', defaultFileName);
                     
                     if isequal(saveName, 0)
@@ -201,7 +206,6 @@ end
                         return;
                     end
                     
-                    % 保存先パスを保存
                     obj.lastSavedFilePath = fullfile(saveDir, saveName);
                     fprintf('記録データは次の場所に保存されます: %s\n', obj.lastSavedFilePath);
                     
@@ -287,13 +291,15 @@ end
         
         %% メインのデータ取得処理メソッド
         function acquireData(obj)
-            % オブジェクトの有効性チェック
             if ~isvalid(obj)
                 return;
             end
 
             try
                 if obj.isRunning && ~obj.isPaused
+                    % 現在時刻の正確な取得
+                    currentTime = toc(obj.masterStartTimer);
+                    
                     % LSLからのデータ取得
                     [eegData, emgData] = obj.lslManager.getData();
 
@@ -309,36 +315,35 @@ end
                         % データバッファの更新
                         obj.updateDataBuffer(eegData);
 
-                        % トリガー処理
+                        % トリガー処理の精密化
                         trigger = obj.udpManager.receiveTrigger();
                         if ~isempty(trigger)
-                            % サンプル数の計算とトリガー情報の設定
-                            currentEEGSamples = obj.totalSampleCount + size(obj.rawData, 2);
+                            % サンプル数の正確な計算
+                            currentEEGSamples = obj.calculateCurrentSample('eeg', currentTime);
+                            
                             eegTrigger = trigger;
                             eegTrigger.sample = currentEEGSamples;
+                            eegTrigger.preciseTime = currentTime; % より正確な時刻
                             obj.labels = [obj.labels; eegTrigger];
 
                             % EMG用トリガー処理（EMG有効時）
                             if obj.params.acquisition.emg.enable
-                                currentEMGSamples = obj.emgSampleCount + size(obj.emgData, 2);
+                                currentEMGSamples = obj.calculateCurrentSample('emg', currentTime);
                                 emgTrigger = trigger;
                                 emgTrigger.sample = currentEMGSamples;
+                                emgTrigger.preciseTime = currentTime;
                                 obj.emgLabels = [obj.emgLabels; emgTrigger];
                             end
 
-                            % デバッグ情報の出力
-                            fprintf('EEG sample: %d\n', currentEEGSamples);
-                            if obj.params.acquisition.emg.enable
-                                fprintf('EMG sample: %d\n', currentEMGSamples);
-                            end
+                            % 検証用デバッグ情報
+                            obj.validateTriggerTiming(trigger, currentTime, currentEEGSamples);
                         end
 
-                        % 定期保存処理
-                        if toc(obj.lastSaveTime) >= obj.params.acquisition.save.saveInterval
-                            % サンプルカウンタの更新
-                            obj.totalSampleCount = obj.totalSampleCount + size(obj.rawData, 2);
-                            obj.emgSampleCount = obj.emgSampleCount + size(obj.emgData, 2);
+                        % 保存間隔チェック
+                        currentTime = toc(obj.masterStartTimer);
+                        if (currentTime - obj.lastSaveTimestamp) >= obj.params.acquisition.save.saveInterval
                             obj.saveTemporaryData();
+                            obj.lastSaveTimestamp = currentTime; % 更新
                         end
                         
                         % GUI更新処理
@@ -351,41 +356,7 @@ end
                     end
                 end
             catch ME
-                % エラー情報の記録と処理
-                errorInfo = struct();
-                errorInfo.message = ME.message;
-                errorInfo.stack = ME.stack;
-                errorInfo.time = datetime('now');
-                errorInfo.dataInfo = struct(...
-                    'rawDataSize', size(obj.rawData), ...
-                    'bufferSize', size(obj.dataBuffer));
-                if obj.params.acquisition.emg.enable
-                    errorInfo.dataInfo.emgDataSize = size(obj.emgData);
-                end
-
-                % エラーログの保存
-                errorLogFile = fullfile(obj.params.acquisition.save.path, ...
-                    sprintf('error_log_%s.mat', datestr(now, 'yyyymmdd_HHMMSS')));
-                save(errorLogFile, 'errorInfo');
-
-                % エラー情報の表示
-                fprintf('Data acquisition error: %s\n', ME.message);
-                fprintf('Stack trace:\n');
-                disp(getReport(ME, 'extended'));
-
-                % GUIへのエラー表示
-                if ~isempty(obj.guiController)
-                    obj.guiController.showError('Data Acquisition Error', ...
-                        sprintf('Error: %s\nCheck error log for details.', ME.message));
-                end
-
-                % 重大エラー時のシステム停止
-                if strcmpi(ME.identifier, 'MATLAB:nomem') || ...
-                   contains(lower(ME.message), 'fatal') || ...
-                   contains(lower(ME.message), 'critical')
-                    fprintf('Critical error detected. Stopping acquisition...\n');
-                    obj.stop();
-                end
+                obj.handleAcquisitionError(ME, currentTime);
             end
         end
     end
@@ -397,35 +368,34 @@ end
         function initializeManagers(obj)
             try
                 % 基本マネージャーの初期化
-                obj.lslManager = LSLManager(obj.params);         % LSL通信管理
-                obj.udpManager = UDPManager(obj.params);         % UDP通信管理
-                obj.dataManager = DataManager(obj.params);       % データ管理
-                obj.dataLoader = DataLoader(obj.params);         % データ読み込み
-                obj.guiController = GUIControllerManager(obj.params); % GUI管理
+                obj.lslManager = LSLManager(obj.params);
+                obj.udpManager = UDPManager(obj.params);  % マスター時刻は後で設定
+                obj.dataManager = DataManager(obj.params);
+                obj.dataLoader = DataLoader(obj.params);
+                obj.guiController = GUIControllerManager(obj.params);
                 
                 % 前処理コンポーネントの初期化
-                obj.artifactRemover = ArtifactRemover(obj.params);    % ノイズ除去
-                obj.baselineCorrector = BaselineCorrector(obj.params); % ベースライン補正
-                obj.downSampler = DownSampler(obj.params);            % ダウンサンプリング
-                obj.firFilter = FIRFilterDesigner(obj.params);        % FIRフィルタ
-                obj.iirFilter = IIRFilterDesigner(obj.params);        % IIRフィルタ
-                obj.notchFilter = NotchFilterDesigner(obj.params);    % ノッチフィルタ
+                obj.artifactRemover = ArtifactRemover(obj.params);
+                obj.baselineCorrector = BaselineCorrector(obj.params);
+                obj.downSampler = DownSampler(obj.params);
+                obj.firFilter = FIRFilterDesigner(obj.params);
+                obj.iirFilter = IIRFilterDesigner(obj.params);
+                obj.notchFilter = NotchFilterDesigner(obj.params);
                 
                 % 特徴抽出コンポーネントの初期化
-                obj.powerExtractor = PowerExtractor(obj.params);      % パワー解析
-                obj.faaExtractor = FAAExtractor(obj.params);         % FAA解析
-                obj.abRatioExtractor = ABRatioExtractor(obj.params); % α/β比解析
-                obj.cspExtractor = CSPExtractor(obj.params);         % CSP解析
-                obj.emotionExtractor = EmotionExtractor(obj.params); % 感情解析
+                obj.powerExtractor = PowerExtractor(obj.params);
+                obj.faaExtractor = FAAExtractor(obj.params);
+                obj.abRatioExtractor = ABRatioExtractor(obj.params);
+                obj.cspExtractor = CSPExtractor(obj.params);
+                obj.emotionExtractor = EmotionExtractor(obj.params);
                 
                 % 分類器コンポーネントの初期化
-                obj.svmClassifier = SVMClassifier(obj.params);       % SVM分類器
-                obj.ecocClassifier = ECOCClassifier(obj.params);     % ECOC分類器
-                obj.cnnClassifier = CNNClassifier(obj.params);       % CNN分類器
-                obj.lstmClassifier = LSTMClassifier(obj.params);     % LSTM分類器
-                obj.hybridClassifier = HybridClassifier(obj.params); % ハイブリッド分類器
+                obj.svmClassifier = SVMClassifier(obj.params);
+                obj.ecocClassifier = ECOCClassifier(obj.params);
+                obj.cnnClassifier = CNNClassifier(obj.params);
+                obj.lstmClassifier = LSTMClassifier(obj.params);
+                obj.hybridClassifier = HybridClassifier(obj.params);
                 
-                % 分類器構造体の初期化
                 obj.classifiers = struct(...
                     'svm', [], ...
                     'ecoc', [], ...
@@ -527,6 +497,106 @@ end
                 disp(getReport(ME, 'extended'));
             end
         end
+        
+        % 現在サンプル数の正確な計算
+        function currentSample = calculateCurrentSample(obj, dataType, currentTime)
+            switch lower(dataType)
+                case 'eeg'
+                    % EEGサンプル数の計算
+                    timeBasedSample = round(currentTime * obj.params.device.sampleRate);
+                    actualSample = obj.totalSampleCount + size(obj.rawData, 2);
+                    
+                    % より正確な方を使用
+                    if ~isempty(obj.rawData)
+                        currentSample = actualSample;
+                    else
+                        currentSample = timeBasedSample;
+                    end
+                    
+                case 'emg'
+                    % EMGサンプル数の計算
+                    if obj.params.acquisition.emg.enable
+                        timeBasedSample = round(currentTime * obj.params.acquisition.emg.sampleRate);
+                        actualSample = obj.emgSampleCount + size(obj.emgData, 2);
+                        
+                        if ~isempty(obj.emgData)
+                            currentSample = actualSample;
+                        else
+                            currentSample = timeBasedSample;
+                        end
+                    else
+                        currentSample = 0;
+                    end
+                    
+                otherwise
+                    error('Unknown data type: %s', dataType);
+            end
+        end
+        
+        % トリガータイミング検証
+        function validateTriggerTiming(obj, trigger, currentTime, currentSample)
+            % タイミングの一致性をチェック
+            expectedSample = round(trigger.time/1000 * obj.params.device.sampleRate);
+            sampleDiff = abs(currentSample - expectedSample);
+            timeDiff = abs(currentTime*1000 - trigger.time);
+            
+            % 閾値を超えた場合は警告
+            if sampleDiff > obj.params.device.sampleRate * 0.1 % 100ms以上のズレ
+                fprintf('警告: サンプル数の大きなズレ検出\n');
+                fprintf('  計算サンプル: %d, 期待サンプル: %d, 差分: %d\n', ...
+                    currentSample, expectedSample, sampleDiff);
+            end
+            
+            if timeDiff > 100 % 100ms以上のズレ
+                fprintf('警告: 時刻の大きなズレ検出\n');
+                fprintf('  現在時刻: %.3f, トリガー時刻: %.3f, 差分: %.3f ms\n', ...
+                    currentTime*1000, trigger.time, timeDiff);
+            end
+            
+            % デバッグ情報の出力
+            fprintf('トリガー検証:\n');
+            fprintf('  EEG sample: %d (時刻ベース期待値: %d)\n', currentSample, expectedSample);
+            fprintf('  時刻差分: %.3f ms\n', timeDiff);
+            fprintf('  実測サンプリングレート: %.2f Hz\n', obj.actualSampleRate);
+        end
+        
+        % エラーハンドリングの改善
+        function handleAcquisitionError(obj, ME, currentTime)
+            errorInfo = struct();
+            errorInfo.message = ME.message;
+            errorInfo.stack = ME.stack;
+            errorInfo.time = datetime('now');
+            errorInfo.masterTime = currentTime;
+            errorInfo.dataInfo = struct(...
+                'rawDataSize', size(obj.rawData), ...
+                'bufferSize', size(obj.dataBuffer), ...
+                'actualSampleRate', obj.actualSampleRate, ...
+                'totalSamples', obj.totalSampleCount);
+            if obj.params.acquisition.emg.enable
+                errorInfo.dataInfo.emgDataSize = size(obj.emgData);
+            end
+
+            % エラーログの保存
+            errorLogFile = fullfile(fileparts(obj.lastSavedFilePath), ...
+                sprintf('error_log_%s.mat', datestr(now, 'yyyymmdd_HHMMSS')));
+            save(errorLogFile, 'errorInfo');
+
+            fprintf('Data acquisition error at time %.3f: %s\n', currentTime, ME.message);
+            disp(getReport(ME, 'extended'));
+
+            if ~isempty(obj.guiController)
+                obj.guiController.showError('Data Acquisition Error', ...
+                    sprintf('Error at %.3fs: %s\nCheck error log for details.', currentTime, ME.message));
+            end
+
+            % 重大エラー時のシステム停止
+            if strcmpi(ME.identifier, 'MATLAB:nomem') || ...
+               contains(lower(ME.message), 'fatal') || ...
+               contains(lower(ME.message), 'critical')
+                fprintf('Critical error detected. Stopping acquisition...\n');
+                obj.stop();
+            end
+        end
 
         %% 安全なデータ取得メソッド
         % オブジェクトの状態を確認しながらデータ取得を実行
@@ -592,6 +662,10 @@ end
         % 現在のデータを一時ファイルとして保存
         function saveTemporaryData(obj)
             try
+                % 合計サンプル数の更新
+                obj.totalSampleCount = obj.totalSampleCount + size(obj.rawData, 2);
+                obj.emgSampleCount = obj.emgSampleCount + size(obj.emgData, 2);
+
                 % データ存在チェック
                 if isempty(obj.rawData) && isempty(obj.emgData)
                     fprintf('保存する新しいデータがありません\n');
@@ -659,8 +733,7 @@ end
         
                 % カウンタの更新
                 obj.fileIndex = obj.fileIndex + 1;
-                obj.lastSaveTime = tic;
-        
+
                 fprintf('一時データを保存しました: %s\n', tempFilePath);
             catch ME
                 fprintf('一時データの保存に失敗: %s\n', ME.message);
@@ -1125,7 +1198,7 @@ end
             end
             
             % 結果の保存
-            currentTime = toc(obj.processingTimer)*1000;
+            currentTime = toc(obj.masterStartTimer)*1000;
             newPowerResult = struct(...
                 'bands', bandPowers, ...
                 'time', currentTime, ...
@@ -1156,7 +1229,7 @@ end
                 end
                 
                 % 結果の保存
-                currentTime = toc(obj.processingTimer)*1000;
+                currentTime = toc(obj.masterStartTimer)*1000;
                 newFAAResult = struct(...
                     'faa', faaResult.faa, ...
                     'arousal', faaResult.pleasureState, ...
@@ -1182,7 +1255,7 @@ end
             [abRatio, arousalState] = obj.abRatioExtractor.calculateABRatio(preprocessedSegment);
             
             % 結果の保存
-            currentTime = toc(obj.processingTimer)*1000;
+            currentTime = toc(obj.masterStartTimer)*1000;
             newABRatioResult = struct(...
                 'ratio', abRatio, ...
                 'state', arousalState, ...
@@ -1212,7 +1285,7 @@ end
             end
             
             % 結果の保存
-            currentTime = toc(obj.processingTimer)*1000;
+            currentTime = toc(obj.masterStartTimer)*1000;
             newEmotionResult = struct(...
                 'state', emotionResult.state, ...
                 'coordinates', emotionResult.coordinates, ...
@@ -1265,7 +1338,7 @@ end
         
                 % 予測結果の保存
                 if ~isempty(label)
-                    currentTime = toc(obj.processingTimer) * 1000;
+                    currentTime = toc(obj.masterStartTimer) * 1000;
                     newPredictResult = struct(...
                         'label', label, ...
                         'score', score, ...

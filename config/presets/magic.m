@@ -31,7 +31,7 @@ function preset = magic()
     % Lab Streaming Layer通信の設定
     lsl = struct(...
         'simulate', struct(...           % シミュレーションモード設定
-            'enable', false, ...          % true/false: シミュレーション有効/無効
+            'enable', true, ...          % true/false: シミュレーション有効/無効
             'signal', struct(...         % シミュレーション信号の設定
                 'alpha', struct(...      % α波シミュレーション
                     'freq', 10, ...      % 周波数 (8-13 Hz)
@@ -55,7 +55,7 @@ function preset = magic()
             'deleteTempFiles', true ... % 一時ファイルの削除フラグ
         ), ...
         'emg', struct(...               % EMG計測の設定
-            'enable', true, ...        % true/false: EMG計測有効/無効
+            'enable', false, ...        % true/false: EMG計測有効/無効
             'sampleRate', 250, ...      % サンプリングレート
             'channels', struct(...      % EMGチャンネル設定
                 'channelNum', (1), ...   % チャンネル番号 (配列)

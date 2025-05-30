@@ -3,7 +3,7 @@ classdef UDPManager < handle
         receiveSocket
         sendSocket
         params
-        startTime
+        masterStartTimer
         remoteAddress
         remotePort
         isClosing = false
@@ -12,10 +12,15 @@ classdef UDPManager < handle
     methods (Access = public)
         function obj = UDPManager(params)
             obj.params = params;
-            obj.startTime = tic;
+            obj.masterStartTimer = [];
             obj.remoteAddress = params.udp.send.address;
             obj.remotePort = params.udp.send.port;
             obj.initializeUDP();
+        end
+
+        function setMasterStartTimer(obj, masterStartTimer)
+            obj.masterStartTimer = masterStartTimer;
+            fprintf('UDPManager: マスタータイマー設定完了\n');
         end
         
         function trigger = receiveTrigger(obj)
@@ -32,8 +37,8 @@ classdef UDPManager < handle
                     try
                         receivedStr = native2unicode(receivedData', 'UTF-8'); 
                         receivedStr = strtrim(receivedStr);
-                        receivedStr = receivedStr(:)'; % 形を横ベクトルに統一
-                        
+                        receivedStr = receivedStr(:)';
+
                         if isempty(receivedStr)
                             return;
                         end
@@ -43,7 +48,7 @@ classdef UDPManager < handle
                         triggerValue = obj.params.udp.receive.triggers.defaultValue;
 
                         for i = 1:length(fields)
-                            mappingText = mappings.(fields{i}).text(:)'; % マッピングデータも横ベクトル化
+                            mappingText = mappings.(fields{i}).text(:)';
         
                             if isequal(mappingText, receivedStr)
                                 triggerValue = mappings.(fields{i}).value;
@@ -51,8 +56,21 @@ classdef UDPManager < handle
                             end
                         end
                         
-                        trigger = struct('value', triggerValue, 'time', uint64(toc(obj.startTime) * 1000), 'sample', []);
-                        fprintf('Trigger received - Value: %d\n', triggerValue);
+                        % マスタータイマーベースの時刻計算
+                        if ~isempty(obj.masterStartTimer)
+                            triggerTime = uint64(toc(obj.masterStartTimer) * 1000);
+                        else
+                            % フォールバック: 独自タイマー（警告を出力）
+                            warning('UDPManager: マスタータイマーが設定されていません');
+                            triggerTime = uint64(0);
+                        end
+                        
+                        trigger = struct(...
+                            'value', triggerValue, ...
+                            'time', triggerTime, ...
+                            'sample', [] ...
+                        );
+                        fprintf('Trigger received - Value: %d, Time: %d ms\n', triggerValue, triggerTime);
                     catch ME
                         warning(ME.identifier, '%s', ME.message);
                         disp(getReport(ME, 'extended'));
